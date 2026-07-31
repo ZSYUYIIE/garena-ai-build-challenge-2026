@@ -1,28 +1,55 @@
-import crxLogo from '@/assets/crx.svg'
-import tsLogo from '@/assets/ts.svg'
-import viteLogo from '@/assets/vite.svg'
-import { setupCounter } from './counter.ts'
-import './style.css'
+import { ExtensionStatusService } from "@/services/extensionStatus";
+import "./style.css";
 
-document.querySelector('#app')!.innerHTML = `
-  <div>
-    <a href="https://vite.dev" target="_blank">
-      <img src="${viteLogo}" class="logo" alt="Vite logo" />
-    </a>
-    <a href="https://www.typescriptlang.org/" target="_blank">
-      <img src="${tsLogo}" class="logo vanilla" alt="TypeScript logo" />
-    </a>
-    <a href="https://crxjs.dev/vite-plugin" target="_blank">
-      <img src="${crxLogo}" class="logo crx" alt="CRXJS logo" />
-    </a>
-    <h1>Hello CRXJS!</h1>
-    <div class="card">
-      <button id="counter" type="button"></button>
-    </div>
-    <p class="read-the-docs">
-      Click on the CRXJS logo to learn more
-    </p>
-  </div>
-`
+const toggleBtn = document.getElementById(
+  "is-extension-running",
+) as HTMLInputElement;
 
-setupCounter(document.querySelector('#counter')!)
+const runningStatus = document.getElementById(
+  "running-status",
+) as HTMLLabelElement;
+
+if (!toggleBtn || !runningStatus) {
+  throw new Error("Missing required elements.");
+}
+
+async function getCurrentTabId(): Promise<number> {
+  const [activeTab] = await chrome.tabs.query({
+    active: true,
+    currentWindow: true,
+  });
+
+  if (!activeTab || activeTab.id === undefined) {
+    throw new Error("No active tab found.");
+  }
+
+  return activeTab.id;
+}
+
+function updateUI(isRunning: boolean) {
+  runningStatus.innerText = isRunning
+    ? "Extension running"
+    : "Extension stopped";
+  toggleBtn.setAttribute("aria-checked", isRunning ? "true" : "false");
+}
+
+async function init() {
+  await ExtensionStatusService.isRunning().then((isRunning) => {
+    updateUI(isRunning);
+  });
+}
+
+init();
+
+// Toggle extension state
+toggleBtn.addEventListener("click", async () => {
+  const tabId = await getCurrentTabId();
+  await ExtensionStatusService.toggle(tabId);
+  await ExtensionStatusService.isRunning(tabId).then((isRunning) => {
+    updateUI(isRunning);
+  });
+});
+
+ExtensionStatusService.onStatusUpdate((isRunning) => {
+  updateUI(isRunning);
+});

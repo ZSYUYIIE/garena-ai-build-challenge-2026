@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app" style="display:flex;">
+      <input type="checkbox" id="is-extension-running" role="switch" aria-checked="false" />
+      <label for="is-extension-running" id="running-status" role="status" aria-live="polite"></label>
+    </div>
     <script type="module" src="./main.js"></script>
   </body>
 </html>
