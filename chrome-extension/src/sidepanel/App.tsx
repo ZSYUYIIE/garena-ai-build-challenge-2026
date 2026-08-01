@@ -9,7 +9,7 @@ import { VideoDescriptionSection } from "./components/VideoDescriptionSection";
 export default function App() {
   return (
     <ConfigurationOptionsProvider>
-      <div className="flex flex-col gap-4 p-4 divide-y">
+      <div className="grid h-screen gap-2 p-4 divide-y">
         <Header />
         <ConfigurationSection />
         <VideoDescriptionSection />
