@@ -7,10 +7,13 @@ const telemetryEl = document.getElementById("telemetry");
 const transcriptEl = document.getElementById("transcript");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
+const sourceInputs = document.querySelectorAll("input[name='captureSource']");
 const questionForm = document.getElementById("questionForm");
 const questionInput = document.getElementById("questionInput");
 
-const VIDEO_INTERVAL_MS = 1000;
+// Controls how often a sampled JPEG frame is sent to the backend/Gemini.
+// 1000 means one frame per second. Lower values reduce latency but increase cost/load.
+const VIDEO_FRAME_SEND_INTERVAL_MS = 1000;
 const STREAM_FLUSH_MS = 900;
 
 let ws;
@@ -38,13 +41,31 @@ questionForm.addEventListener("submit", (event) => {
 async function start() {
   startBtn.disabled = true;
   stopBtn.disabled = false;
-  appendEntry("system", "Starting camera...");
+  setSourceDisabled(true);
+  const source = selectedSource();
+  appendEntry("system", `Starting ${source} capture...`);
   await ensurePlaybackContext();
   playTestTone();
 
-  mediaStream = await navigator.mediaDevices.getUserMedia({
-    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-    audio: false,
+  try {
+    mediaStream = await captureStream(source);
+  } catch (error) {
+    appendEntry("error", `Could not start ${source} capture: ${error.message}`);
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    setSourceDisabled(false);
+    return;
+  }
+
+  mediaStream.getVideoTracks()[0]?.addEventListener("ended", () => {
+    if (wsOpen()) {
+      ws.close(1000, "Capture source ended");
+    } else {
+      stopMedia();
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      setSourceDisabled(false);
+    }
   });
 
   preview.srcObject = mediaStream;
@@ -62,6 +83,7 @@ async function start() {
     stopMedia();
     startBtn.disabled = false;
     stopBtn.disabled = true;
+    setSourceDisabled(false);
   });
   ws.addEventListener("error", () => {
     appendEntry("error", "Browser WebSocket error.");
@@ -78,10 +100,42 @@ function stop() {
     connectionEl.textContent = "Disconnected";
     startBtn.disabled = false;
     stopBtn.disabled = true;
+    setSourceDisabled(false);
   }
   modeEl.textContent = "stopped";
   telemetryEl.textContent = "idle";
   audioStatusEl.textContent = "audio idle";
+}
+
+function selectedSource() {
+  return document.querySelector("input[name='captureSource']:checked")?.value || "camera";
+}
+
+function setSourceDisabled(disabled) {
+  for (const input of sourceInputs) {
+    input.disabled = disabled;
+  }
+}
+
+async function captureStream(source) {
+  if (source === "screen") {
+    if (!navigator.mediaDevices.getDisplayMedia) {
+      throw new Error("Screen capture is not supported by this browser.");
+    }
+    return navigator.mediaDevices.getDisplayMedia({
+      video: {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 5, max: 10 },
+      },
+      audio: false,
+    });
+  }
+
+  return navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false,
+  });
 }
 
 function wsUrl() {
@@ -111,7 +165,7 @@ function startVideoLoop() {
       "image/jpeg",
       0.72
     );
-  }, VIDEO_INTERVAL_MS);
+  }, VIDEO_FRAME_SEND_INTERVAL_MS);
 }
 
 function handleServerMessage(event) {

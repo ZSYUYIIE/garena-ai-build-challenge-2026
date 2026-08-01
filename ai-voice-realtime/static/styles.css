@@ -80,10 +80,48 @@ canvas {
 
 .controls {
   display: grid;
-  grid-template-columns: 88px 88px;
+  grid-template-columns: minmax(0, 1fr) 88px 88px;
   gap: 12px;
   padding: 14px;
   border-bottom: 1px solid var(--line);
+}
+
+.source-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: #0f1115;
+}
+
+.source-toggle label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.source-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.source-toggle span {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.source-toggle input:checked + span {
+  background: var(--accent);
+  color: #07110d;
 }
 
 button {

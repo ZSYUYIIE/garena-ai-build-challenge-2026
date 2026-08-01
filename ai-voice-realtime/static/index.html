@@ -21,6 +21,16 @@
 
       <aside class="panel">
         <div class="controls">
+          <div class="source-toggle" role="radiogroup" aria-label="Capture source">
+            <label>
+              <input type="radio" name="captureSource" value="camera" checked />
+              <span>Camera</span>
+            </label>
+            <label>
+              <input type="radio" name="captureSource" value="screen" />
+              <span>Screen</span>
+            </label>
+          </div>
           <button id="startBtn">Start</button>
           <button id="stopBtn" disabled>Stop</button>
         </div>

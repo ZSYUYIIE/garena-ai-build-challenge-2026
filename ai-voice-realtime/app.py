@@ -23,7 +23,7 @@ GEMINI_WS_URL = (
     f"?key={GEMINI_API_KEY}"
 )
 
-NARRATION_TICK_SECONDS = 4.0
+NARRATION_TICK_SECONDS = 3.5
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
