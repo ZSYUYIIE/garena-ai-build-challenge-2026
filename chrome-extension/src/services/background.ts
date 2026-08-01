@@ -4,6 +4,11 @@ import {
   ExtensionStatusResponse,
 } from "@/types";
 
+chrome.runtime.onInstalled.addListener(() => {
+  // Configures clicking the extension action icon to open the side panel
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+});
+
 const EXTENSION_STATUS_ON = "ON";
 const EXTENSION_STATUS_OFF = "OFF";
 function isExtensionStatusOn(badgeText: string): boolean {
