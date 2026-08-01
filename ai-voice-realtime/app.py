@@ -2,7 +2,6 @@ import asyncio
 import base64
 import json
 import os
-import time
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -25,8 +24,6 @@ GEMINI_WS_URL = (
 )
 
 NARRATION_TICK_SECONDS = 4.0
-QUESTION_SILENCE_SECONDS = 3.0
-MAX_AUDIO_QUESTION_SECONDS = 12.0
 
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
@@ -37,7 +34,6 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 class Mode(str, Enum):
     NARRATING = "narrating"
-    LISTENING = "listening"
     ANSWERING = "answering"
 
 
@@ -56,16 +52,11 @@ class ClientSession:
         self.browser = browser
         self.gemini: websockets.ClientConnection | None = None
         self.mode = Mode.NARRATING
-        self.interrupts_allowed = False
-        self.last_speech_at = 0.0
-        self.question_started_at = 0.0
-        self.audio_seen = False
         self.closed = asyncio.Event()
         self.gemini_ready = asyncio.Event()
         self.first_video_frame = asyncio.Event()
         self.send_lock = asyncio.Lock()
         self.video_frames = 0
-        self.audio_chunks = 0
         self.model_audio_chunks = 0
 
     async def run(self) -> None:
@@ -125,7 +116,6 @@ class ClientSession:
                 gemini_task,
                 asyncio.create_task(self.browser_to_gemini()),
                 asyncio.create_task(self.narration_loop()),
-                asyncio.create_task(self.question_watchdog()),
             ]
             done, pending = await asyncio.wait(
                 tasks, return_when=asyncio.FIRST_COMPLETED
@@ -154,7 +144,6 @@ class ClientSession:
                         }
                     },
                 },
-                "inputAudioTranscription": {},
                 "outputAudioTranscription": {},
                 "systemInstruction": {
                     "parts": [
@@ -163,10 +152,8 @@ class ClientSession:
                                 "You are a live video narrator and question-answering assistant. "
                                 "Default behavior: briefly describe meaningful visual changes in the "
                                 "live camera feed. Avoid repeating unchanged details. When the user "
-                                "speaks or asks a question, stop passive narration, infer the user's "
-                                "request from audio/transcription and current video, answer directly, "
-                                "then return to concise passive narration. If no clear user request "
-                                "was spoken, say nothing about it and continue narrating."
+                                "asks a typed question, answer directly using the current video when "
+                                "useful, then return to concise passive narration."
                             )
                         }
                     ]
@@ -197,39 +184,9 @@ class ClientSession:
             await self.send_video(data, message.get("mimeType", "image/jpeg"))
             return
 
-        if kind == "audio_chunk":
-            if self.interrupts_allowed and self.mode in (
-                Mode.LISTENING,
-                Mode.ANSWERING,
-            ):
-                audio = base64.b64decode(message["data"])
-                await self.send_audio(
-                    audio, message.get("mimeType", "audio/pcm;rate=16000")
-                )
-            return
-
-        if kind == "speech_start":
-            if self.interrupts_allowed:
-                await self.enter_listening()
-            return
-
-        if kind == "speech_activity":
-            self.last_speech_at = time.monotonic()
-            self.audio_seen = True
-            return
-
         if kind == "typed_question":
             await self.answer_text_question(message.get("text", ""))
             return
-
-        if kind == "interrupts":
-            self.interrupts_allowed = bool(message.get("allowed", True))
-            if not self.interrupts_allowed and self.mode != Mode.NARRATING:
-                self.mode = Mode.NARRATING
-                await self.send_browser({"type": "status", "mode": self.mode})
-            await self.send_browser(
-                {"type": "interrupts", "allowed": self.interrupts_allowed}
-            )
 
     async def gemini_to_browser(self) -> None:
         assert self.gemini is not None
@@ -250,14 +207,6 @@ class ClientSession:
                 )
                 continue
 
-            if "inputTranscription" in message:
-                transcript = message["inputTranscription"].get("text")
-                if transcript:
-                    await self.send_browser(
-                        {"type": "user_transcript", "text": transcript}
-                    )
-                continue
-
             if "outputTranscription" in message:
                 transcript = message["outputTranscription"].get("text")
                 if transcript:
@@ -267,12 +216,6 @@ class ClientSession:
             if "serverContent" in message:
                 server = message["serverContent"]
 
-                input_transcription = server.get("inputTranscription", {}).get("text")
-                if input_transcription:
-                    await self.send_browser(
-                        {"type": "user_transcript", "text": input_transcription}
-                    )
-
                 output_transcription = server.get("outputTranscription", {}).get("text")
                 if output_transcription:
                     await self.send_model_text(output_transcription)
@@ -280,16 +223,25 @@ class ClientSession:
                 for text in extract_text_parts(server):
                     await self.send_model_text(text)
 
-                audio_count = count_audio_parts(server)
-                if audio_count:
-                    self.model_audio_chunks += audio_count
-                    if self.model_audio_chunks == audio_count:
+                audio_parts = extract_audio_parts(server)
+                if audio_parts:
+                    for audio_part in audio_parts:
+                        await self.send_browser(
+                            {
+                                "type": "model_audio",
+                                "mimeType": audio_part["mimeType"],
+                                "data": audio_part["data"],
+                            }
+                        )
+
+                    self.model_audio_chunks += len(audio_parts)
+                    if self.model_audio_chunks == len(audio_parts):
                         await self.send_browser(
                             {
                                 "type": "status_text",
                                 "text": (
-                                    "Gemini is producing audio output. Waiting for "
-                                    "output transcription text..."
+                                    "Gemini is producing audio output: "
+                                    f"{audio_parts[0]['mimeType']}"
                                 ),
                             }
                         )
@@ -332,47 +284,6 @@ class ClientSession:
                 turn_complete=True,
             )
 
-    async def question_watchdog(self) -> None:
-        while not self.closed.is_set():
-            await asyncio.sleep(0.2)
-            if self.mode != Mode.LISTENING:
-                continue
-
-            now = time.monotonic()
-            silence_elapsed = now - self.last_speech_at
-            total_elapsed = now - self.question_started_at
-            if self.audio_seen and (
-                silence_elapsed >= QUESTION_SILENCE_SECONDS
-                or total_elapsed >= MAX_AUDIO_QUESTION_SECONDS
-            ):
-                await self.finish_listening()
-            elif not self.audio_seen and total_elapsed >= QUESTION_SILENCE_SECONDS:
-                self.mode = Mode.NARRATING
-                await self.send_browser({"type": "status", "mode": self.mode})
-
-    async def enter_listening(self) -> None:
-        if self.mode == Mode.LISTENING:
-            return
-        self.mode = Mode.LISTENING
-        self.audio_seen = False
-        self.question_started_at = time.monotonic()
-        self.last_speech_at = self.question_started_at
-        await self.send_browser({"type": "status", "mode": self.mode})
-        await self.send_client_text(
-            "Pause passive narration. Listen for the user's spoken question now.",
-            turn_complete=False,
-        )
-
-    async def finish_listening(self) -> None:
-        self.mode = Mode.ANSWERING
-        await self.send_browser({"type": "status", "mode": self.mode})
-        await self.send_client_text(
-            "The user has stopped speaking. Transcribe or infer their spoken request from "
-            "the recent audio, then answer it directly using the current video feed when useful. "
-            "If no actual question or command was spoken, say nothing and return to passive narration.",
-            turn_complete=True,
-        )
-
     async def answer_text_question(self, question: str) -> None:
         question = question.strip()
         if not question:
@@ -412,23 +323,6 @@ class ClientSession:
             }
         )
 
-    async def send_audio(self, pcm_bytes: bytes, mime_type: str) -> None:
-        self.audio_chunks += 1
-        if self.audio_chunks == 1:
-            await self.send_browser(
-                {"type": "telemetry", "text": "microphone audio sent"}
-            )
-        await self.send_gemini(
-            {
-                "realtimeInput": {
-                    "audio": {
-                        "data": base64.b64encode(pcm_bytes).decode("ascii"),
-                        "mimeType": mime_type,
-                    }
-                }
-            }
-        )
-
     async def send_client_text(self, text: str, turn_complete: bool) -> None:
         await self.send_gemini(
             {
@@ -462,17 +356,19 @@ def extract_text_parts(server_content: dict[str, Any]) -> list[str]:
     return text_parts
 
 
-def count_audio_parts(server_content: dict[str, Any]) -> int:
+def extract_audio_parts(server_content: dict[str, Any]) -> list[dict[str, str]]:
     parts = server_content.get("modelTurn", {}).get("parts", [])
-    count = 0
+    audio_parts: list[dict[str, str]] = []
     for part in parts:
         inline_data = part.get("inlineData") or part.get("inline_data")
         if not isinstance(inline_data, dict):
             continue
         mime_type = inline_data.get("mimeType") or inline_data.get("mime_type") or ""
         if mime_type.startswith("audio/"):
-            count += 1
-    return count
+            data = inline_data.get("data")
+            if data:
+                audio_parts.append({"mimeType": mime_type, "data": data})
+    return audio_parts
 
 
 @app.websocket("/ws")

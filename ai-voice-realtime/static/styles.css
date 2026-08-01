@@ -80,7 +80,7 @@ canvas {
 
 .controls {
   display: grid;
-  grid-template-columns: 88px 88px minmax(0, 1fr);
+  grid-template-columns: 88px 88px;
   gap: 12px;
   padding: 14px;
   border-bottom: 1px solid var(--line);
@@ -98,15 +98,6 @@ button {
 button:disabled {
   opacity: 0.55;
   cursor: default;
-}
-
-.toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 14px;
-  min-width: 0;
 }
 
 .question {
