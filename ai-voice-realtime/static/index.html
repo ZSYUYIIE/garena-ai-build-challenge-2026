@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gemini Live Video Narrator</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="stage">
+        <video id="preview" autoplay muted playsinline></video>
+        <canvas id="frameCanvas" width="640" height="360"></canvas>
+        <div class="statusbar">
+          <span id="connection">Disconnected</span>
+          <span id="mode">narrating</span>
+          <span id="level">mic 0.00</span>
+          <span id="telemetry">idle</span>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="controls">
+          <button id="startBtn">Start</button>
+          <button id="stopBtn" disabled>Stop</button>
+          <label class="toggle">
+            <input id="interruptToggle" type="checkbox" />
+            <span>Interrupts allowed</span>
+          </label>
+        </div>
+
+        <form id="questionForm" class="question">
+          <input id="questionInput" type="text" autocomplete="off" placeholder="Ask about the live video..." />
+          <button type="submit">Ask</button>
+        </form>
+
+        <div class="transcript" id="transcript" aria-live="polite"></div>
+      </aside>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
