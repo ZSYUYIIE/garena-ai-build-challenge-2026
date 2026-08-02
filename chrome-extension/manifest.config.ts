@@ -12,7 +12,6 @@ export default defineManifest({
     default_icon: {
       48: "public/logo.png",
     },
-    default_popup: "src/popup/index.html",
   },
   background: {
     service_worker: "src/services/background.ts",
@@ -23,5 +22,9 @@ export default defineManifest({
       matches: ["https://*/*"],
     },
   ],
-  permissions: ["contentSettings"],
+  side_panel: {
+    default_path: "src/sidepanel/index.html",
+  },
+  permissions: ["contentSettings", "sidePanel"],
 });
+
