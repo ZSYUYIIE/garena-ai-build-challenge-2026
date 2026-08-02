@@ -25,7 +25,7 @@ export function EventTimelineSection({ events }: EventTimelineSectionProps) {
 
 function EventTimelineList({ events }: { events: TimelineEvent[] }) {
   return (
-    <div className="relative pl-4">
+    <div className="relative max-h-40 overflow-y-auto pl-4">
       <div className="absolute left-[7px] top-1 bottom-1 w-px bg-border" />
       {events.map((event, index) => (
         <div key={event.id} className="relative mb-3.5 last:mb-0">

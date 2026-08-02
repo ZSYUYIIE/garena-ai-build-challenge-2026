@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 
 export type ChatMessage = {
@@ -23,10 +23,8 @@ export function QuestionSection({ messages, onAsk }: QuestionSectionProps) {
   }
 
   return (
-    <div className="flex flex-col flex-1 gap-2">
+    <div className="flex flex-col flex-1 min-h-0 gap-2">
       <h3>Ask about this video</h3>
-
-      <ChatHistory messages={messages} />
 
       <div className="flex items-center gap-2">
         <Input
@@ -46,11 +44,22 @@ export function QuestionSection({ messages, onAsk }: QuestionSectionProps) {
           <ArrowIcon />
         </button>
       </div>
+
+      <ChatHistory messages={messages} />
     </div>
   );
 }
 
 function ChatHistory({ messages }: { messages: ChatMessage[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages]);
+
   if (messages.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -60,7 +69,7 @@ function ChatHistory({ messages }: { messages: ChatMessage[] }) {
   }
 
   return (
-    <div className="flex flex-col gap-2 overflow-y-auto max-h-48">
+    <div ref={scrollRef} className="flex flex-col gap-2 overflow-y-auto">
       {messages.map((message) =>
         message.role === "user" ? (
           <ChatRequest key={message.id} text={message.text} />
