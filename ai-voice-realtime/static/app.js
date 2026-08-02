@@ -26,6 +26,11 @@ let activeStreamEntry = null;
 let activeStreamType = null;
 let activeStreamText = "";
 let streamFlushTimer = null;
+let duplicateStreamAudioMuted = false;
+let lastCompletedByType = {
+  narration: "",
+  answer: "",
+};
 
 startBtn.addEventListener("click", start);
 stopBtn.addEventListener("click", stop);
@@ -42,6 +47,7 @@ async function start() {
   startBtn.disabled = true;
   stopBtn.disabled = false;
   setSourceDisabled(true);
+  resetDuplicateState();
   const source = selectedSource();
   appendEntry("system", `Starting ${source} capture...`);
   await ensurePlaybackContext();
@@ -74,6 +80,7 @@ async function start() {
   ws = new WebSocket(wsUrl());
   ws.addEventListener("open", () => {
     connectionEl.textContent = "Connected";
+    sendJson({ type: "capture_source", source });
     startVideoLoop();
   });
   ws.addEventListener("message", handleServerMessage);
@@ -230,10 +237,18 @@ function appendStreamChunk(type, chunk) {
     activeStreamEntry = appendEntry(type, "");
     activeStreamType = type;
     activeStreamText = "";
+    duplicateStreamAudioMuted = false;
   }
 
   activeStreamText = joinTranscriptChunk(activeStreamText, text);
   activeStreamEntry.lastElementChild.textContent = activeStreamText;
+  duplicateStreamAudioMuted = isDuplicateStream(type, activeStreamText);
+  if (duplicateStreamAudioMuted) {
+    activeStreamEntry.hidden = true;
+    telemetryEl.textContent = "duplicate skipped";
+  } else {
+    activeStreamEntry.hidden = false;
+  }
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 
   if (streamFlushTimer) clearTimeout(streamFlushTimer);
@@ -245,9 +260,20 @@ function finishStreamEntry() {
     clearTimeout(streamFlushTimer);
     streamFlushTimer = null;
   }
+  if (
+    activeStreamEntry &&
+    activeStreamType &&
+    isDuplicateStream(activeStreamType, activeStreamText)
+  ) {
+    activeStreamEntry.remove();
+    telemetryEl.textContent = "duplicate removed";
+  } else if (activeStreamType && activeStreamText) {
+    lastCompletedByType[activeStreamType] = normalizeTranscript(activeStreamText);
+  }
   activeStreamEntry = null;
   activeStreamType = null;
   activeStreamText = "";
+  duplicateStreamAudioMuted = false;
 }
 
 function joinTranscriptChunk(current, next) {
@@ -255,6 +281,22 @@ function joinTranscriptChunk(current, next) {
   if (/^[,.;:!?)]/.test(next)) return `${current}${next}`;
   if (/[(]$/.test(current)) return `${current}${next}`;
   return `${current} ${next}`;
+}
+
+function isDuplicateStream(type, text) {
+  return normalizeTranscript(text) === lastCompletedByType[type];
+}
+
+function normalizeTranscript(text) {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+function resetDuplicateState() {
+  duplicateStreamAudioMuted = false;
+  lastCompletedByType = {
+    narration: "",
+    answer: "",
+  };
 }
 
 function blobToBase64(blob) {
@@ -280,9 +322,15 @@ function stopMedia() {
   nextPlaybackAt = 0;
   playedAudioChunks = 0;
   mediaStream = null;
+  resetDuplicateState();
 }
 
 async function playModelAudio(base64Audio, mimeType) {
+  if (duplicateStreamAudioMuted) {
+    audioStatusEl.textContent = "duplicate audio skipped";
+    return;
+  }
+
   const sampleRate = parsePcmRate(mimeType) || 24000;
   const bytes = base64ToUint8Array(base64Audio);
   audioStatusEl.textContent = `audio rx ${bytes.byteLength}b ${mimeType || ""}`;
