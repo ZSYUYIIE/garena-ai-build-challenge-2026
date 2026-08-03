@@ -75,6 +75,28 @@ export class ExtensionStatusService {
     return Boolean(response?.isRunning);
   }
 
+  /** Sets the extension badge state for the active tab. */
+  static async setRunning(isRunning: boolean, tabId?: number): Promise<boolean> {
+    const targetTabId = await this.resolveTabId(tabId);
+    if (targetTabId === undefined) {
+      throw new Error("No active tab found to update extension status.");
+    }
+
+    const request: ExtensionStatusQuery = {
+      action: MessageAction.SetExtensionStatus,
+      isRunning,
+      tabId: targetTabId,
+    };
+    const response: ExtensionStatusResponse =
+      await chrome.runtime.sendMessage(request);
+
+    if ("error" in response) {
+      throw new Error(response.error);
+    }
+
+    return Boolean(response.isRunning);
+  }
+
   /**
    * Registers a callback to be invoked whenever the extension status changes for a given tab
    * @param callback the callback to invoke with the new status

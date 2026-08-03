@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Gemini Live Video Narrator</title>
+    <title>StreamSense Backend Diagnostic</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -39,6 +39,22 @@
           <input id="questionInput" type="text" autocomplete="off" placeholder="Ask about the live video..." />
           <button type="submit">Ask</button>
         </form>
+
+        <section class="timeline" aria-labelledby="timelineHeading">
+          <div class="timeline-header">
+            <h2 id="timelineHeading">Event timeline</h2>
+            <span id="eventCount">0</span>
+          </div>
+          <p id="timelineEmpty" class="timeline-empty">
+            Meaningful moments will appear here as the stream plays.
+          </p>
+          <div
+            id="timelineEvents"
+            class="timeline-events"
+            role="list"
+            aria-live="polite"
+          ></div>
+        </section>
 
         <div class="transcript" id="transcript" aria-live="polite"></div>
       </aside>

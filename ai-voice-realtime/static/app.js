@@ -10,6 +10,9 @@ const stopBtn = document.getElementById("stopBtn");
 const sourceInputs = document.querySelectorAll("input[name='captureSource']");
 const questionForm = document.getElementById("questionForm");
 const questionInput = document.getElementById("questionInput");
+const timelineEventsEl = document.getElementById("timelineEvents");
+const timelineEmptyEl = document.getElementById("timelineEmpty");
+const eventCountEl = document.getElementById("eventCount");
 
 // Controls how often a sampled JPEG frame is sent to the backend/Gemini.
 // 1000 means one frame per second. Lower values reduce latency but increase cost/load.
@@ -27,6 +30,8 @@ let activeStreamType = null;
 let activeStreamText = "";
 let streamFlushTimer = null;
 let duplicateStreamAudioMuted = false;
+let captureStartedAtMs = null;
+let timelineEventIds = new Set();
 let lastCompletedByType = {
   narration: "",
   answer: "",
@@ -48,6 +53,7 @@ async function start() {
   stopBtn.disabled = false;
   setSourceDisabled(true);
   resetDuplicateState();
+  resetTimeline();
   const source = selectedSource();
   appendEntry("system", `Starting ${source} capture...`);
   await ensurePlaybackContext();
@@ -76,6 +82,7 @@ async function start() {
 
   preview.srcObject = mediaStream;
   await preview.play();
+  captureStartedAtMs = performance.now();
 
   ws = new WebSocket(wsUrl());
   ws.addEventListener("open", () => {
@@ -167,7 +174,12 @@ function startVideoLoop() {
       async (blob) => {
         if (!blob || !wsOpen()) return;
         const data = await blobToBase64(blob);
-        sendJson({ type: "video_frame", mimeType: "image/jpeg", data });
+        sendJson({
+          type: "video_frame",
+          timestampSeconds: currentTimestampSeconds(),
+          mimeType: "image/jpeg",
+          data,
+        });
       },
       "image/jpeg",
       0.72
@@ -197,6 +209,8 @@ function handleServerMessage(event) {
   } else if (message.type === "user_transcript") {
     finishStreamEntry();
     appendEntry("user", message.text);
+  } else if (message.type === "event") {
+    appendTimelineEvent(message.event);
   } else if (message.type === "error") {
     finishStreamEntry();
     appendEntry("error", message.text);
@@ -299,6 +313,68 @@ function resetDuplicateState() {
   };
 }
 
+function currentTimestampSeconds() {
+  const mediaTimestamp = Number(preview.currentTime);
+  if (Number.isFinite(mediaTimestamp) && mediaTimestamp > 0) {
+    return Math.round(mediaTimestamp * 1000) / 1000;
+  }
+
+  if (captureStartedAtMs !== null) {
+    return (
+      Math.round((performance.now() - captureStartedAtMs) * 1000) / 1_000_000
+    );
+  }
+
+  return 0;
+}
+
+function appendTimelineEvent(event) {
+  if (!event || typeof event.id !== "string" || timelineEventIds.has(event.id)) {
+    return;
+  }
+  if (typeof event.timestamp !== "string" || typeof event.description !== "string") {
+    return;
+  }
+
+  timelineEventIds.add(event.id);
+  timelineEmptyEl.hidden = true;
+
+  const item = document.createElement("article");
+  item.className = "timeline-event";
+  item.setAttribute("role", "listitem");
+  item.dataset.eventId = event.id;
+
+  const timestamp = document.createElement("time");
+  timestamp.className = "timeline-timestamp";
+  timestamp.textContent = event.timestamp;
+
+  const description = document.createElement("p");
+  description.textContent = event.description;
+
+  const metadata = document.createElement("small");
+  const eventLabel = String(event.eventType || "event").replaceAll("_", " ");
+  const entities = Array.isArray(event.entities) ? event.entities.join(", ") : "";
+  metadata.textContent = entities ? `${eventLabel} · ${entities}` : eventLabel;
+
+  item.append(timestamp, description, metadata);
+  timelineEventsEl.prepend(item);
+
+  while (timelineEventsEl.children.length > 100) {
+    const oldest = timelineEventsEl.lastElementChild;
+    timelineEventIds.delete(oldest.dataset.eventId);
+    oldest.remove();
+  }
+
+  eventCountEl.textContent = String(timelineEventsEl.children.length);
+}
+
+function resetTimeline() {
+  timelineEventIds = new Set();
+  timelineEventsEl.replaceChildren();
+  timelineEmptyEl.hidden = false;
+  eventCountEl.textContent = "0";
+}
+
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -322,6 +398,7 @@ function stopMedia() {
   nextPlaybackAt = 0;
   playedAudioChunks = 0;
   mediaStream = null;
+  captureStartedAtMs = null;
   resetDuplicateState();
 }
 

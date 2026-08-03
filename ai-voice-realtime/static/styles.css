@@ -155,6 +155,83 @@ input[type="text"] {
   font: inherit;
 }
 
+.timeline {
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.timeline-header h2 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.timeline-header span {
+  min-width: 24px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.timeline-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.timeline-events {
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.timeline-event {
+  position: relative;
+  padding: 0 0 12px 16px;
+  border-left: 1px solid var(--line);
+}
+
+.timeline-event::before {
+  position: absolute;
+  top: 4px;
+  left: -4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  content: "";
+}
+
+.timeline-event:last-child {
+  padding-bottom: 0;
+}
+
+.timeline-event p {
+  margin: 3px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.timeline-event small,
+.timeline-timestamp {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.timeline-timestamp {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .transcript {
   min-height: 0;
   flex: 1;

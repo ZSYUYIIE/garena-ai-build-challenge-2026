@@ -1,6 +1,7 @@
 export enum MessageAction {
   CheckExtensionStatus = "CHECK_EXTENSION_STATUS",
   ToggleExtensionStatus = "TOGGLE_EXTENSION_STATUS",
+  SetExtensionStatus = "SET_EXTENSION_STATUS",
   StatusUpdate = "STATUS_UPDATE",
 }
 
@@ -11,6 +12,11 @@ export type ExtensionStatusQuery =
     }
   | {
       action: MessageAction.ToggleExtensionStatus;
+      tabId: number;
+    }
+  | {
+      action: MessageAction.SetExtensionStatus;
+      isRunning: boolean;
       tabId: number;
     }
   | {

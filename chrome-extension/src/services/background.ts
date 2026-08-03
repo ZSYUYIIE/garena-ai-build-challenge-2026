@@ -48,6 +48,11 @@ chrome.runtime.onMessage.addListener(
         return true; // Keep async channel open for sendResponse
       }
 
+      case MessageAction.SetExtensionStatus: {
+        handleSetStatus(targetTabId, message.isRunning, sendResponse);
+        return true;
+      }
+
       case MessageAction.StatusUpdate: {
         // The action is listened to in ExtensionStatusService.onStatusUpdate, so we don't need to handle it here
         return;
@@ -111,6 +116,31 @@ function handleToggleStatus(
       sendResponse({ tabId: tabId, isRunning: nextState });
     })
     .catch((error) => {
+      sendResponse({ error: error.message });
+    });
+}
+
+function handleSetStatus(
+  tabId: number,
+  isRunning: boolean,
+  sendResponse: (response: ExtensionStatusResponse) => void,
+) {
+  chrome.action
+    .setBadgeText({
+      tabId,
+      text: isRunning ? EXTENSION_STATUS_ON : EXTENSION_STATUS_OFF,
+    })
+    .then(() => {
+      sendResponse({ tabId, isRunning });
+      return chrome.tabs
+        .sendMessage<ExtensionStatusQuery>(tabId, {
+          action: MessageAction.StatusUpdate,
+          isRunning,
+          tabId,
+        })
+        .catch(() => undefined);
+    })
+    .catch((error: Error) => {
       sendResponse({ error: error.message });
     });
 }

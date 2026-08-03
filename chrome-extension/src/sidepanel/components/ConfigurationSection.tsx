@@ -18,7 +18,7 @@ export function ConfigurationSection() {
       <label htmlFor="narration-level" className="text-sm text-muted-foreground">
         Narration level
       </label>
-      <Select>
+      <Select aria-label="Narration level">
         <SelectTrigger
           id="narration-level"
           aria-label="Narration level"

@@ -25,6 +25,14 @@ export default defineManifest({
   side_panel: {
     default_path: "src/sidepanel/index.html",
   },
-  permissions: ["contentSettings", "sidePanel"],
+  permissions: ["activeTab", "contentSettings", "sidePanel", "tabCapture"],
+  host_permissions: [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+  ],
+  content_security_policy: {
+    extension_pages:
+      "script-src 'self'; object-src 'self'; connect-src ws://127.0.0.1:8000 ws://localhost:8000;",
+  },
 });
 

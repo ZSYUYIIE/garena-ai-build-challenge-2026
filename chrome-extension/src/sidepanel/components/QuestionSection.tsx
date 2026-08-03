@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+
 import { Input } from "@/components/ui/input";
 
 export type ChatMessage = {
@@ -10,36 +11,45 @@ export type ChatMessage = {
 type QuestionSectionProps = {
   messages: ChatMessage[];
   onAsk: (question: string) => void;
+  disabled?: boolean;
 };
 
-export function QuestionSection({ messages, onAsk }: QuestionSectionProps) {
+export function QuestionSection({
+  messages,
+  onAsk,
+  disabled = false,
+}: QuestionSectionProps) {
   const [draft, setDraft] = useState("");
 
   function handleSubmit() {
     const question = draft.trim();
-    if (!question) return;
+    if (!question || disabled) return;
     onAsk(question);
     setDraft("");
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 gap-2">
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
       <h3>Ask about this video</h3>
 
       <div className="flex items-center gap-2">
         <Input
+          aria-label="Ask about this video"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleSubmit();
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") handleSubmit();
           }}
-          placeholder="Ask a question…"
+          placeholder={
+            disabled ? "Start StreamSense to ask a question" : "Ask a question..."
+          }
+          disabled={disabled}
         />
         <button
           onClick={handleSubmit}
           aria-label="Send question"
           className="shrink-0 text-question disabled:opacity-40"
-          disabled={!draft.trim()}
+          disabled={disabled || !draft.trim()}
         >
           <ArrowIcon />
         </button>
@@ -54,16 +64,14 @@ function ChatHistory({ messages }: { messages: ChatMessage[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-    }
+    const element = scrollRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
   }, [messages]);
 
   if (messages.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        Ask something about what's on screen.
+        Ask something about what&apos;s on screen.
       </p>
     );
   }
@@ -82,12 +90,12 @@ function ChatHistory({ messages }: { messages: ChatMessage[] }) {
 }
 
 function ChatRequest({ text }: { text: string }) {
-  return <p className="text-sm text-muted-foreground max-w-10/12">{text}</p>;
+  return <p className="max-w-10/12 text-sm text-muted-foreground">{text}</p>;
 }
 
 function ChatResponse({ text }: { text: string }) {
   return (
-    <p className="self-end max-w-10/12 rounded-lg border border-border bg-card px-2.5 py-2 text-sm">
+    <p className="max-w-10/12 self-end rounded-lg border border-border bg-card px-2.5 py-2 text-sm">
       {text}
     </p>
   );
@@ -104,6 +112,7 @@ function ArrowIcon() {
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden="true"
     >
       <path d="M5 12h14M12 5l7 7-7 7" />
     </svg>
