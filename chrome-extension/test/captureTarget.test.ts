@@ -5,6 +5,7 @@ import {
   authorizeCaptureTarget,
   beginAuthorizedCapture,
   captureErrorMessage,
+  captureGuidance,
   createCaptureTargetState,
   isTargetReadyForActiveTab,
   loadCaptureTarget,
@@ -174,4 +175,37 @@ test("toolbar authorization persists and opens the exact clicked tab", async () 
 
   assert.deepEqual(calls, ["persist:41", "open:41"]);
   await authorization;
+});
+
+test("guides an uninvoked side panel to the toolbar action", () => {
+  assert.equal(
+    captureGuidance(null, 41),
+    "Click the StreamSense toolbar icon on the tab you want to capture.",
+  );
+});
+
+test("identifies a restricted capture target", () => {
+  const target = createCaptureTargetState({
+    id: 41,
+    windowId: 7,
+    url: "chrome://settings",
+  });
+
+  assert.equal(
+    captureGuidance(target, 41),
+    "Chrome internal and Web Store pages cannot be captured.",
+  );
+});
+
+test("requires reauthorization after the active tab changes", () => {
+  const target = createCaptureTargetState({
+    id: 41,
+    windowId: 7,
+    url: "https://example.com",
+  });
+
+  assert.equal(
+    captureGuidance(target, 52),
+    "This tab is not authorized. Click the StreamSense icon here first.",
+  );
 });

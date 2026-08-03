@@ -101,6 +101,22 @@ export function targetChangeRequiresReset(
   return target?.status !== "ready" || target.tabId !== capturedTabId;
 }
 
+export function captureGuidance(
+  target: CaptureTargetState | null,
+  activeTabId: number | null,
+): string {
+  if (!target || (target.status === "unavailable" && target.reason === "missing_tab")) {
+    return "Click the StreamSense toolbar icon on the tab you want to capture.";
+  }
+  if (target.status === "unavailable") {
+    return "Chrome internal and Web Store pages cannot be captured.";
+  }
+  if (target.tabId !== activeTabId) {
+    return "This tab is not authorized. Click the StreamSense icon here first.";
+  }
+  return "Ready to describe this tab.";
+}
+
 export function captureErrorMessage(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause);
 
