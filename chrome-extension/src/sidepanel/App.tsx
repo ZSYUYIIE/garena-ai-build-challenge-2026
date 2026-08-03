@@ -56,6 +56,7 @@ function StreamSensePanel() {
           status={session.status}
           isRunning={session.isRunning}
           isBusy={session.isBusy}
+          canStart={session.canStart}
           onRunningChange={handleRunningChange}
         />
       </div>

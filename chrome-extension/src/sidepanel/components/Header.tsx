@@ -6,6 +6,7 @@ type HeaderProps = {
   status: RealtimeStatus;
   isRunning: boolean;
   isBusy: boolean;
+  canStart: boolean;
   onRunningChange: (isRunning: boolean) => void;
 };
 
@@ -13,6 +14,7 @@ export function Header({
   status,
   isRunning,
   isBusy,
+  canStart,
   onRunningChange,
 }: HeaderProps) {
   const statusColor =
@@ -32,6 +34,7 @@ export function Header({
         <RunningStatusSwitch
           isRunning={isRunning}
           isBusy={isBusy}
+          canStart={canStart}
           onChange={onRunningChange}
         />
       </div>
