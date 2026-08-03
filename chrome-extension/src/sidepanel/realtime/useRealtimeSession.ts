@@ -6,7 +6,13 @@ import {
   type MutableRefObject,
 } from "react";
 
+import {
+  beginAuthorizedCapture,
+  captureErrorMessage,
+  targetChangeRequiresReset,
+} from "../../services/captureTarget";
 import type { NarrationMode } from "../context/ConfigurationContext";
+import { useCaptureTarget } from "./useCaptureTarget";
 import type {
   RealtimeChatMessage,
   RealtimeStatus,
@@ -24,6 +30,10 @@ type ActiveStream = {
 };
 
 export function useRealtimeSession(narrationLevel: NarrationMode) {
+  const captureTarget = useCaptureTarget();
+  const captureTargetRef = useRef(captureTarget);
+  captureTargetRef.current = captureTarget;
+
   const [status, setStatus] = useState<RealtimeStatus>("idle");
   const [statusText, setStatusText] = useState("Ready to describe this tab.");
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +51,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const frameInFlightRef = useRef(false);
   const lastFrameSignatureRef = useRef<Uint8Array | null>(null);
   const captureStartedAtRef = useRef<number | null>(null);
+  const capturedTabIdRef = useRef<number | null>(null);
   const stoppingRef = useRef(false);
   const stopRef = useRef<() => void>(() => undefined);
   const narrationLevelRef = useRef(narrationLevel);
@@ -100,6 +111,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       captureVideoRef.current = null;
       captureCanvasRef.current = null;
       captureStartedAtRef.current = null;
+      capturedTabIdRef.current = null;
 
       if (audioContextRef.current) {
         void audioContextRef.current.close();
@@ -394,6 +406,24 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const start = useCallback(async () => {
     if (websocketRef.current || status === "requesting_capture") return;
 
+    const targetSnapshot = captureTargetRef.current;
+    if (
+      targetSnapshot.target?.status !== "ready" ||
+      targetSnapshot.target.tabId !== targetSnapshot.activeTabId
+    ) {
+      setError(targetSnapshot.guidance);
+      setStatusText(targetSnapshot.guidance);
+      return;
+    }
+
+    const target = targetSnapshot.target;
+    const mediaStreamPromise = beginAuthorizedCapture(target, {
+      requestStreamId: (options) => chrome.tabCapture.getMediaStreamId(options),
+      ensureAudioReady: ensureAudioContext,
+      consumeStreamId: consumeTabStreamId,
+    });
+    capturedTabIdRef.current = target.tabId;
+
     stoppingRef.current = false;
     setStatus("requesting_capture");
     setStatusText("Capturing the active tab without the StreamSense panel.");
@@ -404,8 +434,13 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     clearStreamTimers();
 
     try {
-      await ensureAudioContext();
-      const mediaStream = await captureActiveTab();
+      const mediaStream = await mediaStreamPromise;
+      if (stoppingRef.current) {
+        for (const track of mediaStream.getTracks()) {
+          track.stop();
+        }
+        return;
+      }
       mediaStreamRef.current = mediaStream;
 
       const video = document.createElement("video");
@@ -462,7 +497,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     } catch (cause) {
       releaseResources(true);
       setStatus("error");
-      setError(toErrorMessage(cause));
+      setError(captureErrorMessage(cause));
       setStatusText("StreamSense could not start.");
     }
   }, [
@@ -473,6 +508,27 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     startFrameLoop,
     status,
   ]);
+
+  useEffect(() => {
+    if (
+      !targetChangeRequiresReset(
+        capturedTabIdRef.current,
+        captureTarget.target,
+      )
+    ) {
+      return;
+    }
+
+    stopRef.current();
+    setError("Capture target changed. Start StreamSense again on the new tab.");
+    setStatusText("Capture target changed. Start StreamSense again.");
+  }, [captureTarget.target]);
+
+  useEffect(() => {
+    if (status === "idle" && !captureTarget.canStart) {
+      setStatusText(captureTarget.guidance);
+    }
+  }, [captureTarget.canStart, captureTarget.guidance, status]);
 
   const ask = useCallback((question: string) => {
     const websocket = websocketRef.current;
@@ -502,6 +558,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     messages,
     isRunning: status === "connecting" || status === "connected",
     isBusy: status === "requesting_capture",
+    canStart: captureTarget.canStart,
     canAsk: status === "connected",
     start,
     stop,
@@ -629,39 +686,14 @@ function hasMeaningfulVisualChange(
   return changedRatio >= 0.012 || averageDifference >= 5;
 }
 
-async function captureActiveTab() {
-  if (typeof chrome !== "undefined" && chrome.tabCapture) {
-    const [activeTab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
-    if (activeTab?.id === undefined) {
-      throw new Error("StreamSense could not find an active browser tab to capture.");
-    }
-
-    const streamId = await chrome.tabCapture.getMediaStreamId({
-      targetTabId: activeTab.id,
-    });
-    const video = {
-      mandatory: {
-        chromeMediaSource: "tab",
-        chromeMediaSourceId: streamId,
-        maxFrameRate: 10,
-      },
-    } as unknown as MediaTrackConstraints;
-
-    return navigator.mediaDevices.getUserMedia({ audio: false, video });
-  }
-
-  // Development-page fallback. The packaged extension always uses tabCapture,
-  // which prevents its side panel from appearing inside the analyzed frames.
-  return navigator.mediaDevices.getDisplayMedia({
-    video: {
-      displaySurface: "browser",
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
-      frameRate: { ideal: 5, max: 10 },
+async function consumeTabStreamId(streamId: string) {
+  const video = {
+    mandatory: {
+      chromeMediaSource: "tab",
+      chromeMediaSourceId: streamId,
+      maxFrameRate: 10,
     },
-    audio: false,
-  });
+  } as unknown as MediaTrackConstraints;
+
+  return navigator.mediaDevices.getUserMedia({ audio: false, video });
 }
