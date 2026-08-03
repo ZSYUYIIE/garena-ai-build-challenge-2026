@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CaptureCancelledError,
   authorizeCaptureTarget,
   beginAuthorizedCapture,
   captureErrorMessage,
   captureGuidance,
   createCaptureTargetState,
+  isCaptureAuthorizationError,
   isTargetReadyForActiveTab,
   loadCaptureTarget,
   replaceTargetForWindow,
@@ -88,6 +90,7 @@ test("requests the stored tab before asynchronous audio initialization", async (
     ensureAudioReady: async () => {
       calls.push("audio");
     },
+    isCurrent: () => true,
     consumeStreamId: async (streamId) => {
       calls.push(`consume:${streamId}`);
       return { id: "media-41" };
@@ -98,6 +101,38 @@ test("requests the stored tab before asynchronous audio initialization", async (
   assert.deepEqual(stream, { id: "media-41" });
 });
 
+test("does not consume a stream ID after capture startup is cancelled", async () => {
+  const target = createCaptureTargetState(
+    { id: 41, windowId: 7, url: "https://example.com" },
+    100,
+  );
+  assert.equal(target.status, "ready");
+  if (target.status !== "ready") throw new Error("Expected a ready target.");
+
+  let current = true;
+  let releaseAudio: (() => void) | null = null;
+  let streamConsumed = false;
+  const audioReady = new Promise<void>((resolve) => {
+    releaseAudio = resolve;
+  });
+
+  const capture = beginAuthorizedCapture(target, {
+    requestStreamId: async () => "stream-41",
+    ensureAudioReady: () => audioReady,
+    isCurrent: () => current,
+    consumeStreamId: async () => {
+      streamConsumed = true;
+      return { id: "media-41" };
+    },
+  });
+
+  current = false;
+  releaseAudio?.();
+
+  await assert.rejects(capture, CaptureCancelledError);
+  assert.equal(streamConsumed, false);
+});
+
 test("maps Chrome authorization errors to reauthorization guidance", () => {
   assert.equal(
     captureErrorMessage(
@@ -106,6 +141,21 @@ test("maps Chrome authorization errors to reauthorization guidance", () => {
       ),
     ),
     "Page access changed. Click the StreamSense icon again.",
+  );
+});
+
+test("identifies only capture-authorization errors for recovery", () => {
+  assert.equal(
+    isCaptureAuthorizationError(
+      "Page access changed. Click the StreamSense icon again.",
+    ),
+    true,
+  );
+  assert.equal(
+    isCaptureAuthorizationError(
+      "Cannot reach StreamSense at 127.0.0.1:8000. Start the Express backend first.",
+    ),
+    false,
   );
 });
 

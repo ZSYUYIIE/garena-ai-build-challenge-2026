@@ -9,9 +9,14 @@ import {
 import {
   beginAuthorizedCapture,
   captureErrorMessage,
+  isCaptureAuthorizationError,
   targetChangeRequiresReset,
 } from "../../services/captureTarget";
 import type { NarrationMode } from "../context/ConfigurationContext";
+import {
+  createSessionGenerationGuard,
+  shouldSyncIdleGuidance,
+} from "./sessionLifecycle";
 import { useCaptureTarget } from "./useCaptureTarget";
 import type {
   RealtimeChatMessage,
@@ -42,6 +47,10 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   );
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [messages, setMessages] = useState<RealtimeChatMessage[]>([]);
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const errorRef = useRef(error);
+  errorRef.current = error;
 
   const websocketRef = useRef<WebSocket | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -52,7 +61,8 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const lastFrameSignatureRef = useRef<Uint8Array | null>(null);
   const captureStartedAtRef = useRef<number | null>(null);
   const capturedTabIdRef = useRef<number | null>(null);
-  const stoppingRef = useRef(false);
+  const sessionGenerationRef = useRef(createSessionGenerationGuard());
+  const startingRef = useRef(false);
   const stopRef = useRef<() => void>(() => undefined);
   const narrationLevelRef = useRef(narrationLevel);
 
@@ -63,6 +73,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const nextPlaybackAtRef = useRef(0);
+  const observedGuidanceRef = useRef<string | null>(null);
 
   const clearStreamTimers = useCallback(() => {
     if (narrationFlushTimerRef.current !== null) {
@@ -79,7 +90,8 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
 
   const releaseResources = useCallback(
     (closeWebSocket: boolean) => {
-      stoppingRef.current = true;
+      sessionGenerationRef.current.invalidate();
+      startingRef.current = false;
 
       if (frameTimerRef.current !== null) {
         window.clearInterval(frameTimerRef.current);
@@ -138,12 +150,18 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   }, []);
 
   const playModelAudio = useCallback(
-    async (base64Audio: string, mimeType: string) => {
+    async (
+      base64Audio: string,
+      mimeType: string,
+      isCurrentSession: () => boolean,
+    ) => {
       const bytes = base64ToUint8Array(base64Audio);
       const audioContext = await ensureAudioContext();
+      if (!isCurrentSession()) return;
 
       if (!/pcm|l16/i.test(mimeType)) {
         const decoded = await audioContext.decodeAudioData(bytes.buffer.slice(0));
+        if (!isCurrentSession()) return;
         scheduleAudioBuffer(audioContext, decoded, nextPlaybackAtRef);
         return;
       }
@@ -251,7 +269,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   }, []);
 
   const handleServerMessage = useCallback(
-    (message: ServerMessage) => {
+    (message: ServerMessage, isCurrentSession: () => boolean) => {
       switch (message.type) {
         case "connected":
           setStatus("connected");
@@ -301,8 +319,14 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           break;
         case "model_audio":
           if (message.data && message.mimeType) {
-            void playModelAudio(message.data, message.mimeType).catch((cause) => {
-              setError(`Could not play narration audio: ${toErrorMessage(cause)}`);
+            void playModelAudio(
+              message.data,
+              message.mimeType,
+              isCurrentSession,
+            ).catch((cause) => {
+              if (isCurrentSession()) {
+                setError(`Could not play narration audio: ${toErrorMessage(cause)}`);
+              }
             });
           }
           break;
@@ -328,12 +352,18 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const stop = useCallback(() => {
     releaseResources(true);
     setStatus("idle");
-    setStatusText("StreamSense stopped.");
+    const targetSnapshot = captureTargetRef.current;
+    setStatusText(
+      targetSnapshot.canStart
+        ? "StreamSense stopped."
+        : targetSnapshot.guidance,
+    );
     setDescription("StreamSense is stopped. Start it to describe the active tab.");
   }, [releaseResources]);
   stopRef.current = stop;
 
-  const startFrameLoop = useCallback(() => {
+  const startFrameLoop = useCallback((generation: number) => {
+    if (!sessionGenerationRef.current.isCurrent(generation)) return;
     const video = captureVideoRef.current;
     const canvas = captureCanvasRef.current;
     if (!video || !canvas) return;
@@ -344,6 +374,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     frameTimerRef.current = window.setInterval(() => {
       const websocket = websocketRef.current;
       if (
+        !sessionGenerationRef.current.isCurrent(generation) ||
         frameInFlightRef.current ||
         !websocket ||
         websocket.readyState !== WebSocket.OPEN ||
@@ -379,22 +410,37 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       canvas.toBlob(
         async (blob) => {
           try {
-            const currentWebSocket = websocketRef.current;
-            if (!blob || currentWebSocket?.readyState !== WebSocket.OPEN) return;
+            if (
+              !sessionGenerationRef.current.isCurrent(generation) ||
+              !blob ||
+              websocket.readyState !== WebSocket.OPEN
+            ) {
+              return;
+            }
+            const timestampSeconds = currentTimestampSeconds(
+              video,
+              captureStartedAtRef.current,
+            );
+            const data = await blobToBase64(blob);
+            if (
+              !sessionGenerationRef.current.isCurrent(generation) ||
+              websocket.readyState !== WebSocket.OPEN
+            ) {
+              return;
+            }
 
-            currentWebSocket.send(
+            websocket.send(
               JSON.stringify({
                 type: "video_frame",
-                timestampSeconds: currentTimestampSeconds(
-                  video,
-                  captureStartedAtRef.current,
-                ),
+                timestampSeconds,
                 mimeType: "image/jpeg",
-                data: await blobToBase64(blob),
+                data,
               }),
             );
           } finally {
-            frameInFlightRef.current = false;
+            if (sessionGenerationRef.current.isCurrent(generation)) {
+              frameInFlightRef.current = false;
+            }
           }
         },
         "image/jpeg",
@@ -404,7 +450,13 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   }, []);
 
   const start = useCallback(async () => {
-    if (websocketRef.current || status === "requesting_capture") return;
+    if (
+      websocketRef.current ||
+      startingRef.current ||
+      status === "requesting_capture"
+    ) {
+      return;
+    }
 
     const targetSnapshot = captureTargetRef.current;
     if (
@@ -417,14 +469,16 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     }
 
     const target = targetSnapshot.target;
+    const generation = sessionGenerationRef.current.begin();
+    startingRef.current = true;
     const mediaStreamPromise = beginAuthorizedCapture(target, {
       requestStreamId: (options) => chrome.tabCapture.getMediaStreamId(options),
       ensureAudioReady: ensureAudioContext,
+      isCurrent: () => sessionGenerationRef.current.isCurrent(generation),
       consumeStreamId: consumeTabStreamId,
     });
     capturedTabIdRef.current = target.tabId;
 
-    stoppingRef.current = false;
     setStatus("requesting_capture");
     setStatusText("Capturing the active tab without the StreamSense panel.");
     setError(null);
@@ -433,9 +487,12 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     setDescription("Waiting for the first description...");
     clearStreamTimers();
 
+    let startupStream: MediaStream | null = null;
+    let startupVideo: HTMLVideoElement | null = null;
     try {
       const mediaStream = await mediaStreamPromise;
-      if (stoppingRef.current) {
+      startupStream = mediaStream;
+      if (!sessionGenerationRef.current.isCurrent(generation)) {
         for (const track of mediaStream.getTracks()) {
           track.stop();
         }
@@ -447,14 +504,27 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       video.muted = true;
       video.playsInline = true;
       video.srcObject = mediaStream;
+      startupVideo = video;
       captureVideoRef.current = video;
       captureCanvasRef.current = document.createElement("canvas");
       await video.play();
+      if (!sessionGenerationRef.current.isCurrent(generation)) {
+        video.pause();
+        video.srcObject = null;
+        for (const track of mediaStream.getTracks()) {
+          track.stop();
+        }
+        return;
+      }
       captureStartedAtRef.current = performance.now();
 
       mediaStream.getVideoTracks()[0]?.addEventListener(
         "ended",
-        () => stopRef.current(),
+        () => {
+          if (sessionGenerationRef.current.isCurrent(generation)) {
+            stopRef.current();
+          }
+        },
         { once: true },
       );
 
@@ -462,10 +532,15 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         import.meta.env.VITE_STREAMSENSE_WS_URL || DEFAULT_WEBSOCKET_URL,
       );
       websocketRef.current = websocket;
+      startingRef.current = false;
       setStatus("connecting");
       setStatusText("Connecting to the local StreamSense backend...");
 
       websocket.addEventListener("open", () => {
+        if (!sessionGenerationRef.current.isCurrent(generation)) {
+          websocket.close(1000, "Stale extension session");
+          return;
+        }
         websocket.send(JSON.stringify({ type: "capture_source", source: "screen" }));
         websocket.send(
           JSON.stringify({
@@ -473,28 +548,41 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             narrationLevel: narrationLevelRef.current,
           }),
         );
-        startFrameLoop();
+        startFrameLoop(generation);
       });
       websocket.addEventListener("message", (event) => {
+        if (!sessionGenerationRef.current.isCurrent(generation)) return;
         try {
-          handleServerMessage(JSON.parse(String(event.data)) as ServerMessage);
+          handleServerMessage(
+            JSON.parse(String(event.data)) as ServerMessage,
+            () => sessionGenerationRef.current.isCurrent(generation),
+          );
         } catch {
           setError("The backend sent an invalid message.");
         }
       });
       websocket.addEventListener("error", () => {
+        if (!sessionGenerationRef.current.isCurrent(generation)) return;
         setError(
           "Cannot reach StreamSense at 127.0.0.1:8000. Start the Express backend first.",
         );
         setStatus("error");
       });
       websocket.addEventListener("close", () => {
-        if (stoppingRef.current) return;
+        if (!sessionGenerationRef.current.isCurrent(generation)) return;
         releaseResources(false);
         setStatus("error");
         setStatusText("Backend connection closed.");
       });
     } catch (cause) {
+      if (!sessionGenerationRef.current.isCurrent(generation)) {
+        startupVideo?.pause();
+        if (startupVideo) startupVideo.srcObject = null;
+        for (const track of startupStream?.getTracks() ?? []) {
+          track.stop();
+        }
+        return;
+      }
       releaseResources(true);
       setStatus("error");
       setError(captureErrorMessage(cause));
@@ -520,15 +608,37 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     }
 
     stopRef.current();
-    setError("Capture target changed. Start StreamSense again on the new tab.");
-    setStatusText("Capture target changed. Start StreamSense again.");
+    setError(null);
+    setStatusText(
+      captureTarget.canStart
+        ? "Capture target changed. Start StreamSense again."
+        : captureTarget.guidance,
+    );
   }, [captureTarget.target]);
 
   useEffect(() => {
-    if (status === "idle" && !captureTarget.canStart) {
+    const previousGuidance = observedGuidanceRef.current;
+    observedGuidanceRef.current = captureTarget.guidance;
+
+    const authorizationRecovered =
+      captureTarget.canStart &&
+      isCaptureAuthorizationError(errorRef.current);
+    if (authorizationRecovered) {
+      setError(null);
+      setStatus("idle");
       setStatusText(captureTarget.guidance);
     }
-  }, [captureTarget.canStart, captureTarget.guidance, status]);
+    if (
+      !authorizationRecovered &&
+      shouldSyncIdleGuidance(
+        statusRef.current === "idle",
+        previousGuidance,
+        captureTarget.guidance,
+      )
+    ) {
+      setStatusText(captureTarget.guidance);
+    }
+  }, [captureTarget.canStart, captureTarget.guidance, captureTarget.target]);
 
   const ask = useCallback((question: string) => {
     const websocket = websocketRef.current;

@@ -9,6 +9,7 @@ import {
   targetForWindow,
   type CaptureTargetState,
 } from "../../services/captureTarget";
+import { createRevisionGuard } from "./sessionLifecycle";
 
 export type CaptureTargetSnapshot = {
   target: CaptureTargetState | null;
@@ -24,6 +25,8 @@ export function useCaptureTarget(): CaptureTargetSnapshot {
   useEffect(() => {
     let disposed = false;
     let currentWindowId: number | null = null;
+    const targetRevision = createRevisionGuard();
+    const activeTabRevision = createRevisionGuard();
 
     const handleStorageChange = (
       changes: Record<string, chrome.storage.StorageChange>,
@@ -33,6 +36,7 @@ export function useCaptureTarget(): CaptureTargetSnapshot {
       const change = changes[CAPTURE_TARGETS_STORAGE_KEY];
       if (!change) return;
 
+      targetRevision.markChanged();
       setTarget(
         targetForWindow(
           captureTargetsFromValue(change.newValue),
@@ -43,6 +47,7 @@ export function useCaptureTarget(): CaptureTargetSnapshot {
 
     const handleTabActivated = (activeInfo: chrome.tabs.OnActivatedInfo) => {
       if (activeInfo.windowId === currentWindowId) {
+        activeTabRevision.markChanged();
         setActiveTabId(activeInfo.tabId);
       }
     };
@@ -56,6 +61,8 @@ export function useCaptureTarget(): CaptureTargetSnapshot {
         throw new Error("Unable to resolve the current Chrome window.");
       }
       currentWindowId = currentWindow.id;
+      const targetRevisionAtLoad = targetRevision.snapshot();
+      const activeTabRevisionAtQuery = activeTabRevision.snapshot();
 
       const [tabs, initialTarget] = await Promise.all([
         chrome.tabs.query({ active: true, windowId: currentWindowId }),
@@ -63,16 +70,15 @@ export function useCaptureTarget(): CaptureTargetSnapshot {
       ]);
       if (disposed) return;
 
-      setActiveTabId(tabs[0]?.id ?? null);
-      setTarget(initialTarget);
+      if (activeTabRevision.isCurrent(activeTabRevisionAtQuery)) {
+        setActiveTabId(tabs[0]?.id ?? null);
+      }
+      if (targetRevision.isCurrent(targetRevisionAtLoad)) {
+        setTarget(initialTarget);
+      }
     };
 
-    void initialize().catch(() => {
-      if (!disposed) {
-        setActiveTabId(null);
-        setTarget(null);
-      }
-    });
+    void initialize().catch(() => undefined);
 
     return () => {
       disposed = true;

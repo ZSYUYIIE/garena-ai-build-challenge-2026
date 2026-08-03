@@ -131,6 +131,18 @@ export function captureErrorMessage(cause: unknown): string {
   return "StreamSense could not capture this tab. Click the toolbar icon and try again.";
 }
 
+const CAPTURE_AUTHORIZATION_ERRORS = new Set([
+  "Click the StreamSense toolbar icon on the tab you want to capture.",
+  "This tab is not authorized. Click the StreamSense icon here first.",
+  "Chrome internal and Web Store pages cannot be captured.",
+  "Page access changed. Click the StreamSense icon again.",
+  "StreamSense could not capture this tab. Click the toolbar icon and try again.",
+]);
+
+export function isCaptureAuthorizationError(message: string | null): boolean {
+  return message !== null && CAPTURE_AUTHORIZATION_ERRORS.has(message);
+}
+
 export async function loadCaptureTarget(
   windowId: number,
   storage?: SessionStorageArea,
@@ -184,11 +196,16 @@ export async function authorizeCaptureTarget(
   await Promise.all([persistTarget, openPanel]);
 }
 
+export class CaptureCancelledError extends Error {
+  override name = "CaptureCancelledError";
+}
+
 export async function beginAuthorizedCapture<T>(
   target: ReadyCaptureTarget,
   dependencies: {
     requestStreamId: (options: { targetTabId: number }) => Promise<string>;
     ensureAudioReady: () => Promise<unknown>;
+    isCurrent: () => boolean;
     consumeStreamId: (streamId: string) => Promise<T>;
   },
 ): Promise<T> {
@@ -197,5 +214,8 @@ export async function beginAuthorizedCapture<T>(
   });
   await dependencies.ensureAudioReady();
   const streamId = await streamIdPromise;
+  if (!dependencies.isCurrent()) {
+    throw new CaptureCancelledError("Capture startup was replaced.");
+  }
   return dependencies.consumeStreamId(streamId);
 }
