@@ -28,6 +28,8 @@ type SessionStorageArea = {
   set(items: Record<string, unknown>): Promise<void>;
 };
 
+const pendingWritesByStorage = new WeakMap<SessionStorageArea, Promise<void>>();
+
 export function createCaptureTargetState(
   tab: CaptureTab,
   now = Date.now(),
@@ -141,18 +143,23 @@ export async function loadCaptureTarget(
   );
 }
 
-export async function saveCaptureTarget(
+export function saveCaptureTarget(
   target: CaptureTargetState,
   storage?: SessionStorageArea,
 ): Promise<void> {
   const area = storage ?? chrome.storage.session;
-  const stored = await area.get(CAPTURE_TARGETS_STORAGE_KEY);
-  const current = captureTargetsFromValue(
-    stored[CAPTURE_TARGETS_STORAGE_KEY],
-  );
-  await area.set({
-    [CAPTURE_TARGETS_STORAGE_KEY]: replaceTargetForWindow(current, target),
+  const previousWrite = pendingWritesByStorage.get(area) ?? Promise.resolve();
+  const nextWrite = previousWrite.catch(() => undefined).then(async () => {
+    const stored = await area.get(CAPTURE_TARGETS_STORAGE_KEY);
+    const current = captureTargetsFromValue(
+      stored[CAPTURE_TARGETS_STORAGE_KEY],
+    );
+    await area.set({
+      [CAPTURE_TARGETS_STORAGE_KEY]: replaceTargetForWindow(current, target),
+    });
   });
+  pendingWritesByStorage.set(area, nextWrite);
+  return nextWrite;
 }
 
 export function captureTargetsFromValue(value: unknown): CaptureTargetsByWindow {
