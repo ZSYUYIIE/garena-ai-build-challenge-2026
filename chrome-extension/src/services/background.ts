@@ -3,10 +3,20 @@ import {
   ExtensionStatusQuery,
   ExtensionStatusResponse,
 } from "@/types";
+import {
+  authorizeCaptureTarget,
+  saveCaptureTarget,
+} from "./captureTarget";
 
-chrome.runtime.onInstalled.addListener(() => {
-  // Configures clicking the extension action icon to open the side panel
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+
+chrome.action.onClicked.addListener((tab) => {
+  void authorizeCaptureTarget(tab, {
+    persistTarget: saveCaptureTarget,
+    openPanel: (tabId) => chrome.sidePanel.open({ tabId }),
+  }).catch((error) => {
+    console.error("Could not authorize StreamSense capture:", error);
+  });
 });
 
 const EXTENSION_STATUS_ON = "ON";

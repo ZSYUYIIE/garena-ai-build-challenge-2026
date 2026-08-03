@@ -23,6 +23,11 @@ export type CaptureTab = {
   url?: string;
 };
 
+type SessionStorageArea = {
+  get(key: string): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+};
+
 export function createCaptureTargetState(
   tab: CaptureTab,
   now = Date.now(),
@@ -106,6 +111,54 @@ export function captureErrorMessage(cause: unknown): string {
     return "Chrome internal and Web Store pages cannot be captured.";
   }
   return "StreamSense could not capture this tab. Click the toolbar icon and try again.";
+}
+
+export async function loadCaptureTarget(
+  windowId: number,
+  storage?: SessionStorageArea,
+): Promise<CaptureTargetState | null> {
+  const area = storage ?? chrome.storage.session;
+  const stored = await area.get(CAPTURE_TARGETS_STORAGE_KEY);
+  return targetForWindow(
+    captureTargetsFromValue(stored[CAPTURE_TARGETS_STORAGE_KEY]),
+    windowId,
+  );
+}
+
+export async function saveCaptureTarget(
+  target: CaptureTargetState,
+  storage?: SessionStorageArea,
+): Promise<void> {
+  const area = storage ?? chrome.storage.session;
+  const stored = await area.get(CAPTURE_TARGETS_STORAGE_KEY);
+  const current = captureTargetsFromValue(
+    stored[CAPTURE_TARGETS_STORAGE_KEY],
+  );
+  await area.set({
+    [CAPTURE_TARGETS_STORAGE_KEY]: replaceTargetForWindow(current, target),
+  });
+}
+
+export function captureTargetsFromValue(value: unknown): CaptureTargetsByWindow {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as CaptureTargetsByWindow;
+}
+
+export async function authorizeCaptureTarget(
+  tab: CaptureTab,
+  dependencies: {
+    persistTarget: (target: CaptureTargetState) => Promise<void>;
+    openPanel: (tabId: number) => Promise<void>;
+  },
+  now = Date.now(),
+): Promise<void> {
+  const target = createCaptureTargetState(tab, now);
+  const persistTarget = dependencies.persistTarget(target);
+  const openPanel =
+    tab.id === undefined
+      ? Promise.resolve()
+      : dependencies.openPanel(tab.id);
+  await Promise.all([persistTarget, openPanel]);
 }
 
 export async function beginAuthorizedCapture<T>(

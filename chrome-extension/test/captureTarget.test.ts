@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  authorizeCaptureTarget,
   beginAuthorizedCapture,
   captureErrorMessage,
   createCaptureTargetState,
   isTargetReadyForActiveTab,
+  loadCaptureTarget,
   replaceTargetForWindow,
+  saveCaptureTarget,
   targetChangeRequiresReset,
   targetForWindow,
 } from "../src/services/captureTarget.ts";
@@ -117,4 +120,58 @@ test("detects when a running session target changes", () => {
 
   assert.equal(targetChangeRequiresReset(41, same), false);
   assert.equal(targetChangeRequiresReset(41, changed), true);
+});
+
+test("persists target records without overwriting another window", async () => {
+  const values: Record<string, unknown> = {};
+  const storage = {
+    async get(key: string) {
+      return { [key]: values[key] };
+    },
+    async set(items: Record<string, unknown>) {
+      Object.assign(values, items);
+    },
+  };
+
+  await saveCaptureTarget(
+    createCaptureTargetState(
+      { id: 41, windowId: 7, url: "https://example.com" },
+      100,
+    ),
+    storage,
+  );
+  await saveCaptureTarget(
+    createCaptureTargetState(
+      { id: 52, windowId: 8, url: "https://example.org" },
+      200,
+    ),
+    storage,
+  );
+
+  const first = await loadCaptureTarget(7, storage);
+  const second = await loadCaptureTarget(8, storage);
+  assert.equal(first?.status === "ready" && first.tabId, 41);
+  assert.equal(second?.status === "ready" && second.tabId, 52);
+});
+
+test("toolbar authorization persists and opens the exact clicked tab", async () => {
+  const calls: string[] = [];
+
+  const authorization = authorizeCaptureTarget(
+    { id: 41, windowId: 7, url: "https://example.com/watch" },
+    {
+      persistTarget: async (target) => {
+        calls.push(
+          `persist:${target.status === "ready" ? target.tabId : target.reason}`,
+        );
+      },
+      openPanel: async (tabId) => {
+        calls.push(`open:${tabId}`);
+      },
+    },
+    100,
+  );
+
+  assert.deepEqual(calls, ["persist:41", "open:41"]);
+  await authorization;
 });
