@@ -537,7 +537,8 @@ export class GeminiLiveSession {
   }
 
   async #runReconnect() {
-    this.#failActiveMicrophoneForReconnect();
+    this.generation += 1;
+    this.#completeOwnedTurnsForReconnect();
     this.#clearOwnership();
     const oldSession = this.session;
     this.session = null;
@@ -558,10 +559,32 @@ export class GeminiLiveSession {
     if (!this.closing) this.#health("degraded", "Unable to resume Gemini Live session.");
   }
 
-  #failActiveMicrophoneForReconnect() {
-    const turn = this.activeMicrophoneTurn;
-    if (!turn) return;
-    this.#failMicrophoneTurn(turn, "Gemini Live connection was interrupted.");
+  #completeOwnedTurnsForReconnect() {
+    const turnsById = new Map();
+    const remember = (turn) => {
+      if (turn && !turnsById.has(turn.turnId)) turnsById.set(turn.turnId, turn);
+    };
+    remember(this.activeMicrophoneTurn);
+    for (const turn of this.responseOwners) remember(turn);
+    for (const turn of this.inputOwners) remember(turn);
+    for (const turn of this.outputOwners) remember(turn);
+    for (const turn of this.settling.values()) remember(turn);
+
+    for (const turn of turnsById.values()) {
+      if (turn.failed || turn.completed) continue;
+      turn.failed = true;
+      turn.completed = true;
+      turn.completedAt = this.now();
+      if (!turn.discarded) {
+        this.onPlaybackClear({ turnId: turn.turnId, reason: "reconnect" });
+      }
+      this.onTurnComplete({
+        turnId: turn.turnId,
+        mode: turn.mode,
+        interrupted: true,
+        retryable: turn.mode === "answer",
+      });
+    }
   }
 
   #failMicrophoneTurn(turn) {

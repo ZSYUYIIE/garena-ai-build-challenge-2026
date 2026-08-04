@@ -258,8 +258,86 @@ test("resumes with only the latest frame and fails active microphone work retrya
   await flush();
   assert.deepEqual(h.configs[1].config.sessionResumption, { handle: "resume-2" });
   assert.deepEqual(replacement.realtimeInputs, [{ video: { data: "new-frame", mimeType: "image/jpeg" } }]);
-  assert.deepEqual(h.completions.at(-1), { turnId: "mic-lost", mode: "answer", interrupted: true, retryable: true });
+  assert.deepEqual(h.completions, [{ turnId: "mic-lost", mode: "answer", interrupted: true, retryable: true }]);
+  assert.deepEqual(h.clears, [{ turnId: "mic-lost", reason: "reconnect" }]);
   assert.equal(replacement.realtimeInputs.some((input) => input.audio), false);
+});
+
+test("completes a typed answer once on GoAway and never replays or transfers its response ownership", async () => {
+  const first = new FakeLiveConnection();
+  const replacement = new FakeLiveConnection();
+  const h = makeHarness({ connections: [first, replacement] });
+  await h.live.start();
+  h.live.askTyped("typed-lost", "What happened?");
+  await flush();
+
+  h.callbacks[0].onmessage({ goAway: {} });
+  for (let index = 0; index < 4; index += 1) await flush();
+
+  assert.deepEqual(h.completions, [{ turnId: "typed-lost", mode: "answer", interrupted: true, retryable: true }]);
+  assert.deepEqual(h.clears, [{ turnId: "typed-lost", reason: "reconnect" }]);
+  assert.deepEqual(replacement.realtimeInputs, []);
+
+  h.live.askTyped("typed-fresh", "What changed?");
+  await flush();
+  h.callbacks[0].onmessage({ serverContent: {
+    modelTurn: { parts: [{ inlineData: { data: "stale", mimeType: "audio/pcm;rate=24000" } }] },
+    turnComplete: true,
+  } });
+  h.callbacks[1].onmessage({ serverContent: {
+    modelTurn: { parts: [{ inlineData: { data: "fresh", mimeType: "audio/pcm;rate=24000" } }] },
+    turnComplete: true,
+  } });
+
+  assert.deepEqual(replacement.realtimeInputs, [
+    { activityStart: {} },
+    { text: "What changed?" },
+    { activityEnd: {} },
+  ]);
+  assert.deepEqual(h.audio, [{ turnId: "typed-fresh", mode: "answer", data: "fresh", mimeType: "audio/pcm;rate=24000" }]);
+  assert.deepEqual(h.completions, [
+    { turnId: "typed-lost", mode: "answer", interrupted: true, retryable: true },
+    { turnId: "typed-fresh", mode: "answer", interrupted: false, retryable: false },
+  ]);
+});
+
+test("clears and completes active narration once on reconnect without crossing generations", async () => {
+  const first = new FakeLiveConnection();
+  const replacement = new FakeLiveConnection();
+  const h = makeHarness({ connections: [first, replacement] });
+  await h.live.start();
+  h.live.speakNarration("narration-lost", "Goal scored.");
+  await flush();
+  h.callbacks[0].onmessage({ serverContent: {
+    modelTurn: { parts: [{ inlineData: { data: "started", mimeType: "audio/pcm;rate=24000" } }] },
+  } });
+
+  h.callbacks[0].onmessage({ goAway: {} });
+  for (let index = 0; index < 4; index += 1) await flush();
+
+  assert.deepEqual(h.clears, [{ turnId: "narration-lost", reason: "reconnect" }]);
+  assert.deepEqual(h.completions, [{ turnId: "narration-lost", mode: "narration", interrupted: true, retryable: false }]);
+
+  h.live.speakNarration("narration-fresh", "Play resumed.");
+  await flush();
+  h.callbacks[0].onmessage({ serverContent: {
+    modelTurn: { parts: [{ inlineData: { data: "stale", mimeType: "audio/pcm;rate=24000" } }] },
+    turnComplete: true,
+  } });
+  h.callbacks[1].onmessage({ serverContent: {
+    modelTurn: { parts: [{ inlineData: { data: "fresh", mimeType: "audio/pcm;rate=24000" } }] },
+    turnComplete: true,
+  } });
+
+  assert.deepEqual(h.audio, [
+    { turnId: "narration-lost", mode: "narration", data: "started", mimeType: "audio/pcm;rate=24000" },
+    { turnId: "narration-fresh", mode: "narration", data: "fresh", mimeType: "audio/pcm;rate=24000" },
+  ]);
+  assert.deepEqual(h.clears, [{ turnId: "narration-lost", reason: "reconnect" }]);
+  assert.deepEqual(h.completions, [
+    { turnId: "narration-lost", mode: "narration", interrupted: true, retryable: false },
+    { turnId: "narration-fresh", mode: "narration", interrupted: false, retryable: false },
+  ]);
 });
 
 test("uses only the three bounded reconnect delays before staying degraded and ignores stale callbacks", async () => {
