@@ -67,6 +67,8 @@ function StreamSensePanel() {
           messages={session.messages}
           onAsk={handleAsk}
           disabled={!session.canAsk}
+          voiceStatus={session.voiceStatus}
+          tabContextStatus={session.tabContextStatus}
         />
       </div>
     </div>

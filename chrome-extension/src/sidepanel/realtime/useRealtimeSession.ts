@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type MutableRefObject,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   beginAuthorizedCapture,
@@ -15,33 +9,51 @@ import {
 import type { NarrationMode } from "../context/ConfigurationContext";
 import {
   calculateFrameDimensions,
-  FRAME_CAPTURE_JPEG_QUALITY,
+  encodeJpegWithinBudget,
+  FRAME_CAPTURE_MAX_BYTES,
 } from "./frameCapture";
-import {
-  createSessionGenerationGuard,
-  shouldSyncIdleGuidance,
-} from "./sessionLifecycle";
+import { ModelAudioPlayback } from "./modelAudioPlayback";
 import {
   createMediaSocketProtocol,
   RealtimeMediaAudio,
   type RealtimeMediaState,
 } from "./mediaAudio";
+import { createSessionGenerationGuard, shouldSyncIdleGuidance } from "./sessionLifecycle";
+import { SpeechCoordinator } from "./speechCoordinator";
 import { useCaptureTarget } from "./useCaptureTarget";
-import type {
-  RealtimeChatMessage,
-  RealtimeStatus,
-  ServerMessage,
-  StreamEvent,
+import {
+  backpressureAction,
+  parseServerMessage,
+  shouldAcceptTurnUpdate,
+  updateTurnChatMessages,
+  voiceStatusForState,
+  type RealtimeChatMessage,
+  type RealtimeStatus,
+  type ServerMessage,
+  type StreamEvent,
+  type VoiceStatus,
+  type VoiceStatusState,
 } from "./types";
 
 const VIDEO_FRAME_INTERVAL_MS = 1_000;
-const STREAM_FLUSH_MS = 900;
+const FORCED_FRAME_DEADLINE_MS = 150;
+const MAX_PENDING_MICROPHONE_BYTES = 32 * 1024;
+const LATE_TRANSCRIPT_SETTLEMENT_MS = 15_000;
 const DEFAULT_WEBSOCKET_URL = "ws://127.0.0.1:8000/ws";
 
-type ActiveStream = {
-  id: string;
-  text: string;
+type PendingPcm = { pcm: Int16Array; timestampMs: number };
+type VoiceTurn = {
+  turnId: string;
+  pending: boolean;
+  ended: boolean;
+  packets: PendingPcm[];
+  bytes: number;
 };
+type LatestFrame = { timestampSeconds: number; data: string };
+
+export function delay(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
 
 export function useRealtimeSession(narrationLevel: NarrationMode) {
   const captureTarget = useCaptureTarget();
@@ -51,511 +63,318 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const [status, setStatus] = useState<RealtimeStatus>("idle");
   const [statusText, setStatusText] = useState("Ready to describe this tab.");
   const [error, setError] = useState<string | null>(null);
-  const [description, setDescription] = useState(
-    "Start StreamSense to describe the selected tab.",
-  );
+  const [description, setDescription] = useState("Start StreamSense to describe the selected tab.");
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [messages, setMessages] = useState<RealtimeChatMessage[]>([]);
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>("off");
+  const [tabContextStatus, setTabContextStatus] = useState<"absent" | "connecting" | "ready" | "degraded">("absent");
+
   const statusRef = useRef(status);
   statusRef.current = status;
   const errorRef = useRef(error);
   errorRef.current = error;
+  const narrationLevelRef = useRef(narrationLevel);
 
   const websocketRef = useRef<WebSocket | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const captureVideoRef = useRef<HTMLVideoElement | null>(null);
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const frameTimerRef = useRef<number | null>(null);
-  const frameInFlightRef = useRef(false);
-  const lastFrameSignatureRef = useRef<Uint8Array | null>(null);
   const captureStartedAtRef = useRef<number | null>(null);
   const capturedTabIdRef = useRef<number | null>(null);
+  const frameTimerRef = useRef<number | null>(null);
+  const frameInFlightRef = useRef<Promise<void> | null>(null);
+  const lastFrameSignatureRef = useRef<Uint8Array | null>(null);
+  const lastFrameSentAtRef = useRef(0);
+  const latestFrameRef = useRef<LatestFrame | null>(null);
+  const captureFrameRef = useRef<((options: { force: boolean }) => Promise<void>) | null>(null);
   const sessionGenerationRef = useRef(createSessionGenerationGuard());
   const startingRef = useRef(false);
   const stopRef = useRef<() => void>(() => undefined);
-  const narrationLevelRef = useRef(narrationLevel);
-
-  const activeNarrationRef = useRef("");
-  const narrationFlushTimerRef = useRef<number | null>(null);
-  const activeAnswerRef = useRef<ActiveStream | null>(null);
-  const answerFlushTimerRef = useRef<number | null>(null);
-
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const mediaAudioRef = useRef<RealtimeMediaAudio | null>(null);
-  const nextPlaybackAtRef = useRef(0);
   const observedGuidanceRef = useRef<string | null>(null);
 
-  const clearStreamTimers = useCallback(() => {
-    if (narrationFlushTimerRef.current !== null) {
-      window.clearTimeout(narrationFlushTimerRef.current);
-      narrationFlushTimerRef.current = null;
-    }
-    if (answerFlushTimerRef.current !== null) {
-      window.clearTimeout(answerFlushTimerRef.current);
-      answerFlushTimerRef.current = null;
-    }
-    activeNarrationRef.current = "";
-    activeAnswerRef.current = null;
+  const mediaAudioRef = useRef<RealtimeMediaAudio | null>(null);
+  const speechCoordinatorRef = useRef<SpeechCoordinator | null>(null);
+  const activeTurnIdRef = useRef<string | null>(null);
+  const settlingTurnIdRef = useRef<string | null>(null);
+  const voiceTurnRef = useRef<VoiceTurn | null>(null);
+  const nextVoiceTurnIdRef = useRef<string | null>(null);
+  const tabDiscontinuityPendingRef = useRef(false);
+  const settlingTurnTimerRef = useRef<number | null>(null);
+  const voiceStateRef = useRef<VoiceStatusState>({
+    sessionActive: false,
+    microphoneState: "pending",
+    helloAccepted: false,
+    liveReady: false,
+    liveDegraded: false,
+    userSpeaking: false,
+    geminiSpeaking: false,
+  });
+
+  const publishVoiceStatus = useCallback((changes: Partial<VoiceStatusState>) => {
+    voiceStateRef.current = { ...voiceStateRef.current, ...changes };
+    setVoiceStatus(voiceStatusForState(voiceStateRef.current));
   }, []);
 
-  const releaseResources = useCallback(
-    (closeWebSocket: boolean) => {
-      sessionGenerationRef.current.invalidate();
-      startingRef.current = false;
-
-      if (frameTimerRef.current !== null) {
-        window.clearInterval(frameTimerRef.current);
-        frameTimerRef.current = null;
-      }
-      frameInFlightRef.current = false;
-      lastFrameSignatureRef.current = null;
-
-      const websocket = websocketRef.current;
-      websocketRef.current = null;
-      if (
-        closeWebSocket &&
-        websocket &&
-        (websocket.readyState === WebSocket.OPEN ||
-          websocket.readyState === WebSocket.CONNECTING)
-      ) {
-        websocket.close(1000, "Extension session stopped");
-      }
-
-      const mediaAudio = mediaAudioRef.current;
-      mediaAudioRef.current = null;
-      if (mediaAudio) {
-        void mediaAudio.stop();
-      } else {
-        for (const track of mediaStreamRef.current?.getTracks() ?? []) track.stop();
-      }
-      mediaStreamRef.current = null;
-
-      if (captureVideoRef.current) {
-        captureVideoRef.current.pause();
-        captureVideoRef.current.srcObject = null;
-      }
-      captureVideoRef.current = null;
-      captureCanvasRef.current = null;
-      captureStartedAtRef.current = null;
-      capturedTabIdRef.current = null;
-
-      if (!mediaAudio && audioContextRef.current) {
-        void audioContextRef.current.close();
-      }
-      window.speechSynthesis?.cancel();
-      audioContextRef.current = null;
-      nextPlaybackAtRef.current = 0;
-      clearStreamTimers();
-    },
-    [clearStreamTimers],
-  );
-
-  const ensureAudioContext = useCallback(async () => {
-    let audioContext = audioContextRef.current;
-    if (!audioContext || audioContext.state === "closed") {
-      audioContext = new AudioContext();
-      audioContextRef.current = audioContext;
-      nextPlaybackAtRef.current = audioContext.currentTime;
+  const releaseResources = useCallback((closeWebSocket: boolean) => {
+    sessionGenerationRef.current.invalidate();
+    startingRef.current = false;
+    if (frameTimerRef.current !== null) {
+      window.clearInterval(frameTimerRef.current);
+      frameTimerRef.current = null;
     }
-    if (audioContext.state === "suspended") {
-      await audioContext.resume();
+    frameInFlightRef.current = null;
+    latestFrameRef.current = null;
+    lastFrameSignatureRef.current = null;
+    voiceTurnRef.current = null;
+    activeTurnIdRef.current = null;
+    settlingTurnIdRef.current = null;
+    if (settlingTurnTimerRef.current !== null) {
+      window.clearTimeout(settlingTurnTimerRef.current);
+      settlingTurnTimerRef.current = null;
     }
-    return audioContext;
-  }, []);
+    publishVoiceStatus({
+      sessionActive: false,
+      helloAccepted: false,
+      liveReady: false,
+      liveDegraded: false,
+      userSpeaking: false,
+      geminiSpeaking: false,
+    });
 
-  const playModelAudio = useCallback(
-    async (
-      base64Audio: string,
-      mimeType: string,
-      isCurrentSession: () => boolean,
-    ) => {
-      const bytes = base64ToUint8Array(base64Audio);
-      const audioContext = await ensureAudioContext();
-      if (!isCurrentSession()) return;
-
-      if (!/pcm|l16/i.test(mimeType)) {
-        const decoded = await audioContext.decodeAudioData(bytes.buffer.slice(0));
-        if (!isCurrentSession()) return;
-        scheduleAudioBuffer(audioContext, decoded, nextPlaybackAtRef);
-        return;
-      }
-
-      const sampleRate = parsePcmRate(mimeType) ?? 24_000;
-      const pcm = bytesToInt16(bytes);
-      if (!pcm.length) return;
-
-      const buffer = audioContext.createBuffer(1, pcm.length, sampleRate);
-      const channel = buffer.getChannelData(0);
-      for (let index = 0; index < pcm.length; index += 1) {
-        channel[index] = Math.max(-1, Math.min(1, pcm[index] / 32_768));
-      }
-      scheduleAudioBuffer(audioContext, buffer, nextPlaybackAtRef);
-    },
-    [ensureAudioContext],
-  );
-
-  const speakExactText = useCallback((text: string) => {
-    const cleanText = text.trim();
-    if (!cleanText || !window.speechSynthesis) return;
-
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    window.speechSynthesis.speak(utterance);
-  }, []);
-
-  const appendNarration = useCallback((chunk: string) => {
-    const cleanChunk = chunk.trim();
-    if (!cleanChunk) return;
-
-    activeNarrationRef.current = joinStreamChunk(
-      activeNarrationRef.current,
-      cleanChunk,
-    );
-    setDescription(activeNarrationRef.current);
-
-    if (narrationFlushTimerRef.current !== null) {
-      window.clearTimeout(narrationFlushTimerRef.current);
+    const websocket = websocketRef.current;
+    websocketRef.current = null;
+    if (closeWebSocket && websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
+      websocket.close(1000, "Extension session stopped");
     }
-    narrationFlushTimerRef.current = window.setTimeout(() => {
-      activeNarrationRef.current = "";
-      narrationFlushTimerRef.current = null;
-    }, STREAM_FLUSH_MS);
-  }, []);
-
-  const appendAnswer = useCallback((chunk: string) => {
-    const cleanChunk = chunk.trim();
-    if (!cleanChunk) return;
-
-    let activeAnswer = activeAnswerRef.current;
-    if (!activeAnswer) {
-      const newAnswer = { id: crypto.randomUUID(), text: cleanChunk };
-      activeAnswer = newAnswer;
-      activeAnswerRef.current = newAnswer;
-      setMessages((current) => [
-        ...current,
-        { id: newAnswer.id, role: "assistant", text: cleanChunk },
-      ]);
-    } else {
-      activeAnswer.text = joinStreamChunk(activeAnswer.text, cleanChunk);
-      const nextText = activeAnswer.text;
-      const activeId = activeAnswer.id;
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === activeId ? { ...message, text: nextText } : message,
-        ),
-      );
+    speechCoordinatorRef.current?.stop();
+    speechCoordinatorRef.current = null;
+    const mediaAudio = mediaAudioRef.current;
+    mediaAudioRef.current = null;
+    if (mediaAudio) void mediaAudio.stop();
+    else for (const track of mediaStreamRef.current?.getTracks() ?? []) track.stop();
+    mediaStreamRef.current = null;
+    if (captureVideoRef.current) {
+      captureVideoRef.current.pause();
+      captureVideoRef.current.srcObject = null;
     }
-
-    if (answerFlushTimerRef.current !== null) {
-      window.clearTimeout(answerFlushTimerRef.current);
-    }
-    answerFlushTimerRef.current = window.setTimeout(() => {
-      activeAnswerRef.current = null;
-      answerFlushTimerRef.current = null;
-    }, STREAM_FLUSH_MS);
-  }, []);
-
-  const replaceAnswer = useCallback((text: string) => {
-    const cleanText = text.trim();
-    if (!cleanText) return;
-
-    const activeAnswer = activeAnswerRef.current;
-    if (!activeAnswer) {
-      const newAnswer = { id: crypto.randomUUID(), text: cleanText };
-      activeAnswerRef.current = newAnswer;
-      setMessages((current) => [
-        ...current,
-        { id: newAnswer.id, role: "assistant", text: cleanText },
-      ]);
-      return;
-    }
-
-    activeAnswer.text = cleanText;
-    setMessages((current) =>
-      current.map((message) =>
-        message.id === activeAnswer.id
-          ? { ...message, text: cleanText }
-          : message,
-      ),
-    );
-  }, []);
-
-  const handleServerMessage = useCallback(
-    (message: ServerMessage, isCurrentSession: () => boolean) => {
-      switch (message.type) {
-        case "connected":
-          setStatus("connected");
-          setStatusText(`Connected to ${message.model ?? "Gemini vision"}.`);
-          setError(null);
-          break;
-        case "status_text":
-          if (message.text) setStatusText(message.text);
-          break;
-        case "narration":
-          if (message.text) appendNarration(message.text);
-          break;
-        case "narration_update":
-          if (message.text) {
-            activeNarrationRef.current = message.text;
-            setDescription(message.text);
-            speakExactText(message.text);
-          }
-          break;
-        case "answer":
-          if (message.text) appendAnswer(message.text);
-          break;
-        case "answer_update":
-          if (message.text) {
-            replaceAnswer(message.text);
-            speakExactText(message.text);
-          }
-          break;
-        case "user_transcript":
-          if (message.text) {
-            activeAnswerRef.current = null;
-            setMessages((current) => [
-              ...current,
-              { id: crypto.randomUUID(), role: "user", text: message.text! },
-            ]);
-          }
-          break;
-        case "event":
-          if (message.event) {
-            setEvents((current) => {
-              if (current.some((event) => event.id === message.event!.id)) {
-                return current;
-              }
-              return [message.event!, ...current].slice(0, 100);
-            });
-          }
-          break;
-        case "model_audio":
-          if (message.data && message.mimeType) {
-            void playModelAudio(
-              message.data,
-              message.mimeType,
-              isCurrentSession,
-            ).catch((cause) => {
-              if (isCurrentSession()) {
-                setError(`Could not play narration audio: ${toErrorMessage(cause)}`);
-              }
-            });
-          }
-          break;
-        case "status":
-          if (message.mode === "narrating") activeAnswerRef.current = null;
-          break;
-        case "turn_complete":
-          activeNarrationRef.current = "";
-          activeAnswerRef.current = null;
-          break;
-        case "turn_started":
-        case "telemetry":
-          // These messages are part of the protocol but do not change panel state.
-          break;
-        case "error":
-          setError(message.text ?? "The realtime session reported an error.");
-          setStatus("error");
-          break;
-        case "analysis_error":
-          setError(message.text ?? "The current frame could not be analyzed.");
-          break;
-      }
-    },
-    [appendAnswer, appendNarration, playModelAudio, replaceAnswer, speakExactText],
-  );
+    captureVideoRef.current = null;
+    captureCanvasRef.current = null;
+    captureStartedAtRef.current = null;
+    capturedTabIdRef.current = null;
+  }, [publishVoiceStatus]);
 
   const stop = useCallback(() => {
     releaseResources(true);
     setStatus("idle");
     const targetSnapshot = captureTargetRef.current;
-    setStatusText(
-      targetSnapshot.canStart
-        ? "StreamSense stopped."
-        : targetSnapshot.guidance,
-    );
+    setStatusText(targetSnapshot.canStart ? "StreamSense stopped." : targetSnapshot.guidance);
     setDescription("StreamSense is stopped. Start it to describe the active tab.");
   }, [releaseResources]);
   stopRef.current = stop;
 
-  const startFrameLoop = useCallback((generation: number) => {
-    if (!sessionGenerationRef.current.isCurrent(generation)) return;
-    const video = captureVideoRef.current;
-    const canvas = captureCanvasRef.current;
-    if (!video || !canvas) return;
-
-    const context = canvas.getContext("2d", { alpha: false });
-    if (!context) throw new Error("Unable to create the frame capture canvas.");
-
-    frameTimerRef.current = window.setInterval(() => {
-      const websocket = websocketRef.current;
-      if (
-        !sessionGenerationRef.current.isCurrent(generation) ||
-        frameInFlightRef.current ||
-        !websocket ||
-        websocket.readyState !== WebSocket.OPEN ||
-        video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
-      ) {
-        return;
-      }
-
-      const { width: targetWidth, height: targetHeight } =
-        calculateFrameDimensions(video.videoWidth, video.videoHeight);
-      canvas.width = targetWidth;
-      canvas.height = targetHeight;
-      context.drawImage(video, 0, 0, targetWidth, targetHeight);
-
-      const frameSignature = createFrameSignature(
-        context,
-        targetWidth,
-        targetHeight,
-      );
-      if (
-        !hasMeaningfulVisualChange(
-          lastFrameSignatureRef.current,
-          frameSignature,
-        )
-      ) {
-        return;
-      }
-      lastFrameSignatureRef.current = frameSignature;
-
-      frameInFlightRef.current = true;
-      canvas.toBlob(
-        async (blob) => {
-          try {
-            if (
-              !sessionGenerationRef.current.isCurrent(generation) ||
-              !blob ||
-              websocket.readyState !== WebSocket.OPEN
-            ) {
-              return;
-            }
-            const timestampSeconds = currentTimestampSeconds(
-              video,
-              captureStartedAtRef.current,
-            );
-            const data = await blobToBase64(blob);
-            if (
-              !sessionGenerationRef.current.isCurrent(generation) ||
-              websocket.readyState !== WebSocket.OPEN
-            ) {
-              return;
-            }
-
-            websocket.send(
-              JSON.stringify({
-                type: "video_frame",
-                timestampSeconds,
-                mimeType: "image/jpeg",
-                data,
-              }),
-            );
-          } finally {
-            if (sessionGenerationRef.current.isCurrent(generation)) {
-              frameInFlightRef.current = false;
-            }
-          }
-        },
-        "image/jpeg",
-        FRAME_CAPTURE_JPEG_QUALITY,
-      );
-    }, VIDEO_FRAME_INTERVAL_MS);
-  }, []);
-
   const start = useCallback(async () => {
-    if (
-      websocketRef.current ||
-      startingRef.current ||
-      status === "requesting_capture"
-    ) {
-      return;
-    }
-
+    if (websocketRef.current || startingRef.current || statusRef.current === "requesting_capture") return;
     const targetSnapshot = captureTargetRef.current;
-    if (
-      targetSnapshot.target?.status !== "ready" ||
-      targetSnapshot.target.tabId !== targetSnapshot.activeTabId
-    ) {
+    if (targetSnapshot.target?.status !== "ready" || targetSnapshot.target.tabId !== targetSnapshot.activeTabId) {
       setError(targetSnapshot.guidance);
       setStatusText(targetSnapshot.guidance);
       return;
     }
 
-    const target = targetSnapshot.target;
+    // These two calls deliberately precede the first await in this direct gesture handler.
     const generation = sessionGenerationRef.current.begin();
     startingRef.current = true;
-    let mediaState: RealtimeMediaState = {
-      tabAudioState: "absent",
-      microphoneState: "pending",
-    };
+    let mediaState: RealtimeMediaState = { tabAudioState: "absent", microphoneState: "pending" };
     let controller: RealtimeMediaAudio | null = null;
     let sessionWebsocket: WebSocket | null = null;
+    const isCurrent = () => controller !== null && mediaAudioRef.current === controller && sessionGenerationRef.current.isCurrent(generation);
+    const safelySend = <T,>(send: () => T): T | false => {
+      try { return send(); } catch { return false; }
+    };
     const protocol = createMediaSocketProtocol(
       (value) => {
-        if (
-          !controller ||
-          mediaAudioRef.current !== controller ||
-          !sessionGenerationRef.current.isCurrent(generation) ||
-          websocketRef.current !== sessionWebsocket ||
-          sessionWebsocket?.readyState !== WebSocket.OPEN
-        ) {
+        if (!isCurrent() || websocketRef.current !== sessionWebsocket || sessionWebsocket?.readyState !== WebSocket.OPEN) {
           throw new Error("Session media transport is unavailable.");
         }
         sessionWebsocket.send(value);
       },
-      () => crypto.randomUUID(),
+      () => {
+        const id = nextVoiceTurnIdRef.current ?? crypto.randomUUID();
+        nextVoiceTurnIdRef.current = null;
+        return id;
+      },
     );
-    const isCurrentController = () =>
-      controller !== null &&
-      mediaAudioRef.current === controller &&
-      sessionGenerationRef.current.isCurrent(generation);
-    const safelySend = <T,>(send: () => T): T | false => {
-      try {
-        return send();
-      } catch {
-        return false;
-      }
-    };
-    const sendMediaState = () => {
-      if (!isCurrentController()) return;
-      safelySend(() => protocol.sendMediaState(mediaState));
-    };
     const mediaAudio = new RealtimeMediaAudio({
       onStateChange: (nextState) => {
-        if (!isCurrentController()) return;
+        if (!isCurrent()) return;
         mediaState = nextState;
-        sendMediaState();
+        publishVoiceStatus({ microphoneState: nextState.microphoneState });
+        if (
+          nextState.microphoneState === "ready" &&
+          voiceStateRef.current.helloAccepted &&
+          voiceStateRef.current.liveReady &&
+          !voiceStateRef.current.liveDegraded
+        ) {
+          mediaAudio.setUserActivityEnabled(true);
+        }
+        if (nextState.tabAudioState === "absent") setTabContextStatus("absent");
+        else if (nextState.tabAudioState === "degraded") setTabContextStatus("degraded");
+        else setTabContextStatus((current) => current === "ready" ? current : "connecting");
+        safelySend(() => protocol.sendMediaState(nextState));
       },
     });
     controller = mediaAudio;
     mediaAudioRef.current = mediaAudio;
     const preparedAudio = mediaAudio.prepareForUserGesture();
-    audioContextRef.current = preparedAudio.audioContext;
-    nextPlaybackAtRef.current = preparedAudio.audioContext.currentTime;
-    mediaAudio.setUserActivityEnabled(false);
+    publishVoiceStatus({ sessionActive: true, microphoneState: "pending" });
+
+    const closeUnsafeMicrophoneTurn = (turnId: string, reason: string) => {
+      const websocket = websocketRef.current;
+      speechCoordinatorRef.current?.failTurn(turnId, reason);
+      mediaAudio.setUserActivityEnabled(false);
+      voiceTurnRef.current = null;
+      publishVoiceStatus({ userSpeaking: false, liveDegraded: true });
+      if (websocket?.readyState === WebSocket.OPEN && websocket.bufferedAmount < 32 * 1024) {
+        safelySend(() => protocol.endUserActivity());
+      } else {
+        websocket?.close(1008, "Microphone audio could not be delivered safely");
+      }
+    };
+    const sendMicrophonePacket = (turn: VoiceTurn, packet: PendingPcm): boolean => {
+      const websocket = websocketRef.current;
+      if (!websocket || websocket.readyState !== WebSocket.OPEN || backpressureAction("microphone", websocket.bufferedAmount) !== "send") {
+        closeUnsafeMicrophoneTurn(turn.turnId, "Microphone audio backlog exceeded one second.");
+        return false;
+      }
+      const sent = safelySend(() => protocol.sendMicrophone(packet.pcm, packet.timestampMs));
+      if (!sent) {
+        closeUnsafeMicrophoneTurn(turn.turnId, "Microphone audio could not be delivered.");
+        return false;
+      }
+      return true;
+    };
+    const playback = new ModelAudioPlayback({
+      audioContext: preparedAudio.audioContext,
+      contextTimeToExtensionSessionMs: (contextTime) => Math.max(0, Math.round(contextTime * 1_000)),
+      onReferencePcm: () => undefined,
+      onIdle: () => undefined,
+    });
+    const coordinator = new SpeechCoordinator({
+      playback,
+      setTabGain: (gain, fadeMs) => mediaAudio.setTabGain(gain, fadeMs),
+      onFailTurn: (_turnId, reason) => {
+        if (isCurrent()) setError(reason);
+      },
+      onPlaybackIdle: (turnId) => {
+        if (activeTurnIdRef.current === turnId || settlingTurnIdRef.current === turnId) {
+          publishVoiceStatus({ geminiSpeaking: false });
+        }
+      },
+    });
+    speechCoordinatorRef.current = coordinator;
+
+    const captureFrame = async ({ force }: { force: boolean }): Promise<void> => {
+      const websocket = websocketRef.current;
+      const video = captureVideoRef.current;
+      const canvas = captureCanvasRef.current;
+      if (!isCurrent() || !websocket || websocket.readyState !== WebSocket.OPEN || !video || !canvas || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+      const flushLatest = () => {
+        const latest = latestFrameRef.current;
+        if (!latest || performance.now() - lastFrameSentAtRef.current < VIDEO_FRAME_INTERVAL_MS) return false;
+        if (backpressureAction("frame", websocket.bufferedAmount) !== "send") return false;
+        websocket.send(JSON.stringify({ type: "video_frame", timestampSeconds: latest.timestampSeconds, mimeType: "image/jpeg", data: latest.data }));
+        latestFrameRef.current = null;
+        lastFrameSentAtRef.current = performance.now();
+        return true;
+      };
+      flushLatest();
+      if (frameInFlightRef.current) return frameInFlightRef.current;
+      const task = (async () => {
+        const context = canvas.getContext("2d", { alpha: false });
+        if (!context) throw new Error("Unable to create the frame capture canvas.");
+        const { width, height } = calculateFrameDimensions(video.videoWidth, video.videoHeight);
+        canvas.width = width;
+        canvas.height = height;
+        context.drawImage(video, 0, 0, width, height);
+        const signature = createFrameSignature(context, width, height);
+        if (!force && !hasMeaningfulVisualChange(lastFrameSignatureRef.current, signature)) return;
+        const blob = await encodeJpegWithinBudget(canvas);
+        if (!blob || blob.size > FRAME_CAPTURE_MAX_BYTES || !isCurrent() || websocket.readyState !== WebSocket.OPEN) return;
+        lastFrameSignatureRef.current = signature;
+        const frame = { timestampSeconds: currentTimestampSeconds(video, captureStartedAtRef.current), data: await blobToBase64(blob) };
+        if (!isCurrent() || websocket.readyState !== WebSocket.OPEN) return;
+        if (performance.now() - lastFrameSentAtRef.current < VIDEO_FRAME_INTERVAL_MS || backpressureAction("frame", websocket.bufferedAmount) !== "send") {
+          latestFrameRef.current = frame;
+          return;
+        }
+        websocket.send(JSON.stringify({ type: "video_frame", timestampSeconds: frame.timestampSeconds, mimeType: "image/jpeg", data: frame.data }));
+        lastFrameSentAtRef.current = performance.now();
+      })().catch((cause) => {
+        if (isCurrent()) setError(`Could not capture a frame: ${toErrorMessage(cause)}`);
+      }).finally(() => {
+        if (frameInFlightRef.current === task) frameInFlightRef.current = null;
+      });
+      frameInFlightRef.current = task;
+      return task;
+    };
+    captureFrameRef.current = captureFrame;
+
     const microphonePromise = mediaAudio.startMicrophone({
-      onMicPacket: (pcm, firstSampleTimestampMs) => {
-        safelySend(() => protocol.sendMicrophone(pcm, firstSampleTimestampMs));
+      onMicPacket: (pcm, timestampMs) => {
+        const turn = voiceTurnRef.current;
+        if (!turn) return;
+        const packet = { pcm, timestampMs };
+        if (turn.pending) {
+          turn.packets.push(packet);
+          turn.bytes += pcm.byteLength;
+          if (turn.bytes > MAX_PENDING_MICROPHONE_BYTES) closeUnsafeMicrophoneTurn(turn.turnId, "Microphone audio backlog exceeded one second.");
+          return;
+        }
+        sendMicrophonePacket(turn, packet);
       },
       onUserActivityStart: () => {
-        if (safelySend(() => protocol.startUserActivity())) mediaAudio.setTabGain(0.3, 100);
+        if (!isCurrent() || !voiceStateRef.current.helloAccepted || !voiceStateRef.current.liveReady) return;
+        const turnId = crypto.randomUUID();
+        nextVoiceTurnIdRef.current = turnId;
+        const turn: VoiceTurn = { turnId, pending: true, ended: false, packets: [], bytes: 0 };
+        voiceTurnRef.current = turn;
+        activeTurnIdRef.current = turnId;
+        settlingTurnIdRef.current = null;
+        coordinator.userStarted(turnId);
+        publishVoiceStatus({ userSpeaking: true, geminiSpeaking: false });
+        void (async () => {
+          await Promise.race([captureFrame({ force: true }), delay(FORCED_FRAME_DEADLINE_MS)]);
+          if (!isCurrent() || voiceTurnRef.current !== turn) return;
+          const startedTurnId = safelySend(() => protocol.startUserActivity());
+          if (startedTurnId !== turnId) {
+            closeUnsafeMicrophoneTurn(turnId, "Could not start the microphone turn.");
+            return;
+          }
+          turn.pending = false;
+          for (const packet of turn.packets) {
+            if (!sendMicrophonePacket(turn, packet)) return;
+          }
+          turn.packets = [];
+          turn.bytes = 0;
+          if (turn.ended) {
+            safelySend(() => protocol.endUserActivity());
+            coordinator.userEnded(turnId);
+            publishVoiceStatus({ userSpeaking: false });
+          }
+        })();
       },
       onUserActivityEnd: () => {
+        const turn = voiceTurnRef.current;
+        if (!turn) return;
+        turn.ended = true;
+        if (turn.pending) return;
         safelySend(() => protocol.endUserActivity());
+        coordinator.userEnded(turn.turnId);
+        publishVoiceStatus({ userSpeaking: false });
       },
       tabReference: null,
       modelReference: null,
     });
-    const mediaStreamPromise = beginAuthorizedCapture(target, {
-      requestStreamId: (options) => chrome.tabCapture.getMediaStreamId(options),
-      ensureAudioReady: () => mediaAudio.waitUntilReady(),
-      isCurrent: () => sessionGenerationRef.current.isCurrent(generation),
-      consumeStreamId: consumeTabStreamId,
-    });
-    capturedTabIdRef.current = target.tabId;
 
     setStatus("requesting_capture");
     setStatusText("Capturing the active tab without the StreamSense panel.");
@@ -563,43 +382,46 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     setEvents([]);
     setMessages([]);
     setDescription("Waiting for the first description...");
-    clearStreamTimers();
-
     let startupStream: MediaStream | null = null;
     let startupVideo: HTMLVideoElement | null = null;
     try {
-      const mediaStream = await mediaStreamPromise;
+      const mediaStream = await beginAuthorizedCapture(targetSnapshot.target, {
+        requestStreamId: (options) => chrome.tabCapture.getMediaStreamId(options),
+        ensureAudioReady: () => preparedAudio.ready,
+        isCurrent: () => sessionGenerationRef.current.isCurrent(generation),
+        consumeStreamId: consumeTabStreamId,
+      });
       startupStream = mediaStream;
-      if (!sessionGenerationRef.current.isCurrent(generation)) {
-        for (const track of mediaStream.getTracks()) {
-          track.stop();
-        }
-        return;
-      }
+      if (!isCurrent()) { for (const track of mediaStream.getTracks()) track.stop(); return; }
       mediaStreamRef.current = mediaStream;
-      const tabAudioState = await mediaAudio.startTab({
+      await mediaAudio.startTab({
         tabStream: mediaStream,
-        onTabPacket: (pcm, firstSampleTimestampMs) => {
-          safelySend(() => protocol.sendTab(pcm, firstSampleTimestampMs));
+        onTabPacket: (pcm, timestampMs) => {
+          const websocket = websocketRef.current;
+          if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
+          if (backpressureAction("tab", websocket.bufferedAmount) !== "send") {
+            tabDiscontinuityPendingRef.current = true;
+            setTabContextStatus("degraded");
+            return;
+          }
+          if (tabDiscontinuityPendingRef.current) {
+            const sent = safelySend(() => websocket.send(JSON.stringify({ type: "tab_audio_discontinuity", timestampMs, reason: "websocket_backpressure" })));
+            if (!sent) return;
+            tabDiscontinuityPendingRef.current = false;
+          }
+          safelySend(() => protocol.sendTab(pcm, timestampMs));
         },
         onTabActivity: (active) => {
+          coordinator.tabActivity(active);
           safelySend(() => protocol.sendTabActivity(active));
         },
         onTabDiscontinuity: (timestampMs) => {
+          setTabContextStatus("degraded");
           safelySend(() => protocol.sendTabDiscontinuity(timestampMs));
         },
-        onVideoEnded: () => {
-          if (sessionGenerationRef.current.isCurrent(generation)) stopRef.current();
-        },
+        onVideoEnded: () => { if (isCurrent()) stopRef.current(); },
       });
-      if (tabAudioState === "degraded") {
-        setError("Tab audio is unavailable; continuing with video capture.");
-      }
-      if (!sessionGenerationRef.current.isCurrent(generation)) {
-        await mediaAudio.stop();
-        return;
-      }
-
+      if (!isCurrent()) { await mediaAudio.stop(); return; }
       const video = document.createElement("video");
       video.muted = true;
       video.playsInline = true;
@@ -608,198 +430,188 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       captureVideoRef.current = video;
       captureCanvasRef.current = document.createElement("canvas");
       await video.play();
-      if (!sessionGenerationRef.current.isCurrent(generation)) {
-        video.pause();
-        video.srcObject = null;
-        for (const track of mediaStream.getTracks()) {
-          track.stop();
-        }
-        return;
-      }
+      if (!isCurrent()) { video.pause(); video.srcObject = null; for (const track of mediaStream.getTracks()) track.stop(); return; }
       captureStartedAtRef.current = performance.now();
-
-      const websocket = new WebSocket(
-        import.meta.env.VITE_STREAMSENSE_WS_URL || DEFAULT_WEBSOCKET_URL,
-      );
+      capturedTabIdRef.current = targetSnapshot.target.tabId;
+      const websocket = new WebSocket(import.meta.env.VITE_STREAMSENSE_WS_URL || DEFAULT_WEBSOCKET_URL);
       sessionWebsocket = websocket;
       websocketRef.current = websocket;
       startingRef.current = false;
       setStatus("connecting");
       setStatusText("Connecting to the local StreamSense backend...");
-
       websocket.addEventListener("open", () => {
-        if (!sessionGenerationRef.current.isCurrent(generation)) {
-          websocket.close(1000, "Stale extension session");
-          return;
-        }
+        if (!isCurrent()) { websocket.close(1000, "Stale extension session"); return; }
         protocol.open(mediaState);
-        mediaAudio.setUserActivityEnabled(true);
         websocket.send(JSON.stringify({ type: "capture_source", source: "screen" }));
-        websocket.send(
-          JSON.stringify({
-            type: "session_config",
-            narrationLevel: narrationLevelRef.current,
-          }),
-        );
-        startFrameLoop(generation);
+        websocket.send(JSON.stringify({ type: "session_config", narrationLevel: narrationLevelRef.current }));
+        void captureFrame({ force: false });
+        frameTimerRef.current = window.setInterval(() => { void captureFrame({ force: false }); }, VIDEO_FRAME_INTERVAL_MS);
       });
       void microphonePromise.then(() => {
-        if (isCurrentController()) sendMediaState();
+        if (isCurrent()) publishVoiceStatus({ microphoneState: mediaState.microphoneState });
       });
       websocket.addEventListener("message", (event) => {
-        if (!sessionGenerationRef.current.isCurrent(generation)) return;
-        try {
-          handleServerMessage(
-            JSON.parse(String(event.data)) as ServerMessage,
-            () => sessionGenerationRef.current.isCurrent(generation),
-          );
-        } catch {
-          setError("The backend sent an invalid message.");
+        if (!isCurrent()) return;
+        let message: ServerMessage;
+        try { message = parseServerMessage(String(event.data)); }
+        catch { websocket.close(1002, "Invalid backend message"); setError("The backend sent an invalid message."); return; }
+        switch (message.type) {
+          case "connected":
+            setStatus("connected"); setStatusText(`Connected to ${message.model ?? "Gemini"}.`); setError(null);
+            publishVoiceStatus({ helloAccepted: true });
+            break;
+          case "provider_health":
+            if (message.provider === "live") {
+              const ready = message.state === "ready";
+              const degraded = message.state === "degraded" || message.state === "closed";
+              publishVoiceStatus({ liveReady: ready, liveDegraded: degraded });
+              mediaAudio.setUserActivityEnabled(ready && !degraded && mediaState.microphoneState === "ready");
+            } else if (mediaState.tabAudioState !== "absent") {
+              setTabContextStatus(message.state === "ready" ? "ready" : message.state === "connecting" ? "connecting" : "degraded");
+            }
+            break;
+          case "user_transcript":
+          case "answer_update":
+            if (message.mode === "answer" && shouldAcceptTurnUpdate(message.turnId, activeTurnIdRef.current, settlingTurnIdRef.current)) {
+              setMessages((current) => updateTurnChatMessages(current, {
+                turnId: message.turnId,
+                role: message.type === "user_transcript" ? "user" : "assistant",
+                text: message.text,
+                finished: message.finished,
+              }));
+            if (message.type === "answer_update") coordinator.answerProgress(message.turnId);
+              if (message.finished && settlingTurnIdRef.current === message.turnId) {
+                settlingTurnIdRef.current = null;
+                if (settlingTurnTimerRef.current !== null) {
+                  window.clearTimeout(settlingTurnTimerRef.current);
+                  settlingTurnTimerRef.current = null;
+                }
+              }
+            }
+            break;
+          case "model_audio": {
+            const sampleRate = parsePcmRate(message.mimeType);
+            if (!sampleRate) { websocket.close(1002, "Invalid audio metadata"); return; }
+            try {
+              const accepted = coordinator.modelAudio({ turnId: message.turnId, mode: message.mode, pcm: base64ToArrayBuffer(message.data), sampleRate, mimeType: message.mimeType });
+              if (accepted) publishVoiceStatus({ geminiSpeaking: true });
+            } catch { websocket.close(1002, "Invalid audio payload"); }
+            break;
+          }
+          case "playback_clear": coordinator.clearPlayback(message.turnId); publishVoiceStatus({ geminiSpeaking: false }); break;
+          case "turn_complete":
+            coordinator.turnComplete(message);
+            if (activeTurnIdRef.current === message.turnId) {
+              settlingTurnIdRef.current = message.turnId;
+              activeTurnIdRef.current = null;
+              if (settlingTurnTimerRef.current !== null) window.clearTimeout(settlingTurnTimerRef.current);
+              settlingTurnTimerRef.current = window.setTimeout(() => {
+                if (settlingTurnIdRef.current === message.turnId) settlingTurnIdRef.current = null;
+                settlingTurnTimerRef.current = null;
+              }, LATE_TRANSCRIPT_SETTLEMENT_MS);
+            }
+            if (message.mode === "narration") setDescription("");
+            break;
+          case "status_text": if (message.text) setStatusText(message.text); break;
+          case "narration":
+          case "narration_update": if (message.text) setDescription(message.text); break;
+          case "event": if (message.event) setEvents((current) => current.some((item) => item.id === message.event!.id) ? current : [message.event!, ...current].slice(0, 100)); break;
+          case "error": setError(message.text ?? "The realtime session reported an error."); setStatus("error"); break;
+          case "analysis_error": setError(message.text ?? "The current frame could not be analyzed."); break;
+          case "answer":
+          case "status":
+          case "telemetry":
+          case "turn_started":
+            break;
         }
       });
       websocket.addEventListener("error", () => {
-        if (!sessionGenerationRef.current.isCurrent(generation)) return;
-        setError(
-          "Cannot reach StreamSense at 127.0.0.1:8000. Start the Express backend first.",
-        );
+        if (!isCurrent()) return;
+        setError("Cannot reach StreamSense at 127.0.0.1:8000. Start the Express backend first.");
         setStatus("error");
       });
       websocket.addEventListener("close", () => {
         protocol.close();
-        if (!sessionGenerationRef.current.isCurrent(generation)) return;
+        if (!isCurrent()) return;
         releaseResources(false);
         setStatus("error");
         setStatusText("Backend connection closed.");
       });
     } catch (cause) {
-      if (!sessionGenerationRef.current.isCurrent(generation)) {
-        startupVideo?.pause();
-        if (startupVideo) startupVideo.srcObject = null;
-        for (const track of startupStream?.getTracks() ?? []) {
-          track.stop();
-        }
-        return;
-      }
+      if (!isCurrent()) { startupVideo?.pause(); if (startupVideo) startupVideo.srcObject = null; for (const track of startupStream?.getTracks() ?? []) track.stop(); return; }
       releaseResources(true);
       setStatus("error");
       setError(captureErrorMessage(cause));
       setStatusText("StreamSense could not start.");
     }
-  }, [
-    clearStreamTimers,
-    handleServerMessage,
-    releaseResources,
-    startFrameLoop,
-    status,
-  ]);
-
-  useEffect(() => {
-    if (
-      !targetChangeRequiresReset(
-        capturedTabIdRef.current,
-        captureTarget.target,
-      )
-    ) {
-      return;
-    }
-
-    stopRef.current();
-    setError(null);
-    setStatusText(
-      captureTarget.canStart
-        ? "Capture target changed. Start StreamSense again."
-        : captureTarget.guidance,
-    );
-  }, [captureTarget.target]);
-
-  useEffect(() => {
-    const previousGuidance = observedGuidanceRef.current;
-    observedGuidanceRef.current = captureTarget.guidance;
-
-    const authorizationRecovered =
-      captureTarget.canStart &&
-      isCaptureAuthorizationError(errorRef.current);
-    if (authorizationRecovered) {
-      setError(null);
-      setStatus("idle");
-      setStatusText(captureTarget.guidance);
-    }
-    if (
-      !authorizationRecovered &&
-      shouldSyncIdleGuidance(
-        statusRef.current === "idle",
-        previousGuidance,
-        captureTarget.guidance,
-      )
-    ) {
-      setStatusText(captureTarget.guidance);
-    }
-  }, [captureTarget.canStart, captureTarget.guidance, captureTarget.target]);
+  }, [publishVoiceStatus, releaseResources]);
 
   const ask = useCallback((question: string) => {
     const websocket = websocketRef.current;
-    if (websocket?.readyState !== WebSocket.OPEN) return false;
-    websocket.send(JSON.stringify({ type: "typed_question", text: question }));
+    const coordinator = speechCoordinatorRef.current;
+    if (!websocket || websocket.readyState !== WebSocket.OPEN || !coordinator) return false;
+    const turnId = crypto.randomUUID();
+    activeTurnIdRef.current = turnId;
+    settlingTurnIdRef.current = null;
+    if (settlingTurnTimerRef.current !== null) {
+      window.clearTimeout(settlingTurnTimerRef.current);
+      settlingTurnTimerRef.current = null;
+    }
+    coordinator.typedQuestionStarted(turnId);
+    setMessages((current) => updateTurnChatMessages(current, { turnId, role: "user", text: question, finished: true }));
+    void (async () => {
+      await Promise.race([captureFrameRef.current?.({ force: true }) ?? Promise.resolve(), delay(FORCED_FRAME_DEADLINE_MS)]);
+      if (websocketRef.current === websocket && websocket.readyState === WebSocket.OPEN) {
+        websocket.send(JSON.stringify({ type: "typed_question", turnId, text: question }));
+      }
+    })();
     return true;
   }, []);
 
   useEffect(() => {
+    if (!targetChangeRequiresReset(capturedTabIdRef.current, captureTarget.target)) return;
+    stopRef.current();
+    setError(null);
+    setStatusText(captureTarget.canStart ? "Capture target changed. Start StreamSense again." : captureTarget.guidance);
+  }, [captureTarget.target, captureTarget.canStart, captureTarget.guidance]);
+
+  useEffect(() => {
+    const previousGuidance = observedGuidanceRef.current;
+    observedGuidanceRef.current = captureTarget.guidance;
+    const authorizationRecovered = captureTarget.canStart && isCaptureAuthorizationError(errorRef.current);
+    if (authorizationRecovered) { setError(null); setStatus("idle"); setStatusText(captureTarget.guidance); }
+    if (!authorizationRecovered && shouldSyncIdleGuidance(statusRef.current === "idle", previousGuidance, captureTarget.guidance)) setStatusText(captureTarget.guidance);
+  }, [captureTarget.canStart, captureTarget.guidance]);
+
+  useEffect(() => {
     narrationLevelRef.current = narrationLevel;
     const websocket = websocketRef.current;
-    if (websocket?.readyState === WebSocket.OPEN) {
-      websocket.send(
-        JSON.stringify({ type: "session_config", narrationLevel }),
-      );
-    }
+    if (websocket?.readyState === WebSocket.OPEN) websocket.send(JSON.stringify({ type: "session_config", narrationLevel }));
   }, [narrationLevel]);
 
   useEffect(() => {
     const cleanup = () => releaseResources(true);
     window.addEventListener("pagehide", cleanup);
-    return () => {
-      window.removeEventListener("pagehide", cleanup);
-      cleanup();
-    };
+    return () => { window.removeEventListener("pagehide", cleanup); cleanup(); };
   }, [releaseResources]);
 
   return {
-    status,
-    statusText,
-    error,
-    description,
-    events,
-    messages,
+    status, statusText, error, description, events, messages, voiceStatus, tabContextStatus,
     isRunning: status === "connecting" || status === "connected",
     isBusy: status === "requesting_capture",
     canStart: captureTarget.canStart,
     canAsk: status === "connected",
-    start,
-    stop,
-    ask,
+    start, stop, ask,
   };
 }
 
-function joinStreamChunk(current: string, next: string) {
-  if (!current) return next;
-  if (/^[,.;:!?)]/.test(next) || /[(]$/.test(current)) return `${current}${next}`;
-  return `${current} ${next}`;
+function currentTimestampSeconds(video: HTMLVideoElement, captureStartedAt: number | null) {
+  if (Number.isFinite(video.currentTime) && video.currentTime > 0) return Math.round(video.currentTime * 1_000) / 1_000;
+  return captureStartedAt === null ? 0 : Math.round(performance.now() - captureStartedAt) / 1_000;
 }
 
-function currentTimestampSeconds(
-  video: HTMLVideoElement,
-  captureStartedAt: number | null,
-) {
-  if (Number.isFinite(video.currentTime) && video.currentTime > 0) {
-    return Math.round(video.currentTime * 1_000) / 1_000;
-  }
-  if (captureStartedAt !== null) {
-    return Math.round(performance.now() - captureStartedAt) / 1_000;
-  }
-  return 0;
-}
-
-function blobToBase64(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => resolve(String(reader.result).split(",")[1] ?? "");
     reader.onerror = () => reject(reader.error ?? new Error("Frame encoding failed."));
@@ -807,85 +619,42 @@ function blobToBase64(blob: Blob) {
   });
 }
 
-function base64ToUint8Array(base64: string) {
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes.buffer;
 }
 
-function bytesToInt16(bytes: Uint8Array) {
-  const sampleCount = Math.floor(bytes.byteLength / 2);
-  const pcm = new Int16Array(sampleCount);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let index = 0; index < sampleCount; index += 1) {
-    pcm[index] = view.getInt16(index * 2, true);
-  }
-  return pcm;
+function parsePcmRate(mimeType: string): number | null {
+  const match = /^audio\/pcm;rate=([1-9][0-9]*)$/.exec(mimeType);
+  if (!match) return null;
+  const sampleRate = Number(match[1]);
+  return Number.isSafeInteger(sampleRate) && sampleRate >= 8_000 && sampleRate <= 48_000 ? sampleRate : null;
 }
 
-function parsePcmRate(mimeType: string) {
-  const match = /rate=(\d+)/i.exec(mimeType);
-  return match ? Number(match[1]) : null;
+function toErrorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
-function scheduleAudioBuffer(
-  audioContext: AudioContext,
-  buffer: AudioBuffer,
-  nextPlaybackAtRef: MutableRefObject<number>,
-) {
-  const source = audioContext.createBufferSource();
-  source.buffer = buffer;
-  source.connect(audioContext.destination);
-  const startAt = Math.max(
-    audioContext.currentTime + 0.03,
-    nextPlaybackAtRef.current,
-  );
-  source.start(startAt);
-  nextPlaybackAtRef.current = startAt + buffer.duration;
-}
-
-function toErrorMessage(cause: unknown) {
-  if (cause instanceof Error) return cause.message;
-  return String(cause);
-}
-
-function createFrameSignature(
-  context: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-) {
+function createFrameSignature(context: CanvasRenderingContext2D, width: number, height: number) {
   const columns = 48;
   const rows = Math.max(1, Math.round(columns * (height / width)));
   const pixels = context.getImageData(0, 0, width, height).data;
   const signature = new Uint8Array(columns * rows);
-
   for (let row = 0; row < rows; row += 1) {
     const y = Math.min(height - 1, Math.floor(((row + 0.5) / rows) * height));
     for (let column = 0; column < columns; column += 1) {
-      const x = Math.min(
-        width - 1,
-        Math.floor(((column + 0.5) / columns) * width),
-      );
-      const pixelIndex = (y * width + x) * 4;
-      signature[row * columns + column] = Math.round(
-        pixels[pixelIndex] * 0.2126 +
-          pixels[pixelIndex + 1] * 0.7152 +
-          pixels[pixelIndex + 2] * 0.0722,
-      );
+      const x = Math.min(width - 1, Math.floor(((column + 0.5) / columns) * width));
+      const index = (y * width + x) * 4;
+      signature[row * columns + column] = Math.round(pixels[index] * 0.2126 + pixels[index + 1] * 0.7152 + pixels[index + 2] * 0.0722);
     }
   }
   return signature;
 }
 
-function hasMeaningfulVisualChange(
-  previous: Uint8Array | null,
-  current: Uint8Array,
-) {
+function hasMeaningfulVisualChange(previous: Uint8Array | null, current: Uint8Array): boolean {
   if (!previous || previous.length !== current.length) return true;
-
   let changedSamples = 0;
   let totalDifference = 0;
   for (let index = 0; index < current.length; index += 1) {
@@ -893,26 +662,11 @@ function hasMeaningfulVisualChange(
     totalDifference += difference;
     if (difference >= 18) changedSamples += 1;
   }
-
-  const changedRatio = changedSamples / current.length;
-  const averageDifference = totalDifference / current.length;
-  return changedRatio >= 0.012 || averageDifference >= 5;
+  return changedSamples / current.length >= 0.012 || totalDifference / current.length >= 5;
 }
 
-async function consumeTabStreamId(streamId: string) {
-  const audio = {
-    mandatory: {
-      chromeMediaSource: "tab",
-      chromeMediaSourceId: streamId,
-    },
-  } as unknown as MediaTrackConstraints;
-  const video = {
-    mandatory: {
-      chromeMediaSource: "tab",
-      chromeMediaSourceId: streamId,
-      maxFrameRate: 10,
-    },
-  } as unknown as MediaTrackConstraints;
-
+async function consumeTabStreamId(streamId: string): Promise<MediaStream> {
+  const audio = { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } } as unknown as MediaTrackConstraints;
+  const video = { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId, maxFrameRate: 10 } } as unknown as MediaTrackConstraints;
   return navigator.mediaDevices.getUserMedia({ audio, video });
 }

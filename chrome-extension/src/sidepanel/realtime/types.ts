@@ -22,6 +22,94 @@ export type RealtimeChatMessage = {
   text: string;
 };
 
+export type VoiceStatus =
+  | "off"
+  | "listening"
+  | "user_speaking"
+  | "gemini_speaking"
+  | "degraded";
+
+export type VoiceStatusState = {
+  sessionActive: boolean;
+  microphoneState: "pending" | "ready" | "denied" | "degraded";
+  helloAccepted: boolean;
+  liveReady: boolean;
+  liveDegraded: boolean;
+  userSpeaking: boolean;
+  geminiSpeaking: boolean;
+};
+
+export type TransportKind = "frame" | "tab" | "microphone";
+export type BackpressureAction =
+  | "send"
+  | "replace_latest_frame"
+  | "tab_discontinuity"
+  | "fail_microphone_turn";
+
+export function backpressureAction(
+  kind: TransportKind,
+  bufferedAmount: number,
+): BackpressureAction {
+  if (kind === "frame") {
+    return bufferedAmount >= 128 * 1024 ? "replace_latest_frame" : "send";
+  }
+  if (kind === "tab") {
+    return bufferedAmount >= 32 * 1024 ? "tab_discontinuity" : "send";
+  }
+  return bufferedAmount >= 32 * 1024 ? "fail_microphone_turn" : "send";
+}
+
+export function voiceStatusForState(state: VoiceStatusState): VoiceStatus {
+  if (!state.sessionActive) return "off";
+  if (
+    state.microphoneState === "denied" ||
+    state.microphoneState === "degraded" ||
+    state.liveDegraded
+  ) {
+    return "degraded";
+  }
+  if (
+    state.microphoneState !== "ready" ||
+    !state.helloAccepted ||
+    !state.liveReady
+  ) {
+    return "off";
+  }
+  if (state.userSpeaking) return "user_speaking";
+  if (state.geminiSpeaking) return "gemini_speaking";
+  return "listening";
+}
+
+export function shouldAcceptTurnUpdate(
+  turnId: string,
+  activeTurnId: string | null,
+  settlingTurnId: string | null,
+): boolean {
+  return turnId === activeTurnId || turnId === settlingTurnId;
+}
+
+export function updateTurnChatMessages(
+  messages: RealtimeChatMessage[],
+  update: {
+    turnId: string;
+    role: RealtimeChatMessage["role"];
+    text: string;
+    finished: boolean;
+  },
+): RealtimeChatMessage[] {
+  const text = update.text.trim();
+  if (!text) return messages;
+  const id = `${update.turnId}:${update.role}`;
+  const existing = messages.find((message) => message.id === id);
+  if (!existing) return [...messages, { id, role: update.role, text }];
+  const joined = /^[,.;:!?)]/.test(text) || /[(]$/.test(existing.text)
+    ? `${existing.text}${text}`
+    : `${existing.text} ${text}`;
+  return messages.map((message) =>
+    message.id === id ? { ...message, text: joined } : message,
+  );
+}
+
 export const SUPPORTED_SERVER_MESSAGE_TYPES = Object.freeze([
   "analysis_error",
   "answer",

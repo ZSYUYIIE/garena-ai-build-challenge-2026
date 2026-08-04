@@ -12,12 +12,16 @@ type QuestionSectionProps = {
   messages: ChatMessage[];
   onAsk: (question: string) => void;
   disabled?: boolean;
+  voiceStatus?: "off" | "listening" | "user_speaking" | "gemini_speaking" | "degraded";
+  tabContextStatus?: "absent" | "connecting" | "ready" | "degraded";
 };
 
 export function QuestionSection({
   messages,
   onAsk,
   disabled = false,
+  voiceStatus = "off",
+  tabContextStatus = "absent",
 }: QuestionSectionProps) {
   const [draft, setDraft] = useState("");
 
@@ -31,6 +35,11 @@ export function QuestionSection({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <h3>Ask about this video</h3>
+
+      <VoiceStatusLine
+        voiceStatus={voiceStatus}
+        tabContextStatus={tabContextStatus}
+      />
 
       <div className="flex items-center gap-2">
         <Input
@@ -56,6 +65,29 @@ export function QuestionSection({
       </div>
 
       <ChatHistory messages={messages} />
+    </div>
+  );
+}
+
+function VoiceStatusLine({
+  voiceStatus,
+  tabContextStatus,
+}: Pick<QuestionSectionProps, "voiceStatus" | "tabContextStatus">) {
+  const voiceText = {
+    off: null,
+    listening: "Mic open — ask a question",
+    user_speaking: "Listening to you…",
+    gemini_speaking: "Gemini is replying…",
+    degraded: "Voice unavailable — typed questions still work",
+  }[voiceStatus ?? "off"];
+  const tabText = tabContextStatus === "connecting" || tabContextStatus === "degraded"
+    ? "Tab speech context unavailable — automatic narration paused"
+    : null;
+  if (!voiceText && !tabText) return null;
+  return (
+    <div aria-live="polite" className="text-xs text-muted-foreground">
+      {voiceText ? <p>{voiceText}</p> : null}
+      {tabText ? <p>{tabText}</p> : null}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   createSessionGenerationGuard,
   shouldSyncIdleGuidance,
 } from "../src/sidepanel/realtime/sessionLifecycle.ts";
+import { shouldAcceptTurnUpdate } from "../src/sidepanel/realtime/types.ts";
 
 test("invalidates an older startup when a replacement session begins", () => {
   const sessions = createSessionGenerationGuard();
@@ -66,4 +67,14 @@ test("syncs idle guidance only when the guidance itself changes", () => {
     ),
     false,
   );
+});
+
+test("keeps one bounded completed turn available for late transcript settlement", () => {
+  const turnId = "123e4567-e89b-42d3-a456-426614174000";
+  const displaced = "123e4567-e89b-42d3-a456-426614174001";
+
+  assert.equal(shouldAcceptTurnUpdate(turnId, turnId, null), true);
+  assert.equal(shouldAcceptTurnUpdate(turnId, null, turnId), true);
+  assert.equal(shouldAcceptTurnUpdate(turnId, null, displaced), false);
+  assert.equal(shouldAcceptTurnUpdate(turnId, null, null), false);
 });

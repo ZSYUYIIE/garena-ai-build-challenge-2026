@@ -6,8 +6,11 @@ import {
   SERVER_MESSAGE_TYPES,
 } from "../../ai-voice-realtime/src/protocol/browserMessages.js";
 import {
+  backpressureAction,
   parseServerMessage,
   SUPPORTED_SERVER_MESSAGE_TYPES,
+  updateTurnChatMessages,
+  voiceStatusForState,
 } from "../src/sidepanel/realtime/types.ts";
 
 test("extension supports every server message in the backend contract", () => {
@@ -32,12 +35,101 @@ test("backend accepts every extension command fixture", () => {
       text: "What is visible?",
       turnId: "123e4567-e89b-42d3-a456-426614174000",
     },
+    {
+      type: "session_hello",
+      protocolVersion: 2,
+      tabAudioState: "captured",
+      microphoneState: "ready",
+    },
+    { type: "media_state", tabAudioState: "degraded", microphoneState: "denied" },
+    { type: "tab_audio_activity", active: true },
+    {
+      type: "tab_audio_discontinuity",
+      timestampMs: 1200,
+      reason: "websocket_backpressure",
+    },
+    { type: "user_activity_start", turnId: "123e4567-e89b-42d3-a456-426614174000" },
+    { type: "user_activity_end", turnId: "123e4567-e89b-42d3-a456-426614174000" },
   ];
 
   assert.deepEqual(
     commands.map((command) => parseBrowserMessage(JSON.stringify(command)).type),
-    ["capture_source", "video_frame", "session_config", "typed_question"],
+    [
+      "capture_source",
+      "video_frame",
+      "session_config",
+      "typed_question",
+      "session_hello",
+      "media_state",
+      "tab_audio_activity",
+      "tab_audio_discontinuity",
+      "user_activity_start",
+      "user_activity_end",
+    ],
   );
+});
+
+test("uses bounded source-specific transport backpressure actions", () => {
+  assert.equal(backpressureAction("frame", 128 * 1024 - 1), "send");
+  assert.equal(backpressureAction("frame", 128 * 1024), "replace_latest_frame");
+  assert.equal(backpressureAction("tab", 32 * 1024 - 1), "send");
+  assert.equal(backpressureAction("tab", 32 * 1024), "tab_discontinuity");
+  assert.equal(backpressureAction("microphone", 32 * 1024 - 1), "send");
+  assert.equal(backpressureAction("microphone", 32 * 1024), "fail_microphone_turn");
+});
+
+test("publishes voice availability only after live protocol readiness", () => {
+  const ready = {
+    sessionActive: true,
+    microphoneState: "ready" as const,
+    helloAccepted: true,
+    liveReady: true,
+    liveDegraded: false,
+    userSpeaking: false,
+    geminiSpeaking: false,
+  };
+
+  assert.equal(voiceStatusForState({ ...ready, helloAccepted: false }), "off");
+  assert.equal(voiceStatusForState({ ...ready, liveReady: false }), "off");
+  assert.equal(voiceStatusForState({ ...ready, microphoneState: "denied" }), "degraded");
+  assert.equal(voiceStatusForState({ ...ready, liveDegraded: true }), "degraded");
+  assert.equal(voiceStatusForState({ ...ready, sessionActive: false }), "off");
+  assert.equal(voiceStatusForState({ ...ready, userSpeaking: true }), "user_speaking");
+  assert.equal(voiceStatusForState({ ...ready, geminiSpeaking: true }), "gemini_speaking");
+  assert.equal(voiceStatusForState(ready), "listening");
+});
+
+test("upserts ordered transcript chunks into one turn-bound chat entry", () => {
+  const turnId = "123e4567-e89b-42d3-a456-426614174000";
+  let messages = updateTurnChatMessages([], {
+    turnId,
+    role: "user",
+    text: "what is",
+    finished: false,
+  });
+  messages = updateTurnChatMessages(messages, {
+    turnId,
+    role: "user",
+    text: "visible",
+    finished: true,
+  });
+  messages = updateTurnChatMessages(messages, {
+    turnId,
+    role: "assistant",
+    text: "A map",
+    finished: false,
+  });
+  messages = updateTurnChatMessages(messages, {
+    turnId,
+    role: "assistant",
+    text: "is visible.",
+    finished: true,
+  });
+
+  assert.deepEqual(messages, [
+    { id: `${turnId}:user`, role: "user", text: "what is visible" },
+    { id: `${turnId}:assistant`, role: "assistant", text: "A map is visible." },
+  ]);
 });
 
 test("strictly parses protocol-v2 turn-bound server messages", () => {
