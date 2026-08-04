@@ -10,7 +10,7 @@ const TRUSTED_ORIGIN =
   "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
 
 test("rejects missing and untrusted WebSocket origins", async (t) => {
-  const { runtime, url } = await startTestRuntime();
+  const { runtime, url } = await startRealRuntime();
   t.after(() => runtime.close());
 
   assert.equal(await rejectedUpgradeStatus(url), 403);
@@ -21,22 +21,19 @@ test("rejects missing and untrusted WebSocket origins", async (t) => {
 });
 
 test("connects an extension-origin client to a browser session", async (t) => {
-  const { runtime, url } = await startTestRuntime();
+  const { runtime, url } = await startRealRuntime();
   t.after(() => runtime.close());
   const browser = await connect(url);
   t.after(() => browser.close());
 
-  const reply = new Promise((resolve, reject) => {
-    browser.once("message", (raw) => resolve(JSON.parse(raw.toString())));
-    browser.once("error", reject);
-  });
+  const reply = waitForMessageType(browser, "telemetry");
   browser.send('{"type":"capture_source","source":"screen"}');
 
-  assert.deepEqual(await reply, { type: "test_ack" });
+  assert.match((await reply).text, /screen narration every/);
 });
 
 test("closes an oversized client message without stopping the server", async (t) => {
-  const { runtime, url } = await startTestRuntime();
+  const { runtime, url } = await startRealRuntime();
   t.after(() => runtime.close());
   const firstBrowser = await connect(url);
 
@@ -74,34 +71,6 @@ test("rejects binary input on a real client session", async (t) => {
   assert.equal((await closed).code, 1003);
 });
 
-async function startTestRuntime() {
-  const runtime = createStreamSenseServer({
-    databasePath: ":memory:",
-    sessionFactory(browser) {
-      let onMessage;
-      return {
-        start() {
-          onMessage = () => {
-            if (browser.readyState === WebSocket.OPEN) {
-              browser.send(JSON.stringify({ type: "test_ack" }));
-            }
-          };
-          browser.on("message", onMessage);
-        },
-        close() {
-          if (onMessage) browser.off("message", onMessage);
-          if (browser.readyState === WebSocket.OPEN) browser.close();
-        },
-      };
-    },
-  });
-  const address = await runtime.listen({ host: "127.0.0.1", port: 0 });
-  return {
-    runtime,
-    url: `ws://127.0.0.1:${address.port}/ws`,
-  };
-}
-
 async function startRealRuntime() {
   const runtime = createStreamSenseServer({
     apiKey: "test-key",
@@ -113,6 +82,24 @@ async function startRealRuntime() {
     runtime,
     url: `ws://127.0.0.1:${address.port}/ws`,
   };
+}
+
+function waitForMessageType(browser, expectedType) {
+  return new Promise((resolve, reject) => {
+    const onMessage = (raw) => {
+      const message = JSON.parse(raw.toString());
+      if (message.type !== expectedType) return;
+      browser.off("error", onError);
+      browser.off("message", onMessage);
+      resolve(message);
+    };
+    const onError = (error) => {
+      browser.off("message", onMessage);
+      reject(error);
+    };
+    browser.on("message", onMessage);
+    browser.once("error", onError);
+  });
 }
 
 function connect(url) {
