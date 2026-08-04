@@ -78,7 +78,11 @@ export class ClientSession {
     this.currentTurnTranscript = "";
     this.currentTurnHasEvent = false;
     this.lastGroundedDescription = "";
-    this.groundedSemanticState = null;
+    this.groundedSemanticState = {
+      semanticKey: null,
+      originAcceptedAtMs: null,
+      observedFrameSequence: 0,
+    };
     this.modelTurnId = 0;
     this.waitingForFirstFrameResolvers = [];
   }
@@ -427,14 +431,19 @@ export class ClientSession {
 
     this.lastGroundedDescription =
       analysis.description || analysis.event?.description || analysis.semanticKey || "";
-    if (!analysis.semanticKey) {
-      this.groundedSemanticState = null;
-    } else if (
-      this.groundedSemanticState?.semanticKey !== analysis.semanticKey
+    if (
+      snapshot.frameSequence > this.groundedSemanticState.observedFrameSequence
     ) {
+      const semanticChanged =
+        this.groundedSemanticState.semanticKey !== analysis.semanticKey;
       this.groundedSemanticState = {
         semanticKey: analysis.semanticKey,
-        originAcceptedAtMs: snapshot.acceptedAtMs,
+        originAcceptedAtMs: semanticChanged
+          ? analysis.semanticKey
+            ? snapshot.acceptedAtMs
+            : null
+          : this.groundedSemanticState.originAcceptedAtMs,
+        observedFrameSequence: snapshot.frameSequence,
       };
     }
 
@@ -489,6 +498,7 @@ export class ClientSession {
       hash: frameHash,
       mimeType,
       acceptedAtMs: this.lastFrameAcceptedAtMs,
+      frameSequence: this.videoFrames,
     };
     for (const resolve of this.waitingForFirstFrameResolvers.splice(0)) resolve();
 
@@ -504,11 +514,12 @@ export class ClientSession {
 
   captureFrameSnapshot() {
     if (!this.latestFrame) return null;
-    const { acceptedAtMs, ...frame } = this.latestFrame;
+    const { acceptedAtMs, frameSequence, ...frame } = this.latestFrame;
     return Object.freeze({
       frame: Object.freeze(frame),
       timestampSeconds: this.latestTimestampSeconds,
       acceptedAtMs,
+      frameSequence,
     });
   }
 

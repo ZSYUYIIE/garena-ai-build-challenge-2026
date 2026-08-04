@@ -316,6 +316,130 @@ test("does not refresh a repeated sports candidate TTL during commentary", async
   fixture.session.close();
 });
 
+test("a stale older semantic result cannot refresh a newer score TTL", async (t) => {
+  let now = 0;
+  const staleA = deferred();
+  const results = [
+    staleA.promise,
+    Promise.resolve(semanticAnalysis("score:B", "Score B")),
+    Promise.resolve(semanticAnalysis("score:B", "Score B unchanged")),
+  ];
+  const speechPolicy = new SpeechPolicy({ nowBackendSessionMs: () => now });
+  speechPolicy.setTabAudioState("healthy");
+  speechPolicy.setLiveState("ready");
+  speechPolicy.setCloudTabSpeech(true);
+  const fixture = createFixture({
+    now: () => now,
+    speechPolicy,
+    analyzeFrame() {
+      return results.shift();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+
+  fixture.session.sendVideo(Buffer.from("older A"), "image/jpeg", 1);
+  fixture.session.requestNarration(false);
+  now = 10;
+  fixture.session.sendVideo(Buffer.from("newer B"), "image/jpeg", 2);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  assert.equal(speechPolicy.nextWakeAtMs(), 5_010);
+
+  staleA.resolve(semanticAnalysis("screen:A", "Older A"));
+  await flushAsyncWork();
+  now = 6_001;
+  fixture.session.sendVideo(Buffer.from("unchanged B"), "image/jpeg", 99);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  speechPolicy.setCloudTabSpeech(false);
+  now = 6_751;
+
+  assert.deepEqual(speechPolicy.poll(), []);
+  fixture.session.close();
+});
+
+test("a chronological transition away and back resets the semantic origin", async (t) => {
+  let now = 0;
+  const speechPolicy = new FakeSpeechPolicy();
+  const results = [
+    semanticAnalysis("score:B", "Score B"),
+    suppressedAnalysis({ semanticKey: "screen:menu" }),
+    semanticAnalysis("score:B", "Score B returns"),
+  ];
+  const fixture = createFixture({
+    now: () => now,
+    speechPolicy,
+    async analyzeFrame() {
+      return results.shift();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+
+  for (const [time, frame] of [[10, "B"], [100, "menu"], [200, "B again"]]) {
+    now = time;
+    fixture.session.sendVideo(Buffer.from(frame), "image/jpeg", time);
+    fixture.session.requestNarration(false);
+    await flushAsyncWork();
+  }
+
+  assert.deepEqual(
+    speechPolicy.offers.map(({ semanticKey, createdAtMs }) => ({
+      semanticKey,
+      createdAtMs,
+    })),
+    [
+      { semanticKey: "score:B", createdAtMs: 10 },
+      { semanticKey: "score:B", createdAtMs: 200 },
+    ],
+  );
+  fixture.session.close();
+});
+
+test("a newer null state cannot be resurrected by an older late key", async (t) => {
+  let now = 0;
+  const staleA = deferred();
+  const speechPolicy = new FakeSpeechPolicy();
+  const results = [
+    Promise.resolve(semanticAnalysis("screen:A", "Initial A")),
+    staleA.promise,
+    Promise.resolve(suppressedAnalysis({ semanticKey: null })),
+    Promise.resolve(semanticAnalysis("screen:A", "A genuinely returns")),
+  ];
+  const fixture = createFixture({
+    now: () => now,
+    speechPolicy,
+    analyzeFrame() {
+      return results.shift();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+
+  now = 10;
+  fixture.session.sendVideo(Buffer.from("initial A"), "image/jpeg", 1);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  now = 20;
+  fixture.session.sendVideo(Buffer.from("older pending A"), "image/jpeg", 2);
+  fixture.session.requestNarration(false);
+  now = 30;
+  fixture.session.sendVideo(Buffer.from("newer null"), "image/jpeg", 3);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  staleA.resolve(semanticAnalysis("screen:A", "Older late A"));
+  await flushAsyncWork();
+  now = 1_000;
+  fixture.session.sendVideo(Buffer.from("new A"), "image/jpeg", 4);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.deepEqual(
+    speechPolicy.offers.map(({ createdAtMs }) => createdAtMs),
+    [10, 1_000],
+  );
+  fixture.session.close();
+});
+
 test("records and publishes a fallback event before speech policy starts", async (t) => {
   const speechPolicy = new FakeSpeechPolicy();
   const fixture = createFixture({
@@ -437,6 +561,14 @@ function approvedAnalysis(overrides = {}) {
     },
     ...overrides,
   };
+}
+
+function semanticAnalysis(semanticKey, description) {
+  return approvedAnalysis({
+    description,
+    semanticKey,
+    event: null,
+  });
 }
 
 class FakeSpeechPolicy {
