@@ -101,6 +101,7 @@ export class ClientSession {
     this.pendingLiveFrame = null;
     this.userTurnEpoch = 0;
     this.transcriberGeneration = 0;
+    this.tabContextRecoveryPromise = null;
   }
 
   async start() {
@@ -276,7 +277,7 @@ export class ClientSession {
     const rate = this.rateLimiter.accept("audio_tab", this.now());
     if (!rate.allowed) return void this.degradeTabContext();
     const result = this.transcriber.write?.(packet.pcm, this.elapsedMilliseconds);
-    if (result !== "accepted") void this.degradeTabContext();
+    if (result === "degraded") void this.degradeTabContext();
   }
 
   beginAnswerTurn({ turnId = randomUUID(), source = "typed", text = "" } = {}) {
@@ -332,15 +333,25 @@ export class ClientSession {
     this.scheduleSpeechPolicyWake();
   }
 
-  async degradeTabContext() {
-    if (this.closed) return;
+  degradeTabContext() {
+    if (this.closed) return Promise.resolve();
     this.applySpeechActions(this.speechPolicy.setTabAudioState?.("degraded") ?? []);
-    try {
-      await this.transcriber?.markDiscontinuity?.();
-    } catch {
-      // STT provider detail is intentionally not sent to the extension.
-    }
+    if (this.tabContextRecoveryPromise) return this.tabContextRecoveryPromise;
+    const transcriber = this.transcriber;
+    const recovery = Promise.resolve()
+      .then(() => {
+        if (this.closed || this.transcriber !== transcriber) return;
+        return transcriber?.markDiscontinuity?.();
+      })
+      .catch(() => {
+        // STT provider detail is intentionally not sent to the extension.
+      })
+      .finally(() => {
+        if (this.tabContextRecoveryPromise === recovery) this.tabContextRecoveryPromise = null;
+      });
+    this.tabContextRecoveryPromise = recovery;
     this.scheduleSpeechPolicyWake();
+    return recovery;
   }
 
   handleSttHealth(state) {

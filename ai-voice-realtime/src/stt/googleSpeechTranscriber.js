@@ -67,8 +67,7 @@ export class GoogleSpeechTranscriber {
   #closed = false;
   #health = "closed";
   #cloudSpeechActive = false;
-  #recentFinalKeys = new Set();
-  #recentFinalOrder = [];
+  #recentFinals = [];
 
   constructor({
     SpeechClient = speech.SpeechClient,
@@ -139,8 +138,7 @@ export class GoogleSpeechTranscriber {
   async markDiscontinuity() {
     if (this.#closed) return;
     this.#clearAudioBuffers();
-    this.#recentFinalKeys.clear();
-    this.#recentFinalOrder = [];
+    this.#recentFinals = [];
     this.#handleFailure(this.#active);
   }
 
@@ -149,8 +147,7 @@ export class GoogleSpeechTranscriber {
     this.#closed = true;
     this.#clearTimers();
     this.#clearAudioBuffers();
-    this.#recentFinalKeys.clear();
-    this.#recentFinalOrder = [];
+    this.#recentFinals = [];
     for (const record of this.#records) this.#endRecord(record);
     this.#active = null;
     if (this.#client) await this.#client.close();
@@ -305,13 +302,19 @@ export class GoogleSpeechTranscriber {
         text,
         languageCode,
       };
-      const finalKey = JSON.stringify(segment);
-      if (this.#recentFinalKeys.has(finalKey)) continue;
-      this.#recentFinalKeys.add(finalKey);
-      this.#recentFinalOrder.push(finalKey);
-      while (this.#recentFinalOrder.length > FINAL_DEDUPLICATION_LIMIT) {
-        this.#recentFinalKeys.delete(this.#recentFinalOrder.shift());
-      }
+      const normalizedText = text.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+      const duplicate = this.#recentFinals.some((recent) => (
+        recent.normalizedText === normalizedText
+        && recent.startMs < segment.endMs
+        && segment.startMs < recent.endMs
+      ));
+      if (duplicate) continue;
+      this.#recentFinals.push({
+        startMs: segment.startMs,
+        endMs: segment.endMs,
+        normalizedText,
+      });
+      while (this.#recentFinals.length > FINAL_DEDUPLICATION_LIMIT) this.#recentFinals.shift();
       this.#onFinal(segment);
     }
   }

@@ -610,6 +610,24 @@ test("cannot be started again after close and never revives a provider", async (
   assert.equal(h.health.at(-1).state, "closed");
 });
 
+test("shares one cleanup promise when provider close throws synchronously", async () => {
+  const connection = new FakeLiveConnection();
+  connection.close = () => {
+    connection.closed += 1;
+    throw new Error("synchronous close failure");
+  };
+  const h = makeHarness({ connections: [connection] });
+  await h.live.start();
+
+  const first = h.live.close();
+  const second = h.live.close();
+
+  assert.strictEqual(first, second);
+  await first;
+  assert.equal(connection.closed, 1);
+  assert.equal(h.health.at(-1).state, "closed");
+});
+
 test("closes a provider that resolves after teardown without publishing ready", async () => {
   const pending = deferred();
   const lateConnection = new FakeLiveConnection();

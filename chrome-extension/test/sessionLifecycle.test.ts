@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createSessionCallbackGate,
   createRevisionGuard,
+  createSessionResourceLifecycle,
   createSessionGenerationGuard,
   shouldSyncIdleGuidance,
 } from "../src/sidepanel/realtime/sessionLifecycle.ts";
@@ -53,6 +54,60 @@ test("rejects late media callbacks from a closed generation after replacement", 
   assert.equal(first.run(() => { delivered += 100; }), false);
   assert.equal(replacement.run(() => { delivered += 1; }), true);
   assert.equal(delivered, 2);
+});
+
+test("composes pagehide, stop, and tab-change cleanup while rejecting every late callback", async () => {
+  let current = true;
+  const lifecycle = createSessionResourceLifecycle(() => current);
+  const track = { stopCalls: 0, stop() { this.stopCalls += 1; } };
+  const timer = { clearCalls: 0, clear() { this.clearCalls += 1; } };
+  const provider = { closeCalls: 0, close() { this.closeCalls += 1; } };
+  const worklet = { closeCalls: 0, close() { this.closeCalls += 1; } };
+  const modelPlayback = { stopCalls: 0, stop() { this.stopCalls += 1; } };
+  const transcript = { segments: ["tab words"], clear() { this.segments = []; } };
+  const microphoneTurn = {
+    packets: [new Int16Array([1, 2])],
+    clear() { this.packets = []; },
+  };
+  assert.equal(lifecycle.register(() => track.stop()), null);
+  assert.equal(lifecycle.register(() => timer.clear()), null);
+  assert.equal(lifecycle.register(() => provider.close()), null);
+  assert.equal(lifecycle.register(() => worklet.close()), null);
+  assert.equal(lifecycle.register(() => modelPlayback.stop()), null);
+  assert.equal(lifecycle.register(() => transcript.clear()), null);
+  assert.equal(lifecycle.register(() => microphoneTurn.clear()), null);
+  let delivered = 0;
+  assert.equal(lifecycle.callbacks.run(() => { delivered += 1; }), true);
+
+  // These are the three production release paths. They must share one cleanup.
+  current = false;
+  const pagehide = lifecycle.release();
+  const stop = lifecycle.release();
+  const tabChangeDuringSpeech = lifecycle.release();
+  assert.strictEqual(pagehide, stop);
+  assert.strictEqual(stop, tabChangeDuringSpeech);
+  await pagehide;
+
+  let lateWorkletPackets = 0;
+  let lateModelAudio = 0;
+  assert.equal(lifecycle.callbacks.run(() => { lateWorkletPackets += 1; }), false);
+  assert.equal(lifecycle.callbacks.run(() => { lateModelAudio += 1; }), false);
+  const latePermissionTrack = { stopCalls: 0, stop() { this.stopCalls += 1; } };
+  const latePermissionCleanup = lifecycle.register(() => latePermissionTrack.stop());
+  assert.ok(latePermissionCleanup);
+  await latePermissionCleanup;
+
+  assert.equal(delivered, 1);
+  assert.equal(lateWorkletPackets, 0);
+  assert.equal(lateModelAudio, 0);
+  assert.equal(track.stopCalls, 1);
+  assert.equal(timer.clearCalls, 1);
+  assert.equal(provider.closeCalls, 1);
+  assert.equal(worklet.closeCalls, 1);
+  assert.equal(modelPlayback.stopCalls, 1);
+  assert.deepEqual(transcript.segments, []);
+  assert.deepEqual(microphoneTurn.packets, []);
+  assert.equal(latePermissionTrack.stopCalls, 1);
 });
 
 test("rejects initial state after a newer browser event arrives", () => {

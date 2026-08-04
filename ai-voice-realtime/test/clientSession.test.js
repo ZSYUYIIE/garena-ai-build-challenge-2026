@@ -9,6 +9,7 @@ import { GeminiLiveSession } from "../src/gemini/liveSession.js";
 import { parseServerOutput } from "../src/protocol/browserMessages.js";
 import { ClientSession } from "../src/session/clientSession.js";
 import { SpeechPolicy } from "../src/session/speechPolicy.js";
+import { GoogleSpeechTranscriber } from "../src/stt/googleSpeechTranscriber.js";
 
 test("acknowledges protocol v2 only after hello and validates every emitted server message", async (t) => {
   const fixture = createFixture({ liveSessionFactory: () => new FakeLiveSession() });
@@ -99,6 +100,143 @@ test("routes admitted microphone and captured-tab PCM to their separate provider
   assert.deepEqual(transcriber.microphoneWrites, []);
 });
 
+test("retains ordinary STT backpressure through drain without a destructive discontinuity", async (t) => {
+  DrainSpeechClient.instances = [];
+  let transcriber;
+  const fixture = createFixture({
+    liveSessionFactory: () => new FakeLiveSession(),
+    transcriberFactory(options) {
+      transcriber = new GoogleSpeechTranscriber({
+        ...options,
+        SpeechClient: DrainSpeechClient,
+        projectId: "project-1",
+      });
+      return transcriber;
+    },
+  });
+  t.after(async () => {
+    await fixture.session.close();
+    fixture.eventStore.close();
+  });
+  await fixture.session.start();
+  hello(fixture, "captured");
+  await flushAsyncWork();
+  const stream = DrainSpeechClient.instances[0].streams[0];
+  stream.writeResults = [false];
+  const first = Buffer.from([1, 0, 2, 0]);
+  const second = Buffer.from([3, 0, 4, 0]);
+
+  fixture.browser.emit("message", timedAudioPacket(2, 0, 0, first), true);
+  fixture.browser.emit("message", timedAudioPacket(2, 1, 100, second), true);
+  stream.emit("drain");
+
+  assert.equal(stream.destroyCalls, 0);
+  assert.deepEqual(
+    stream.writes.slice(1).map(({ audio }) => audio),
+    [first, second],
+  );
+  assert.equal(transcriber.health, "ready");
+});
+
+test("coalesces destructive STT overflow recovery without recursive discontinuities", async (t) => {
+  DrainSpeechClient.instances = [];
+  let transcriber;
+  let discontinuities = 0;
+  const fixture = createFixture({
+    liveSessionFactory: () => new FakeLiveSession(),
+    transcriberFactory(options) {
+      transcriber = new GoogleSpeechTranscriber({
+        ...options,
+        SpeechClient: DrainSpeechClient,
+        projectId: "project-1",
+      });
+      const markDiscontinuity = transcriber.markDiscontinuity.bind(transcriber);
+      transcriber.markDiscontinuity = () => {
+        discontinuities += 1;
+        return markDiscontinuity();
+      };
+      return transcriber;
+    },
+  });
+  t.after(async () => {
+    await fixture.session.close();
+    fixture.eventStore.close();
+  });
+  await fixture.session.start();
+  hello(fixture, "captured");
+  await flushAsyncWork();
+  const stream = DrainSpeechClient.instances[0].streams[0];
+  stream.writeResults = [false];
+
+  for (let sequence = 0; sequence < 12; sequence += 1) {
+    fixture.browser.emit(
+      "message",
+      timedAudioPacket(2, sequence, sequence * 100, Buffer.alloc(3_200, sequence)),
+      true,
+    );
+  }
+  await flushAsyncWork();
+
+  assert.equal(stream.destroyCalls, 1);
+  assert.equal(discontinuities, 1);
+  assert.equal(transcriber.health, "degraded");
+});
+
+test("browser close during STT rotation clears timers, streams, transcript, and late callbacks", async (t) => {
+  DrainSpeechClient.instances = [];
+  const rotationTimers = new RotationTimers();
+  const fixture = createFixture({
+    liveSessionFactory: () => new FakeLiveSession(),
+    transcriberFactory(options) {
+      return new GoogleSpeechTranscriber({
+        ...options,
+        SpeechClient: DrainSpeechClient,
+        projectId: "project-1",
+        timers: rotationTimers,
+        rotateAfterMs: 100,
+      });
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "captured");
+  await flushAsyncWork();
+  const client = DrainSpeechClient.instances[0];
+  const first = client.streams[0];
+  fixture.browser.emit("message", timedAudioPacket(2, 0, 0, Buffer.from([1, 0, 2, 0])), true);
+
+  rotationTimers.advance(100);
+  const replacement = client.streams[1];
+  replacement.emit("data", {
+    results: [{
+      isFinal: true,
+      alternatives: [{ transcript: "rotation context" }],
+      languageCode: "en-US",
+      resultEndOffset: { seconds: 0, nanos: 100_000_000 },
+    }],
+  });
+  assert.equal(fixture.session.tabTranscriptBuffer.size, 1);
+  assert.equal(first.endCalls, 1);
+  assert.equal(rotationTimers.pending, 1);
+
+  fixture.browser.emit("close");
+  await fixture.session.close();
+  replacement.emit("data", {
+    results: [{
+      isFinal: true,
+      alternatives: [{ transcript: "late rotation context" }],
+      languageCode: "en-US",
+      resultEndOffset: { seconds: 0, nanos: 200_000_000 },
+    }],
+  });
+
+  assert.equal(first.endCalls, 1);
+  assert.equal(replacement.endCalls, 1);
+  assert.equal(client.closeCalls, 1);
+  assert.equal(rotationTimers.pending, 0);
+  assert.equal(fixture.session.tabTranscriptBuffer.size, 0);
+});
+
 test("rejects a repeated user activity end marker", async (t) => {
   const live = new FakeLiveSession();
   const fixture = createFixture({ liveSessionFactory: () => live });
@@ -128,6 +266,7 @@ test("degrades captured tab context after a timestamp gap", async (t) => {
   })), false);
   fixture.browser.emit("message", timedAudioPacket(2, 0, 0, Buffer.from([1, 0])) , true);
   fixture.browser.emit("message", timedAudioPacket(2, 1, 1_000, Buffer.from([1, 0])) , true);
+  await flushAsyncWork();
 
   assert.equal(transcriber.discontinuities, 1);
 });
@@ -1225,6 +1364,75 @@ class FakeSdkLiveConnection {
   }
 
   close() {}
+}
+
+class DrainSpeechStream extends EventEmitter {
+  constructor() {
+    super();
+    this.writes = [];
+    this.writeResults = [];
+    this.destroyCalls = 0;
+    this.endCalls = 0;
+  }
+
+  write(message) {
+    this.writes.push(message);
+    return this.writeResults.shift() ?? true;
+  }
+
+  destroy() { this.destroyCalls += 1; }
+  end() { this.endCalls += 1; }
+}
+
+class RotationTimers {
+  constructor() {
+    this.now = 0;
+    this.nextId = 1;
+    this.jobs = new Map();
+  }
+
+  setTimeout = (callback, delay) => {
+    const id = this.nextId++;
+    this.jobs.set(id, { callback, at: this.now + delay });
+    return id;
+  };
+
+  clearTimeout = (id) => this.jobs.delete(id);
+
+  advance(milliseconds) {
+    const target = this.now + milliseconds;
+    for (;;) {
+      const next = [...this.jobs.entries()]
+        .filter(([, job]) => job.at <= target)
+        .sort(([, left], [, right]) => left.at - right.at)[0];
+      if (!next) break;
+      const [id, job] = next;
+      this.jobs.delete(id);
+      this.now = job.at;
+      job.callback();
+    }
+    this.now = target;
+  }
+
+  get pending() { return this.jobs.size; }
+}
+
+class DrainSpeechClient {
+  static instances = [];
+
+  constructor() {
+    this.streams = [];
+    this.closeCalls = 0;
+    DrainSpeechClient.instances.push(this);
+  }
+
+  _streamingRecognize() {
+    const stream = new DrainSpeechStream();
+    this.streams.push(stream);
+    return stream;
+  }
+
+  async close() { this.closeCalls += 1; }
 }
 
 class FakeTranscriber {

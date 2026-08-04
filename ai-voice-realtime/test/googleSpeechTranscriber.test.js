@@ -266,6 +266,59 @@ test("deduplicates a final segment repeated by the 500 ms rotation bridge", asyn
   await transcriber.close();
 });
 
+test("deduplicates normalized overlapping bridge finals but keeps later repeated words", async () => {
+  const timers = new FakeTimers();
+  const { transcriber, finals } = makeTranscriber({ timers, rotateAfterMs: 285_000 });
+  await transcriber.start();
+  transcriber.write(Buffer.alloc(16_000, 4), 284_500);
+  const first = FakeSpeechClient.instances[0].streams[0];
+  first.emit("data", { results: [result({
+    isFinal: true,
+    alternatives: [{ transcript: "The winning goal" }],
+    seconds: 0,
+    nanos: 500_000_000,
+  })] });
+
+  timers.advance(285_000);
+  const replacement = FakeSpeechClient.instances[0].streams[1];
+  replacement.emit("data", {
+    speechEventType: "SPEECH_ACTIVITY_BEGIN",
+    speechEventOffset: { seconds: 0, nanos: 1_000_000 },
+    results: [result({
+      isFinal: true,
+      alternatives: [{ transcript: "  THE   winning\n goal  " }],
+      seconds: 0,
+      nanos: 501_000_000,
+    })],
+  });
+  replacement.emit("data", {
+    speechEventType: "SPEECH_ACTIVITY_BEGIN",
+    speechEventOffset: { seconds: 0, nanos: 500_000_000 },
+    results: [result({
+      isFinal: true,
+      alternatives: [{ transcript: "the winning goal" }],
+      seconds: 1,
+      nanos: 200_000_000,
+    })],
+  });
+
+  assert.deepEqual(finals, [
+    {
+      startMs: 284_500,
+      endMs: 285_000,
+      text: "The winning goal",
+      languageCode: "en-US",
+    },
+    {
+      startMs: 285_000,
+      endMs: 285_700,
+      text: "the winning goal",
+      languageCode: "en-US",
+    },
+  ]);
+  await transcriber.close();
+});
+
 test("does not send bridge or live PCM until a config-backpressured stream drains", async () => {
   const { transcriber } = makeTranscriber({
     streamSetup: (stream) => { stream.writeResults = [false]; },

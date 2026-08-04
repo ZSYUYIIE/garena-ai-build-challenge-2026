@@ -47,6 +47,45 @@ export function createSessionCallbackGate(
   };
 }
 
+export type SessionResourceLifecycle = {
+  callbacks: SessionCallbackGate;
+  register: (cleanup: () => void | Promise<void>) => Promise<void> | null;
+  release: () => Promise<void>;
+};
+
+/** Owns one session generation's composed resources and exact-once release. */
+export function createSessionResourceLifecycle(
+  isCurrent: () => boolean,
+): SessionResourceLifecycle {
+  const callbacks = createSessionCallbackGate(isCurrent);
+  const cleanups: Array<() => void | Promise<void>> = [];
+  let releasePromise: Promise<void> | null = null;
+  const settleCleanup = (cleanup: () => void | Promise<void>) => {
+    try {
+      return Promise.resolve(cleanup()).catch(() => undefined);
+    } catch {
+      return Promise.resolve();
+    }
+  };
+
+  return {
+    callbacks,
+    register(cleanup) {
+      if (typeof cleanup !== "function") throw new TypeError("cleanup must be a function");
+      if (releasePromise) return settleCleanup(cleanup);
+      cleanups.push(cleanup);
+      return null;
+    },
+    release() {
+      if (releasePromise) return releasePromise;
+      callbacks.close();
+      const owned = cleanups.splice(0).reverse();
+      releasePromise = Promise.allSettled(owned.map(settleCleanup)).then(() => undefined);
+      return releasePromise;
+    },
+  };
+}
+
 export type RevisionGuard = {
   snapshot: () => number;
   markChanged: () => void;

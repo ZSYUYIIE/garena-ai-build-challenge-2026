@@ -220,12 +220,14 @@ export class GeminiLiveSession {
     this.onPlaybackClear({ turnId, reason: "discarded" });
   }
 
-  async close() {
+  close() {
     if (this.closePromise) return this.closePromise;
     this.closing = true;
     this.generation += 1;
     this.#clearOwnership();
-    this.closePromise = Promise.resolve(this.session?.close?.())
+    const session = this.session;
+    this.closePromise = Promise.resolve()
+      .then(() => session?.close?.())
       .catch(() => {})
       .then(() => {
         this.session = null;
