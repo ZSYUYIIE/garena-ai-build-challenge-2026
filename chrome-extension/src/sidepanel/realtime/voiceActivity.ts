@@ -15,6 +15,7 @@ const ECHO_CORRELATION_THRESHOLD = 0.86;
 const ECHO_RESIDUAL_RMS_MAX = 0.1;
 const TAB_ACTIVITY_RMS_FLOOR = 0.02;
 const TAB_ACTIVITY_HANGOVER_MS = 500;
+const VAD_PRE_ROLL_SAMPLES = (VAD_PRE_ROLL_MS * VAD_SAMPLE_RATE) / 1_000;
 
 export type VadEvent =
   | { type: "speech_start"; timestampMs: number; preRoll: Int16Array[] }
@@ -100,9 +101,16 @@ export class AdaptiveVoiceActivityDetector {
 
   private appendPreRoll(pcm: Int16Array): void {
     this.preRoll.push(clonePcm(pcm));
-    let retainedMs = this.preRoll.reduce((total, frame) => total + durationMs(frame), 0);
-    while (this.preRoll.length > 1 && retainedMs > VAD_PRE_ROLL_MS) {
-      retainedMs -= durationMs(this.preRoll.shift()!);
+    let excessSamples = this.preRoll.reduce((total, frame) => total + frame.length, 0) - VAD_PRE_ROLL_SAMPLES;
+    while (excessSamples > 0 && this.preRoll.length > 0) {
+      const oldest = this.preRoll[0];
+      if (oldest.length <= excessSamples) {
+        this.preRoll.shift();
+        excessSamples -= oldest.length;
+      } else {
+        this.preRoll[0] = oldest.slice(excessSamples);
+        excessSamples = 0;
+      }
     }
   }
 }
@@ -114,24 +122,44 @@ export type PlaybackReference = {
   firstSampleExtensionSessionMs: number;
 };
 
-type ReferenceChunk = { pcm: Int16Array; timestampMs: number };
+type ReferenceResamplingStream = {
+  resampler: StreamingPcm16Resampler;
+  nextOutputSampleIndex: number | null;
+  expectedNextInputTimestampMs: number | null;
+};
 
 class ReferenceRing {
-  private readonly resamplerByRate = new Map<number, StreamingPcm16Resampler>();
-  private chunks: ReferenceChunk[] = [];
+  private readonly streamsByRate = new Map<number, ReferenceResamplingStream>();
+  private firstSampleIndex: number | null = null;
+  private samples = new Int16Array();
 
   push(reference: PlaybackReference): void {
-    let resampler = this.resamplerByRate.get(reference.sampleRate);
-    if (!resampler) {
-      resampler = new StreamingPcm16Resampler(reference.sampleRate, VAD_SAMPLE_RATE);
-      this.resamplerByRate.set(reference.sampleRate, resampler);
+    let stream = this.streamsByRate.get(reference.sampleRate);
+    if (!stream) {
+      stream = {
+        resampler: new StreamingPcm16Resampler(reference.sampleRate, VAD_SAMPLE_RATE),
+        nextOutputSampleIndex: null,
+        expectedNextInputTimestampMs: null,
+      };
+      this.streamsByRate.set(reference.sampleRate, stream);
+    }
+    if (
+      stream.expectedNextInputTimestampMs === null ||
+      Math.abs(reference.firstSampleExtensionSessionMs - stream.expectedNextInputTimestampMs) > 1
+    ) {
+      stream.resampler.reset();
+      stream.nextOutputSampleIndex = Math.round(
+        (reference.firstSampleExtensionSessionMs * VAD_SAMPLE_RATE) / 1_000,
+      );
     }
     const floats = Float32Array.from(reference.pcm, (sample) => sample / 32_768);
-    const pcm = resampler.push(floats);
+    const pcm = stream.resampler.push(floats);
+    stream.expectedNextInputTimestampMs =
+      reference.firstSampleExtensionSessionMs + (reference.pcm.length * 1_000) / reference.sampleRate;
     if (pcm.length === 0) return;
-    this.chunks.push({ pcm, timestampMs: reference.firstSampleExtensionSessionMs });
-    const oldestAllowed = reference.firstSampleExtensionSessionMs - MAX_REFERENCE_DELAY_MS - 1_000;
-    this.chunks = this.chunks.filter((chunk) => chunk.timestampMs >= oldestAllowed);
+    const startSampleIndex = stream.nextOutputSampleIndex!;
+    this.write(startSampleIndex, pcm);
+    stream.nextOutputSampleIndex = startSampleIndex + pcm.length;
   }
 
   correlationFor(microphone: Int16Array, timestampMs: number): number {
@@ -151,13 +179,48 @@ class ReferenceRing {
   }
 
   private read(timestampMs: number, length: number): Int16Array | null {
-    for (const chunk of this.chunks) {
-      const offset = Math.round(((timestampMs - chunk.timestampMs) * VAD_SAMPLE_RATE) / 1_000);
-      if (offset >= 0 && offset + length <= chunk.pcm.length) {
-        return chunk.pcm.slice(offset, offset + length);
-      }
+    if (this.firstSampleIndex === null) return null;
+    const startSampleIndex = Math.round((timestampMs * VAD_SAMPLE_RATE) / 1_000);
+    const offset = startSampleIndex - this.firstSampleIndex;
+    if (offset >= 0 && offset + length <= this.samples.length) {
+      return this.samples.slice(offset, offset + length);
     }
     return null;
+  }
+
+  reset(): void {
+    this.streamsByRate.clear();
+    this.firstSampleIndex = null;
+    this.samples = new Int16Array();
+  }
+
+  private write(startSampleIndex: number, pcm: Int16Array): void {
+    if (this.firstSampleIndex === null) {
+      this.firstSampleIndex = startSampleIndex;
+      this.samples = pcm.slice();
+      return;
+    }
+
+    if (startSampleIndex < this.firstSampleIndex) return;
+    let offset = startSampleIndex - this.firstSampleIndex;
+    if (offset > this.samples.length) {
+      const extended = new Int16Array(offset + pcm.length);
+      extended.set(this.samples);
+      this.samples = extended;
+    } else if (offset + pcm.length > this.samples.length) {
+      const extended = new Int16Array(offset + pcm.length);
+      extended.set(this.samples);
+      this.samples = extended;
+    }
+    this.samples.set(pcm, offset);
+
+    const maximumSamples =
+      ((MAX_REFERENCE_DELAY_MS + 1_000) * VAD_SAMPLE_RATE) / 1_000;
+    if (this.samples.length > maximumSamples) {
+      const discardCount = this.samples.length - maximumSamples;
+      this.samples = this.samples.slice(discardCount);
+      this.firstSampleIndex += discardCount;
+    }
   }
 }
 
@@ -222,6 +285,8 @@ export class EchoAwareUserVadGate {
 
   reset(): void {
     this.detector.reset();
+    this.references.tab.reset();
+    this.references.model.reset();
   }
 }
 

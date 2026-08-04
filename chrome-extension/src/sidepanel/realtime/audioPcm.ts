@@ -10,6 +10,7 @@ function toPcm16(sample: number): number {
 export class StreamingPcm16Resampler {
   private readonly sourceSamplesPerTargetSample: number;
   private buffered = new Float32Array();
+  private bufferedStart = 0;
   private sourcePosition = 0;
 
   constructor(sourceRate: number, targetRate = 16_000) {
@@ -38,9 +39,10 @@ export class StreamingPcm16Resampler {
     this.buffered = combined;
 
     const output: number[] = [];
-    while (this.sourcePosition + 1 < this.buffered.length) {
-      const lowerIndex = Math.floor(this.sourcePosition);
-      const fraction = this.sourcePosition - lowerIndex;
+    while (this.sourcePosition + 1 < this.bufferedStart + this.buffered.length) {
+      const lowerSourceIndex = Math.floor(this.sourcePosition);
+      const lowerIndex = lowerSourceIndex - this.bufferedStart;
+      const fraction = this.sourcePosition - lowerSourceIndex;
       const interpolated =
         this.buffered[lowerIndex] * (1 - fraction) +
         this.buffered[lowerIndex + 1] * fraction;
@@ -48,16 +50,19 @@ export class StreamingPcm16Resampler {
       this.sourcePosition += this.sourceSamplesPerTargetSample;
     }
 
-    const retainedStart = Math.floor(this.sourcePosition);
-    if (retainedStart > 0) {
-      this.buffered = this.buffered.slice(retainedStart);
-      this.sourcePosition -= retainedStart;
+    const bufferedEnd = this.bufferedStart + this.buffered.length;
+    const retainedStart = Math.min(Math.floor(this.sourcePosition), bufferedEnd);
+    const discardCount = retainedStart - this.bufferedStart;
+    if (discardCount > 0) {
+      this.buffered = this.buffered.slice(discardCount);
+      this.bufferedStart = retainedStart;
     }
     return Int16Array.from(output);
   }
 
   reset(): void {
     this.buffered = new Float32Array();
+    this.bufferedStart = 0;
     this.sourcePosition = 0;
   }
 }

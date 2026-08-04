@@ -40,6 +40,23 @@ test("preserves streaming position and PCM16 endpoints without changing input", 
   );
 });
 
+test("keeps 48 kHz resampling phase when a push ends between output samples", () => {
+  const input = Float32Array.from(
+    { length: 256 },
+    (_, index) => Math.sin(index / 17) * 0.4,
+  );
+  const splitResampler = new StreamingPcm16Resampler(48_000);
+
+  const split = new Int16Array([
+    ...splitResampler.push(input.slice(0, 128)),
+    ...splitResampler.push(input.slice(128)),
+  ]);
+  const contiguous = new StreamingPcm16Resampler(48_000).push(input);
+
+  assert.equal(split.length, contiguous.length);
+  assert.deepEqual(split, contiguous);
+});
+
 test("emits 40 ms microphone chunks without losing remainder", () => {
   const chunker = new PcmChunker(640);
   const input = new Int16Array(1_000);

@@ -97,6 +97,18 @@ test("does not open a user turn for a 40 ms spike", () => {
   assert.equal(events.some((event) => event.type === "speech_start"), false);
 });
 
+test("keeps at least 300 ms of pre-roll for uniform 40 ms input frames", () => {
+  const detector = new AdaptiveVoiceActivityDetector();
+  const events = [
+    ...pushFrames(detector, pcm(480, 0.002), 0),
+    ...pushFrames(detector, pcm(120, 0.32), 480),
+  ];
+  const start = events.find((event) => event.type === "speech_start");
+
+  assert.ok(start);
+  assert.ok(start.preRoll.reduce((total, frame) => total + frame.length, 0) >= 4_800);
+});
+
 for (const source of ["tab", "model"] as const) {
   test(`rejects delayed attenuated ${source} playback leakage without suppressing barge-in`, () => {
     const referenceSampleRate = source === "model" ? 48_000 : SAMPLE_RATE;
@@ -127,6 +139,25 @@ for (const source of ["tab", "model"] as const) {
     assert.equal(bargeInEvents.filter((event) => event.type === "speech_start").length, 1);
   });
 }
+
+test("rejects leakage when one microphone window spans adjacent reference pushes", () => {
+  const reference = pcm(800, 0.2, 310);
+  const leakage = pcm(300, 0.09, 310);
+  const gate = new EchoAwareUserVadGate();
+
+  for (let offset = 0; offset < reference.length; offset += 320) {
+    gate.pushReference({
+      source: "tab",
+      pcm: reference.slice(offset, offset + 320),
+      sampleRate: SAMPLE_RATE,
+      firstSampleExtensionSessionMs: (offset / SAMPLE_RATE) * 1_000,
+    });
+  }
+
+  const events = pushMicrophoneFrames(gate, leakage, 80);
+
+  assert.equal(events.some((event) => event.type === "speech_start"), false);
+});
 
 test("marks tab speech-like packets active immediately and releases after hysteresis", () => {
   const gate = new TabActivityGate();
