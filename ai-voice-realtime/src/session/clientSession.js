@@ -45,6 +45,8 @@ export class ClientSession {
       modelTurnTimeoutMs = 15_000,
       now = Date.now,
       rateLimiter = new SessionRateLimiter(),
+      recentTabTranscript = "",
+      speechPolicy = null,
     } = {}
   ) {
     this.browser = browser;
@@ -56,6 +58,8 @@ export class ClientSession {
     this.modelTurnTimeoutMs = modelTurnTimeoutMs;
     this.now = now;
     this.rateLimiter = rateLimiter;
+    this.recentTabTranscript = recentTabTranscript;
+    this.speechPolicy = speechPolicy;
     this.sessionId = randomUUID();
     this.sessionStartedAt = this.now();
     this.mode = Mode.NARRATING;
@@ -65,6 +69,7 @@ export class ClientSession {
     this.lastNarratedFrameNumber = 0;
     this.latestTimestampSeconds = 0;
     this.latestFrame = null;
+    this.lastFrameAcceptedAtMs = 0;
     this.captureSource = "camera";
     this.narrationLevel = NarrationLevel.STANDARD;
     this.narrationTimer = null;
@@ -224,22 +229,13 @@ export class ClientSession {
         initial,
         narrationLevel: this.narrationLevel,
         previousDescription: this.lastGroundedDescription,
+        recentTabTranscript: this.getRecentTabTranscript(),
         timestampSeconds: snapshot.timestampSeconds,
         signal: turn.controller.signal,
       });
-      if (!this.isCurrentTurn(turn.id)) return;
-
-      if (analysis.event) {
-        this.recordVisionEvent(analysis.event, snapshot.timestampSeconds);
-      }
-      if (
-        analysis.shouldNarrate &&
-        analysis.description &&
-        !shouldSuppressVisualDescription(analysis.description)
-      ) {
-        this.currentTurnTranscript = analysis.description;
-        this.lastGroundedDescription = analysis.description;
-      }
+      const isCurrent = this.isCurrentTurn(turn.id);
+      this.recordGroundedAnalysis(analysis, snapshot, { offerCandidate: isCurrent });
+      if (!isCurrent) return;
       this.finishModelTurn(turn.id);
     } catch (error) {
       this.handleModelTurnError(turn, error);
@@ -340,36 +336,16 @@ export class ClientSession {
 
     if (turn.timer) clearTimeout(turn.timer);
     const transcript = this.currentTurnTranscript.trim();
-    const suppressed =
-      turn.responseMode === Mode.NARRATING &&
-      shouldSuppressVisualDescription(transcript);
-    const publishResponse = Boolean(!interrupted && !suppressed && transcript);
-    const shouldCreateFallbackEvent =
-      publishResponse &&
-      turn.responseMode === Mode.NARRATING &&
-      !this.currentTurnHasEvent;
+    const suppressed = false;
+    const publishResponse = Boolean(
+      !interrupted && turn.responseMode === Mode.ANSWERING && transcript
+    );
 
     if (publishResponse) {
       this.sendBrowser({
-        type:
-          turn.responseMode === Mode.ANSWERING
-            ? "answer_update"
-            : "narration_update",
+        type: "answer_update",
         text: transcript,
       });
-    } else if (suppressed) {
-      this.sendBrowser({
-        type: "status_text",
-        text: "Ignored an ungrounded or StreamSense self-description.",
-      });
-    }
-
-    if (shouldCreateFallbackEvent) {
-      this.recordNarrationEvent(
-        transcript,
-        turn.initial,
-        turn.timestampSeconds
-      );
     }
 
     this.sendBrowser({
@@ -426,6 +402,34 @@ export class ClientSession {
     }
   }
 
+  recordGroundedAnalysis(analysis, snapshot, { offerCandidate = true } = {}) {
+    if (analysis.event) {
+      this.recordVisionEvent(analysis.event, snapshot.timestampSeconds);
+    }
+
+    this.lastGroundedDescription =
+      analysis.description || analysis.event?.description || analysis.semanticKey || "";
+
+    if (
+      !offerCandidate ||
+      !analysis.shouldNarrate ||
+      !analysis.isNew ||
+      analysis.coveredByTabSpeech ||
+      analysis.importance < 0.6 ||
+      !analysis.description ||
+      !analysis.semanticKey
+    ) {
+      return;
+    }
+
+    this.speechPolicy?.offerNarration({
+      description: analysis.description,
+      semanticKey: analysis.semanticKey,
+      importance: analysis.importance,
+      createdAtMs: snapshot.acceptedAtMs,
+    });
+  }
+
   publishEvent(event) {
     const { sessionId: _sessionId, ...publicEvent } = event;
     this.sendBrowser({ type: "event", event: publicEvent });
@@ -442,6 +446,11 @@ export class ClientSession {
     if (this.latestFrame?.hash === frameHash) return;
 
     this.videoFrames += 1;
+    this.lastFrameAcceptedAtMs = Math.max(
+      this.lastFrameAcceptedAtMs,
+      this.now() - this.sessionStartedAt,
+      0
+    );
     this.latestTimestampSeconds = normalizeTimestampSeconds(
       timestampSeconds,
       this.elapsedTimestampSeconds
@@ -451,6 +460,7 @@ export class ClientSession {
       data: Buffer.from(jpegBytes).toString("base64"),
       hash: frameHash,
       mimeType,
+      acceptedAtMs: this.lastFrameAcceptedAtMs,
     };
     for (const resolve of this.waitingForFirstFrameResolvers.splice(0)) resolve();
 
@@ -466,10 +476,30 @@ export class ClientSession {
 
   captureFrameSnapshot() {
     if (!this.latestFrame) return null;
+    const { acceptedAtMs, ...frame } = this.latestFrame;
     return Object.freeze({
-      frame: Object.freeze({ ...this.latestFrame }),
+      frame: Object.freeze(frame),
       timestampSeconds: this.latestTimestampSeconds,
+      acceptedAtMs,
     });
+  }
+
+  getRecentTabTranscript() {
+    const context =
+      typeof this.recentTabTranscript === "function"
+        ? this.recentTabTranscript()
+        : this.recentTabTranscript;
+    const text =
+      typeof context === "string"
+        ? context
+        : context?.segments
+          ?.map((segment) => segment.text)
+          .filter((segment) => typeof segment === "string")
+          .join("\n") ?? "";
+    const characters = Array.from(text);
+    return characters.length <= 2_000
+      ? text
+      : characters.slice(-2_000).join("");
   }
 
   get elapsedTimestampSeconds() {

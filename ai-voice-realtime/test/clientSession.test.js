@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 
 import { EventStore } from "../src/events/eventStore.js";
 import { ClientSession } from "../src/session/clientSession.js";
+import { SpeechPolicy } from "../src/session/speechPolicy.js";
 
 test("closes malformed and non-object JSON as a client policy violation", async () => {
   for (const raw of ["{", "null", "[]"]) {
@@ -137,7 +138,7 @@ test("reports a genuine provider error and accepts a later turn", async (t) => {
     async analyzeFrame() {
       attempts += 1;
       if (attempts === 1) throw new Error("provider unavailable");
-      return { shouldNarrate: false, description: "", event: null };
+      return suppressedAnalysis();
     },
   });
   t.after(() => fixture.eventStore.close());
@@ -182,6 +183,10 @@ test("records an event at the timestamp of the analyzed frame snapshot", async (
   analysis.resolve({
     shouldNarrate: true,
     description: "A score card is visible.",
+    semanticKey: "score:2-1",
+    importance: 0.7,
+    isNew: true,
+    coveredByTabSpeech: false,
     event: {
       eventType: "score_visible",
       entities: ["score card"],
@@ -197,14 +202,148 @@ test("records an event at the timestamp of the analyzed frame snapshot", async (
   fixture.session.close();
 });
 
+test("uses a session-relative acceptance clock instead of an extension frame timestamp", async (t) => {
+  let now = 5_000;
+  let receivedInput;
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({
+    now: () => now,
+    recentTabTranscript: () => "Commentary: Team A scores. ".repeat(120),
+    speechPolicy,
+    async analyzeFrame(input) {
+      receivedInput = input;
+      return approvedAnalysis();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  now = 9_125;
+  fixture.session.sendVideo(Buffer.from("scoreboard"), "image/jpeg", 12_345.678);
+  now = 17_000;
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.equal(receivedInput.recentTabTranscript.length, 2_000);
+  assert.equal(receivedInput.recentTabTranscript.includes("Commentary:"), true);
+  assert.deepEqual(speechPolicy.offers, [{
+    description: "The scoreboard now shows Team A leading 2-1.",
+    semanticKey: "score:team_a:2-1",
+    importance: 0.9,
+    createdAtMs: 4_125,
+  }]);
+  const [event] = fixture.eventStore.listBySession(fixture.session.sessionId);
+  assert.equal(event.timestampSeconds, 12_345.678);
+  assert.equal(
+    fixture.browser.messages.some((message) => message.type === "narration_update"),
+    false,
+  );
+  fixture.session.close();
+});
+
+test("advances visual state for a valid suppressed analysis without queueing speech", async (t) => {
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({
+    speechPolicy,
+    async analyzeFrame() {
+      return suppressedAnalysis({ semanticKey: "score:team_a:2-1" });
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.sendVideo(Buffer.from("scoreboard"), "image/jpeg", 1);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.equal(fixture.session.lastGroundedDescription, "score:team_a:2-1");
+  assert.deepEqual(speechPolicy.offers, []);
+  fixture.session.close();
+});
+
+test("offers only fresh uncovered important semantic narration candidates", async (t) => {
+  const speechPolicy = new FakeSpeechPolicy();
+  const analyses = [
+    approvedAnalysis({ shouldNarrate: false, description: "", semanticKey: null }),
+    approvedAnalysis({ isNew: false }),
+    approvedAnalysis({ coveredByTabSpeech: true }),
+    approvedAnalysis({ importance: 0.59 }),
+    approvedAnalysis({ description: "", semanticKey: null }),
+    approvedAnalysis(),
+  ];
+  const fixture = createFixture({
+    speechPolicy,
+    async analyzeFrame() {
+      return analyses.shift();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.sendVideo(Buffer.from("scoreboard"), "image/jpeg", 1);
+
+  for (let index = 0; index < 6; index += 1) {
+    fixture.session.requestNarration(false);
+    await flushAsyncWork();
+  }
+
+  assert.equal(speechPolicy.offers.length, 1);
+  assert.equal(speechPolicy.offers[0].semanticKey, "score:team_a:2-1");
+  fixture.session.close();
+});
+
+test("does not refresh a repeated sports candidate TTL during commentary", async (t) => {
+  let now = 0;
+  const speechPolicy = new SpeechPolicy({ nowBackendSessionMs: () => now });
+  speechPolicy.setTabAudioState("healthy");
+  speechPolicy.setLiveState("ready");
+  speechPolicy.setCloudTabSpeech(true);
+  const fixture = createFixture({
+    now: () => now,
+    speechPolicy,
+    async analyzeFrame() {
+      return approvedAnalysis();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+
+  fixture.session.sendVideo(Buffer.from("scoreboard one"), "image/jpeg", 3);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  assert.equal(speechPolicy.nextWakeAtMs(), 5_000);
+  now = 6_001;
+  fixture.session.sendVideo(Buffer.from("scoreboard two"), "image/jpeg", 99);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  speechPolicy.setCloudTabSpeech(false);
+
+  assert.deepEqual(speechPolicy.poll(), []);
+  fixture.session.close();
+});
+
+test("records a late atomic result but never offers it after a newer user turn", async (t) => {
+  const analysis = deferred();
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({
+    speechPolicy,
+    analyzeFrame() {
+      return analysis.promise;
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.sendVideo(Buffer.from("scoreboard"), "image/jpeg", 12.5);
+  fixture.session.requestNarration(false);
+  fixture.session.answerTextQuestion("What changed?");
+  analysis.resolve(approvedAnalysis());
+  await flushAsyncWork();
+
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 1);
+  assert.equal(fixture.session.lastGroundedDescription, approvedAnalysis().description);
+  assert.deepEqual(speechPolicy.offers, []);
+  fixture.session.close();
+});
+
 function createFixture({
-  analyzeFrame = async () => ({
-    shouldNarrate: false,
-    description: "",
-    event: null,
-  }),
+  analyzeFrame = async () => suppressedAnalysis(),
   answerQuestion = async () => "The frame is visible.",
   modelTurnTimeoutMs = 15_000,
+  now,
+  recentTabTranscript,
+  speechPolicy,
 } = {}) {
   const browser = new FakeBrowser();
   const eventStore = new EventStore();
@@ -214,8 +353,54 @@ function createFixture({
     analyzeFrame,
     answerQuestion,
     modelTurnTimeoutMs,
+    now,
+    recentTabTranscript,
+    speechPolicy,
   });
   return { browser, eventStore, session };
+}
+
+function suppressedAnalysis(overrides = {}) {
+  return {
+    shouldNarrate: false,
+    description: "",
+    semanticKey: null,
+    importance: 0,
+    isNew: false,
+    coveredByTabSpeech: false,
+    event: null,
+    ...overrides,
+  };
+}
+
+function approvedAnalysis(overrides = {}) {
+  return {
+    shouldNarrate: true,
+    description: "The scoreboard now shows Team A leading 2-1.",
+    semanticKey: "score:team_a:2-1",
+    importance: 0.9,
+    isNew: true,
+    coveredByTabSpeech: false,
+    event: {
+      eventType: "score_changed",
+      entities: ["Team A"],
+      description: "The scoreboard now shows Team A leading 2-1.",
+      importance: 0.9,
+      confidence: 0.95,
+    },
+    ...overrides,
+  };
+}
+
+class FakeSpeechPolicy {
+  constructor() {
+    this.offers = [];
+  }
+
+  offerNarration(candidate) {
+    this.offers.push(candidate);
+    return [];
+  }
 }
 
 class FakeBrowser extends EventEmitter {
