@@ -14,6 +14,10 @@ import {
 } from "../../services/captureTarget";
 import type { NarrationMode } from "../context/ConfigurationContext";
 import {
+  calculateFrameDimensions,
+  FRAME_CAPTURE_JPEG_QUALITY,
+} from "./frameCapture";
+import {
   createSessionGenerationGuard,
   shouldSyncIdleGuidance,
 } from "./sessionLifecycle";
@@ -387,10 +391,8 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         return;
       }
 
-      const sourceWidth = video.videoWidth || 640;
-      const sourceHeight = video.videoHeight || 360;
-      const targetWidth = 640;
-      const targetHeight = Math.round(targetWidth * (sourceHeight / sourceWidth));
+      const { width: targetWidth, height: targetHeight } =
+        calculateFrameDimensions(video.videoWidth, video.videoHeight);
       canvas.width = targetWidth;
       canvas.height = targetHeight;
       context.drawImage(video, 0, 0, targetWidth, targetHeight);
@@ -448,7 +450,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           }
         },
         "image/jpeg",
-        0.72,
+        FRAME_CAPTURE_JPEG_QUALITY,
       );
     }, VIDEO_FRAME_INTERVAL_MS);
   }, []);
