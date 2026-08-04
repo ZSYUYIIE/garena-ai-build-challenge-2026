@@ -147,6 +147,7 @@ class ReferenceRing {
       stream.expectedNextInputTimestampMs === null ||
       Math.abs(reference.firstSampleExtensionSessionMs - stream.expectedNextInputTimestampMs) > 1
     ) {
+      this.clearSamples();
       stream.resampler.reset();
       stream.nextOutputSampleIndex = Math.round(
         (reference.firstSampleExtensionSessionMs * VAD_SAMPLE_RATE) / 1_000,
@@ -190,6 +191,10 @@ class ReferenceRing {
 
   reset(): void {
     this.streamsByRate.clear();
+    this.clearSamples();
+  }
+
+  private clearSamples(): void {
     this.firstSampleIndex = null;
     this.samples = new Int16Array();
   }

@@ -159,6 +159,36 @@ test("rejects leakage when one microphone window spans adjacent reference pushes
   assert.equal(events.some((event) => event.type === "speech_start"), false);
 });
 
+test("rebases a large reference timestamp discontinuity without retaining a gap", () => {
+  const previousReference = pcm(800, 0.2, 310);
+  const restartedReference = pcm(800, 0.2, 470);
+  const restartedLeakage = pcm(300, 0.09, 470);
+  const restartedAtMs = 1_000_000_000;
+  const gate = new EchoAwareUserVadGate();
+
+  gate.pushReference({
+    source: "tab",
+    pcm: previousReference,
+    sampleRate: SAMPLE_RATE,
+    firstSampleExtensionSessionMs: 0,
+  });
+  const arrayBuffersBefore = process.memoryUsage().arrayBuffers;
+  assert.doesNotThrow(() =>
+    gate.pushReference({
+      source: "tab",
+      pcm: restartedReference,
+      sampleRate: SAMPLE_RATE,
+      firstSampleExtensionSessionMs: restartedAtMs,
+    }),
+  );
+  const allocatedArrayBuffers = process.memoryUsage().arrayBuffers - arrayBuffersBefore;
+  assert.ok(allocatedArrayBuffers < 1_000_000);
+
+  const events = pushMicrophoneFrames(gate, restartedLeakage, restartedAtMs + 80);
+
+  assert.equal(events.some((event) => event.type === "speech_start"), false);
+});
+
 test("marks tab speech-like packets active immediately and releases after hysteresis", () => {
   const gate = new TabActivityGate();
 
