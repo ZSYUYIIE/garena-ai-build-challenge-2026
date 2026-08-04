@@ -1,5 +1,9 @@
 const TAB_AUDIO_STATES = new Set(["absent", "healthy", "degraded"]);
 const LIVE_STATES = new Set(["connecting", "ready", "degraded", "closed"]);
+const DEFAULT_RECENT_SETTLEMENT_LIMIT = 256;
+const DEFAULT_INVALIDATED_RESERVATION_LIMIT = 256;
+const DEFAULT_SEMANTIC_COOLDOWN_LIMIT = 512;
+const MAX_RESERVATION_SEQUENCE = 0xffff_ffff;
 
 function assertFiniteNonnegative(value, name) {
   if (!Number.isFinite(value) || value < 0) {
@@ -11,9 +15,29 @@ function assertDuration(value, name) {
   assertFiniteNonnegative(value, name);
 }
 
+function assertPositiveSafeInteger(value, name) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${name} must be a positive safe integer`);
+  }
+}
+
 function assertTurnId(turnId) {
   if (typeof turnId !== "string" || turnId.length === 0) {
     throw new TypeError("turnId must be a nonempty string");
+  }
+}
+
+function assertReservationId(reservationId) {
+  if (typeof reservationId !== "string" || reservationId.length === 0) {
+    throw new TypeError("reservationId must be a nonempty string");
+  }
+}
+
+function addBounded(set, value, limit) {
+  set.delete(value);
+  set.add(value);
+  while (set.size > limit) {
+    set.delete(set.values().next().value);
   }
 }
 
@@ -40,12 +64,23 @@ function validateCandidate(candidate) {
 /**
  * Backend-owned, provider-free gating for automatic narration. The caller owns
  * scheduling and performs the actions returned by each transition.
+ *
+ * `start_narration` includes an opaque `reservationId` (at most 9 ASCII
+ * characters). The caller must acknowledge that exact dispatch with
+ * `markNarrationStarted(turnId, reservationId)`. A tokenized acknowledgement
+ * can consume only the matching current reservation. The no-token overload is
+ * retained solely for seeding an already-active narration in state tests and
+ * never consumes a tokenized reservation; if one is outstanding, the untracked
+ * no-token turn is cancelled by its supplied turn ID.
  */
 export class SpeechPolicy {
   #nowBackendSessionMs;
   #narrationSilenceMs;
   #narrationTtlMs;
   #semanticCooldownMs;
+  #recentSettlementLimit;
+  #invalidatedReservationLimit;
+  #semanticCooldownLimit;
   #lastNowMs = null;
   #tabAudioState = "degraded";
   #localTabSpeech = false;
@@ -55,7 +90,9 @@ export class SpeechPolicy {
   #pendingCandidate = null;
   #startReservation = null;
   #activeTurn = null;
-  #seenNarrationTurnIds = new Set();
+  #nextReservationSequence = 1;
+  #invalidatedReservationIds = new Set();
+  #recentSettlements = new Set();
   #cooldowns = new Map();
 
   constructor({
@@ -63,6 +100,9 @@ export class SpeechPolicy {
     narrationSilenceMs = 750,
     narrationTtlMs = 5_000,
     semanticCooldownMs = 15_000,
+    recentSettlementLimit = DEFAULT_RECENT_SETTLEMENT_LIMIT,
+    invalidatedReservationLimit = DEFAULT_INVALIDATED_RESERVATION_LIMIT,
+    semanticCooldownLimit = DEFAULT_SEMANTIC_COOLDOWN_LIMIT,
   } = {}) {
     if (typeof nowBackendSessionMs !== "function") {
       throw new TypeError("nowBackendSessionMs must be a function");
@@ -70,11 +110,17 @@ export class SpeechPolicy {
     assertDuration(narrationSilenceMs, "narrationSilenceMs");
     assertDuration(narrationTtlMs, "narrationTtlMs");
     assertDuration(semanticCooldownMs, "semanticCooldownMs");
+    assertPositiveSafeInteger(recentSettlementLimit, "recentSettlementLimit");
+    assertPositiveSafeInteger(invalidatedReservationLimit, "invalidatedReservationLimit");
+    assertPositiveSafeInteger(semanticCooldownLimit, "semanticCooldownLimit");
 
     this.#nowBackendSessionMs = nowBackendSessionMs;
     this.#narrationSilenceMs = narrationSilenceMs;
     this.#narrationTtlMs = narrationTtlMs;
     this.#semanticCooldownMs = semanticCooldownMs;
+    this.#recentSettlementLimit = recentSettlementLimit;
+    this.#invalidatedReservationLimit = invalidatedReservationLimit;
+    this.#semanticCooldownLimit = semanticCooldownLimit;
     this.#readNow();
   }
 
@@ -119,6 +165,7 @@ export class SpeechPolicy {
   offerNarration(candidate) {
     validateCandidate(candidate);
     const nowMs = this.#readNow();
+    this.#pruneCooldowns(nowMs);
     const actions = this.#discardExpired(nowMs);
 
     if (this.#isExpired(candidate, nowMs) || this.#isCoolingDown(candidate.semanticKey, nowMs)) {
@@ -158,26 +205,46 @@ export class SpeechPolicy {
     return actions;
   }
 
-  markNarrationStarted(turnId) {
+  markNarrationStarted(turnId, reservationId) {
     assertTurnId(turnId);
+    if (reservationId !== undefined) assertReservationId(reservationId);
     const nowMs = this.#readNow();
-    if (this.#seenNarrationTurnIds.has(turnId)) return [];
+    this.#pruneCooldowns(nowMs);
 
     const actions = this.#discardExpired(nowMs);
-    if (this.#startReservation?.invalidated) {
-      this.#startReservation = null;
-      this.#seenNarrationTurnIds.add(turnId);
+    if (reservationId !== undefined) {
+      const settlementKey = `reservation:${reservationId}`;
+      if (this.#recentSettlements.has(settlementKey)) return actions;
+
+      if (
+        this.#startReservation?.reservationId === reservationId
+        && !this.#activeTurn
+      ) {
+        const candidate = this.#startReservation.candidate;
+        this.#startReservation = null;
+        this.#invalidatedReservationIds.delete(reservationId);
+        this.#recordSettlement(settlementKey);
+        this.#recordCooldown(candidate.semanticKey, nowMs);
+        this.#activeTurn = { mode: "narration", turnId };
+        return actions;
+      }
+
+      this.#invalidatedReservationIds.delete(reservationId);
+      this.#recordSettlement(settlementKey);
       actions.push({ type: "cancel_narration", turnId });
       return actions;
     }
-    if (actions.length > 0 || this.#activeTurn) return actions;
 
-    const candidate = this.#startReservation?.candidate ?? null;
-    this.#startReservation = null;
-    if (candidate) {
-      this.#cooldowns.set(candidate.semanticKey, nowMs + this.#semanticCooldownMs);
+    const settlementKey = `direct:${turnId}`;
+    if (this.#recentSettlements.has(settlementKey)) return actions;
+    this.#recordSettlement(settlementKey);
+    if (this.#startReservation) {
+      actions.push({ type: "cancel_narration", turnId });
+      return actions;
     }
-    this.#seenNarrationTurnIds.add(turnId);
+    if (actions.length > 0 || this.#activeTurn) {
+      return actions;
+    }
     this.#activeTurn = { mode: "narration", turnId };
     return actions;
   }
@@ -199,21 +266,20 @@ export class SpeechPolicy {
 
     this.#startReservation = {
       candidate: this.#pendingCandidate,
-      invalidated: false,
+      reservationId: this.#createReservationId(),
     };
     this.#pendingCandidate = null;
     return [{
       type: "start_narration",
       candidate: copyCandidate(this.#startReservation.candidate),
+      reservationId: this.#startReservation.reservationId,
     }];
   }
 
   nextWakeAtMs() {
     const nowMs = this.#readNow();
     const reservation = this.#startReservation;
-    const candidate = this.#pendingCandidate ?? (
-      reservation && !reservation.invalidated ? reservation.candidate : null
-    );
+    const candidate = this.#pendingCandidate ?? reservation?.candidate;
     if (!candidate) return null;
 
     const expiryMs = candidate.createdAtMs + this.#narrationTtlMs;
@@ -274,18 +340,23 @@ export class SpeechPolicy {
     }
     if (
       this.#startReservation
-      && !this.#startReservation.invalidated
       && this.#isExpired(this.#startReservation.candidate, nowMs)
     ) {
-      this.#startReservation.invalidated = true;
-      return [{ type: "drop_narration", reason: "expired" }];
+      const actions = [];
+      this.#invalidateReservation(actions, "expired");
+      return actions;
     }
     return [];
   }
 
   #invalidateReservation(actions, reason) {
-    if (!this.#startReservation || this.#startReservation.invalidated) return;
-    this.#startReservation.invalidated = true;
+    if (!this.#startReservation) return;
+    addBounded(
+      this.#invalidatedReservationIds,
+      this.#startReservation.reservationId,
+      this.#invalidatedReservationLimit,
+    );
+    this.#startReservation = null;
     actions.push({ type: "drop_narration", reason });
   }
 
@@ -295,12 +366,46 @@ export class SpeechPolicy {
 
   #isCoolingDown(semanticKey, nowMs) {
     const untilMs = this.#cooldowns.get(semanticKey);
-    if (untilMs === undefined) return false;
-    if (nowMs >= untilMs) {
-      this.#cooldowns.delete(semanticKey);
-      return false;
+    return untilMs !== undefined && nowMs < untilMs;
+  }
+
+  #pruneCooldowns(nowMs) {
+    for (const [semanticKey, untilMs] of this.#cooldowns) {
+      if (nowMs >= untilMs) this.#cooldowns.delete(semanticKey);
     }
-    return true;
+  }
+
+  #recordCooldown(semanticKey, nowMs) {
+    this.#pruneCooldowns(nowMs);
+    this.#cooldowns.delete(semanticKey);
+    this.#cooldowns.set(semanticKey, nowMs + this.#semanticCooldownMs);
+    while (this.#cooldowns.size > this.#semanticCooldownLimit) {
+      this.#cooldowns.delete(this.#cooldowns.keys().next().value);
+    }
+  }
+
+  #recordSettlement(settlementKey) {
+    addBounded(
+      this.#recentSettlements,
+      settlementKey,
+      this.#recentSettlementLimit,
+    );
+  }
+
+  #createReservationId() {
+    while (true) {
+      const reservationId = `r:${this.#nextReservationSequence.toString(36)}`;
+      this.#nextReservationSequence = this.#nextReservationSequence === MAX_RESERVATION_SEQUENCE
+        ? 1
+        : this.#nextReservationSequence + 1;
+      if (
+        this.#startReservation?.reservationId !== reservationId
+        && !this.#invalidatedReservationIds.has(reservationId)
+        && !this.#recentSettlements.has(`reservation:${reservationId}`)
+      ) {
+        return reservationId;
+      }
+    }
   }
 
   #refreshSilence(nowMs) {

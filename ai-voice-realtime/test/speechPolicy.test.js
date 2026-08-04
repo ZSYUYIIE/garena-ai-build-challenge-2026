@@ -35,13 +35,21 @@ function makeReadyForNarration(fixture) {
   fixture.policy.setCloudTabSpeech(false);
 }
 
+function assertStartAction(action, event) {
+  assert.equal(action.type, "start_narration");
+  assert.deepEqual(action.candidate, event);
+  assert.equal(typeof action.reservationId, "string");
+  assert.ok(action.reservationId.length > 0 && action.reservationId.length <= 16);
+  return action.reservationId;
+}
+
 function dispatchNarration(fixture, event = candidate("score:2-1")) {
   makeReadyForNarration(fixture);
   fixture.policy.offerNarration(event);
   fixture.setNow(750);
-  assert.deepEqual(fixture.policy.poll(), [
-    { type: "start_narration", candidate: event },
-  ]);
+  const actions = fixture.policy.poll();
+  assert.equal(actions.length, 1);
+  return assertStartAction(actions[0], event);
 }
 
 test("permits narration only after healthy tab silence and before expiry", () => {
@@ -52,7 +60,9 @@ test("permits narration only after healthy tab silence and before expiry", () =>
   assert.deepEqual(fixture.policy.offerNarration(event), []);
   assert.deepEqual(fixture.policy.poll(), []);
   fixture.setNow(750);
-  assert.deepEqual(fixture.policy.poll(), [{ type: "start_narration", candidate: event }]);
+  const actions = fixture.policy.poll();
+  assert.equal(actions.length, 1);
+  assertStartAction(actions[0], event);
   assert.deepEqual(fixture.policy.poll(), []);
 });
 
@@ -127,8 +137,11 @@ test("either local or Cloud tab speech blocks pending narration and cancels it o
     assert.deepEqual(fixture.policy.setLocalTabSpeech(false), []);
     assert.deepEqual(fixture.policy.setCloudTabSpeech(false), []);
     fixture.setNow(1_750);
-    assert.equal(fixture.policy.poll()[0].type, "start_narration");
-    fixture.policy.markNarrationStarted("narration-1");
+    const reservationId = assertStartAction(
+      fixture.policy.poll()[0],
+      candidate("score:2-1"),
+    );
+    fixture.policy.markNarrationStarted("narration-1", reservationId);
     assert.deepEqual(setSpeech(fixture.policy), [
       { type: "cancel_narration", turnId: "narration-1" },
     ]);
@@ -188,8 +201,8 @@ test("records semantic cooldown only when narration actually starts", () => {
   const first = candidate("score:2-1");
   fixture.policy.offerNarration(first);
   fixture.setNow(750);
-  fixture.policy.poll();
-  fixture.policy.markNarrationStarted("narration-1");
+  const reservationId = assertStartAction(fixture.policy.poll()[0], first);
+  fixture.policy.markNarrationStarted("narration-1", reservationId);
   fixture.policy.finishTurn("narration-1");
 
   fixture.setNow(1_000);
@@ -279,30 +292,36 @@ test("local or Cloud speech invalidates a dispatched narration and cancels a lat
     (policy) => policy.setCloudTabSpeech(true),
   ]) {
     const fixture = createPolicy();
-    dispatchNarration(fixture);
+    const reservationId = dispatchNarration(fixture);
 
     assert.deepEqual(setSpeech(fixture.policy), [
       { type: "drop_narration", reason: "tab_speech" },
     ]);
     assert.equal(fixture.policy.nextWakeAtMs(), null);
-    assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), [
+    assert.deepEqual(fixture.policy.markNarrationStarted("narration-late", reservationId), [
       { type: "cancel_narration", turnId: "narration-late" },
     ]);
-    assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), []);
+    assert.deepEqual(
+      fixture.policy.markNarrationStarted("narration-late", reservationId),
+      [],
+    );
   }
 });
 
 test("a user turn invalidates a dispatched narration and a late mark cannot replace the answer", () => {
   const fixture = createPolicy();
-  dispatchNarration(fixture);
+  const reservationId = dispatchNarration(fixture);
 
   assert.deepEqual(fixture.policy.startUserTurn("answer-1"), [
     { type: "drop_narration", reason: "user_turn" },
   ]);
-  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), [
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late", reservationId), [
     { type: "cancel_narration", turnId: "narration-late" },
   ]);
-  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), []);
+  assert.deepEqual(
+    fixture.policy.markNarrationStarted("narration-late", reservationId),
+    [],
+  );
   assert.deepEqual(fixture.policy.finishTurn("answer-1"), []);
 
   fixture.policy.markNarrationStarted("narration-2");
@@ -313,34 +332,40 @@ test("a user turn invalidates a dispatched narration and a late mark cannot repl
 
 test("STT degradation invalidates a dispatched narration and cancels its late start once", () => {
   const fixture = createPolicy();
-  dispatchNarration(fixture);
+  const reservationId = dispatchNarration(fixture);
 
   assert.deepEqual(fixture.policy.setTabAudioState("degraded"), [
     { type: "drop_narration", reason: "tab_audio_degraded" },
   ]);
-  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), [
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late", reservationId), [
     { type: "cancel_narration", turnId: "narration-late" },
   ]);
-  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), []);
+  assert.deepEqual(
+    fixture.policy.markNarrationStarted("narration-late", reservationId),
+    [],
+  );
 });
 
 test("Live reconnect invalidates a dispatched narration and cancels its late start once", () => {
   const fixture = createPolicy();
-  dispatchNarration(fixture);
+  const reservationId = dispatchNarration(fixture);
 
   assert.deepEqual(fixture.policy.setLiveState("connecting"), [
     { type: "drop_narration", reason: "live_degraded" },
   ]);
-  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), [
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late", reservationId), [
     { type: "cancel_narration", turnId: "narration-late" },
   ]);
-  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), []);
+  assert.deepEqual(
+    fixture.policy.markNarrationStarted("narration-late", reservationId),
+    [],
+  );
   assert.deepEqual(fixture.policy.setLiveState("connecting"), []);
 });
 
 test("a dispatched start schedules only its future expiry and expiry remains observable to poll", () => {
   const fixture = createPolicy();
-  dispatchNarration(fixture);
+  const reservationId = dispatchNarration(fixture);
 
   assert.equal(fixture.policy.nextWakeAtMs(), 5_000);
   assert.equal(fixture.policy.nextWakeAtMs(), 5_000);
@@ -352,7 +377,161 @@ test("a dispatched start schedules only its future expiry and expiry remains obs
   ]);
   assert.deepEqual(fixture.policy.poll(), []);
   assert.equal(fixture.policy.nextWakeAtMs(), null);
-  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), [
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late", reservationId), [
     { type: "cancel_narration", turnId: "narration-late" },
   ]);
+});
+
+test("an invalidated dispatch with no acknowledgement does not block a healthy newer dispatch", () => {
+  const fixture = createPolicy({ narrationSilenceMs: 0 });
+  makeReadyForNarration(fixture);
+  const eventA = candidate("score:A");
+  fixture.policy.offerNarration(eventA);
+  const reservationA = assertStartAction(fixture.policy.poll()[0], eventA);
+
+  assert.deepEqual(fixture.policy.setLocalTabSpeech(true), [
+    { type: "drop_narration", reason: "tab_speech" },
+  ]);
+  fixture.policy.setLocalTabSpeech(false);
+  const eventB = candidate("score:B");
+  assert.deepEqual(fixture.policy.offerNarration(eventB), []);
+  const reservationB = assertStartAction(fixture.policy.poll()[0], eventB);
+
+  assert.notEqual(reservationA, reservationB);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-B", reservationB), []);
+  assert.deepEqual(fixture.policy.setCloudTabSpeech(true), [
+    { type: "cancel_narration", turnId: "narration-B" },
+  ]);
+});
+
+test("a stale token cannot consume a newer reservation and the exact token cooldowns only B", () => {
+  const fixture = createPolicy({ narrationSilenceMs: 0 });
+  makeReadyForNarration(fixture);
+  const eventA = candidate("score:A");
+  fixture.policy.offerNarration(eventA);
+  const reservationA = assertStartAction(fixture.policy.poll()[0], eventA);
+  fixture.policy.setLocalTabSpeech(true);
+  fixture.policy.setLocalTabSpeech(false);
+
+  const eventB = candidate("score:B");
+  fixture.policy.offerNarration(eventB);
+  const reservationB = assertStartAction(fixture.policy.poll()[0], eventB);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-A", reservationA), [
+    { type: "cancel_narration", turnId: "narration-A" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-A", reservationA), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-B", reservationB), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-B", reservationB), []);
+  fixture.policy.finishTurn("narration-B");
+
+  assert.deepEqual(fixture.policy.offerNarration(candidate("score:B")), []);
+  assert.equal(fixture.policy.nextWakeAtMs(), null);
+  assert.deepEqual(fixture.policy.offerNarration(candidate("score:A")), []);
+  assertStartAction(fixture.policy.poll()[0], eventA);
+});
+
+test("a no-token state-seeding mark cannot consume a tokenized reservation", () => {
+  const fixture = createPolicy({ narrationSilenceMs: 0 });
+  makeReadyForNarration(fixture);
+  const eventB = candidate("score:B");
+  fixture.policy.offerNarration(eventB);
+  const reservationB = assertStartAction(fixture.policy.poll()[0], eventB);
+
+  assert.deepEqual(fixture.policy.markNarrationStarted("seed-without-token"), [
+    { type: "cancel_narration", turnId: "seed-without-token" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("seed-without-token"), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-B", reservationB), []);
+  assert.deepEqual(fixture.policy.setCloudTabSpeech(true), [
+    { type: "cancel_narration", turnId: "narration-B" },
+  ]);
+});
+
+test("recent direct settlements are bounded while recent duplicates remain idempotent", () => {
+  const fixture = createPolicy({ recentSettlementLimit: 2 });
+  for (const turnId of ["direct-1", "direct-2", "direct-3"]) {
+    assert.deepEqual(fixture.policy.markNarrationStarted(turnId), []);
+    assert.deepEqual(fixture.policy.finishTurn(turnId), []);
+  }
+
+  assert.deepEqual(fixture.policy.markNarrationStarted("direct-3"), []);
+  assert.deepEqual(fixture.policy.setLocalTabSpeech(true), []);
+  fixture.policy.setLocalTabSpeech(false);
+
+  assert.deepEqual(fixture.policy.markNarrationStarted("direct-1"), []);
+  assert.deepEqual(fixture.policy.setLocalTabSpeech(true), [
+    { type: "cancel_narration", turnId: "direct-1" },
+  ]);
+});
+
+test("bounded invalidated-token history cannot block or corrupt current reservations", () => {
+  const fixture = createPolicy({
+    narrationSilenceMs: 0,
+    invalidatedReservationLimit: 2,
+    recentSettlementLimit: 2,
+  });
+  makeReadyForNarration(fixture);
+  const invalidated = [];
+  for (let index = 0; index < 5; index += 1) {
+    const event = candidate(`old:${index}`);
+    fixture.policy.offerNarration(event);
+    invalidated.push(assertStartAction(fixture.policy.poll()[0], event));
+    fixture.policy.setLocalTabSpeech(true);
+    fixture.policy.setLocalTabSpeech(false);
+  }
+
+  const current = candidate("current");
+  fixture.policy.offerNarration(current);
+  const currentReservation = assertStartAction(fixture.policy.poll()[0], current);
+  assert.deepEqual(
+    fixture.policy.markNarrationStarted("very-late", invalidated[0]),
+    [{ type: "cancel_narration", turnId: "very-late" }],
+  );
+  assert.deepEqual(
+    fixture.policy.markNarrationStarted("very-late", invalidated[0]),
+    [],
+  );
+  assert.deepEqual(
+    fixture.policy.markNarrationStarted("current-turn", currentReservation),
+    [],
+  );
+  assert.deepEqual(fixture.policy.setCloudTabSpeech(true), [
+    { type: "cancel_narration", turnId: "current-turn" },
+  ]);
+});
+
+test("semantic cooldown storage is capped and all expired keys are pruned before offers", () => {
+  const fixture = createPolicy({
+    narrationSilenceMs: 0,
+    semanticCooldownLimit: 2,
+  });
+  makeReadyForNarration(fixture);
+
+  for (let index = 0; index < 5; index += 1) {
+    const event = candidate(`semantic:${index}`);
+    fixture.policy.offerNarration(event);
+    const reservationId = assertStartAction(fixture.policy.poll()[0], event);
+    fixture.policy.markNarrationStarted(`narration-${index}`, reservationId);
+    fixture.policy.finishTurn(`narration-${index}`);
+  }
+
+  assert.deepEqual(fixture.policy.offerNarration(candidate("semantic:4")), []);
+  assert.equal(fixture.policy.nextWakeAtMs(), null);
+  const evicted = candidate("semantic:0");
+  fixture.policy.offerNarration(evicted);
+  assertStartAction(fixture.policy.poll()[0], evicted);
+
+  const fresh = createPolicy({ narrationSilenceMs: 0, semanticCooldownLimit: 2 });
+  makeReadyForNarration(fresh);
+  for (const key of ["expired:A", "expired:B"]) {
+    const event = candidate(key);
+    fresh.policy.offerNarration(event);
+    const reservationId = assertStartAction(fresh.policy.poll()[0], event);
+    fresh.policy.markNarrationStarted(`turn:${key}`, reservationId);
+    fresh.policy.finishTurn(`turn:${key}`);
+  }
+  fresh.setNow(15_000);
+  const afterExpiry = candidate("fresh:C", { createdAtMs: 15_000 });
+  fresh.policy.offerNarration(afterExpiry);
+  assertStartAction(fresh.policy.poll()[0], afterExpiry);
 });
