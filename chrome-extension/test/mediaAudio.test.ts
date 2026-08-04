@@ -55,7 +55,26 @@ class FakeNode {
 }
 
 class FakeGain extends FakeNode {
-  readonly gain = { value: 1, setValueAtTime: (value: number) => { this.gain.value = value; }, linearRampToValueAtTime: (value: number) => { this.gain.value = value; } };
+  readonly automation: Array<{ method: string; value?: number; time: number }> = [];
+  readonly gain: {
+    value: number;
+    setValueAtTime: (value: number, time: number) => void;
+    linearRampToValueAtTime: (value: number, time: number) => void;
+    cancelAndHoldAtTime?: (time: number) => void;
+    cancelScheduledValues: (time: number) => void;
+  } = {
+    value: 1,
+    setValueAtTime: (value, time) => {
+      this.gain.value = value;
+      this.automation.push({ method: "set", value, time });
+    },
+    linearRampToValueAtTime: (value, time) => {
+      this.gain.value = value;
+      this.automation.push({ method: "ramp", value, time });
+    },
+    cancelAndHoldAtTime: (time) => this.automation.push({ method: "hold", time }),
+    cancelScheduledValues: (time) => this.automation.push({ method: "cancel", time }),
+  };
 }
 
 class FakeWorklet extends FakeNode {
@@ -195,6 +214,40 @@ test("routes tab audio to full-volume playback and a separate STT callback", asy
   assert.equal(media.context.gains[0].gain.value, 1);
   assert.equal(media.context.sources[0].destinations.includes(media.context.gains[0]), true);
   assert.equal(media.context.sources[0].destinations.includes(media.context.worklets[0]), true);
+});
+
+test("cancels held tab-gain automation before every rapid duck and restore ramp", async () => {
+  const { media } = await startBoth();
+  const gain = media.context.gains[0];
+  gain.automation.length = 0;
+
+  media.audio.setTabGain(0.3, 150);
+  media.audio.setTabGain(1, 250);
+  media.audio.setTabGain(0.3, 150);
+
+  assert.deepEqual(
+    gain.automation,
+    [
+      { method: "hold", time: 1 }, { method: "ramp", value: 0.3, time: 1.15 },
+      { method: "hold", time: 1 }, { method: "ramp", value: 1, time: 1.25 },
+      { method: "hold", time: 1 }, { method: "ramp", value: 0.3, time: 1.15 },
+    ],
+  );
+});
+
+test("falls back to canceling and pinning the current tab gain before a ramp", async () => {
+  const { media } = await startBoth();
+  const gain = media.context.gains[0];
+  gain.automation.length = 0;
+  gain.gain.cancelAndHoldAtTime = undefined;
+
+  media.audio.setTabGain(0.3, 150);
+
+  assert.deepEqual(gain.automation, [
+    { method: "cancel", time: 1 },
+    { method: "set", value: 1, time: 1 },
+    { method: "ramp", value: 0.3, time: 1.15 },
+  ]);
 });
 
 test("does not make microphone PCM audible or route tab PCM to the mic callback", async () => {

@@ -295,8 +295,15 @@ export class RealtimeMediaAudio {
     const node = this.tabBranch?.nodes[1] as (GraphNode & { gain?: AudioParam }) | undefined;
     const context = this.audioContext;
     if (!node?.gain || !context) return;
-    node.gain.setValueAtTime(node.gain.value, context.currentTime);
-    node.gain.linearRampToValueAtTime(gain, context.currentTime + Math.max(0, fadeMs) / 1_000);
+    const audioParam = node.gain;
+    const now = context.currentTime;
+    try {
+      audioParam.cancelAndHoldAtTime(now);
+    } catch {
+      audioParam.cancelScheduledValues(now);
+      audioParam.setValueAtTime(audioParam.value, now);
+    }
+    audioParam.linearRampToValueAtTime(gain, now + Math.max(0, fadeMs) / 1_000);
   }
 
   async stop(): Promise<void> {
