@@ -21,6 +21,32 @@ export function createSessionGenerationGuard(): SessionGenerationGuard {
   };
 }
 
+export type SessionCallbackGate = {
+  allows: () => boolean;
+  run: (callback: () => void) => boolean;
+  close: () => void;
+};
+
+/** Prevents queued media/worklet callbacks from crossing a session generation. */
+export function createSessionCallbackGate(
+  isCurrent: () => boolean,
+): SessionCallbackGate {
+  let closed = false;
+  return {
+    allows() {
+      return !closed && isCurrent();
+    },
+    run(callback) {
+      if (closed || !isCurrent()) return false;
+      callback();
+      return true;
+    },
+    close() {
+      closed = true;
+    },
+  };
+}
+
 export type RevisionGuard = {
   snapshot: () => number;
   markChanged: () => void;

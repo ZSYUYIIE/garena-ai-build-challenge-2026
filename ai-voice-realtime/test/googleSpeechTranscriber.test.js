@@ -234,6 +234,38 @@ test("replays the complete bounded bridge once in original PCM order", async () 
   await transcriber.close();
 });
 
+test("deduplicates a final segment repeated by the 500 ms rotation bridge", async () => {
+  const timers = new FakeTimers();
+  const { transcriber, finals } = makeTranscriber({ timers, rotateAfterMs: 285_000 });
+  await transcriber.start();
+  const pcm = Buffer.alloc(16_000, 4);
+  transcriber.write(pcm, 284_500);
+  const first = FakeSpeechClient.instances[0].streams[0];
+  first.emit("data", { results: [result({
+    isFinal: true,
+    alternatives: [{ transcript: "the winning goal" }],
+    seconds: 0,
+    nanos: 500_000_000,
+  })] });
+
+  timers.advance(285_000);
+  const replacement = FakeSpeechClient.instances[0].streams[1];
+  replacement.emit("data", { results: [result({
+    isFinal: true,
+    alternatives: [{ transcript: "the winning goal" }],
+    seconds: 0,
+    nanos: 500_000_000,
+  })] });
+
+  assert.deepEqual(finals, [{
+    startMs: 284_500,
+    endMs: 285_000,
+    text: "the winning goal",
+    languageCode: "en-US",
+  }]);
+  await transcriber.close();
+});
+
 test("does not send bridge or live PCM until a config-backpressured stream drains", async () => {
   const { transcriber } = makeTranscriber({
     streamSetup: (stream) => { stream.writeResults = [false]; },
@@ -246,6 +278,22 @@ test("does not send bridge or live PCM until a config-backpressured stream drain
   assert.equal(stream.writes.length, 1);
   stream.emit("drain");
   assert.deepEqual(stream.writes.slice(1), [{ audio: pcm }]);
+  await transcriber.close();
+});
+
+test("buffers at most one second of tab PCM while waiting for provider drain", async () => {
+  const { transcriber } = makeTranscriber({
+    streamSetup: (stream) => { stream.writeResults = [false]; },
+  });
+  await transcriber.start();
+  const stream = FakeSpeechClient.instances[0].streams[0];
+  for (let index = 0; index < 10; index += 1) {
+    assert.equal(transcriber.write(Buffer.alloc(3_200, index), index * 100), "backpressured");
+  }
+  assert.equal(transcriber.health, "ready");
+  assert.equal(transcriber.write(Buffer.alloc(3_200, 10), 1_000), "degraded");
+  assert.equal(transcriber.health, "degraded");
+  assert.equal(stream.destroyCalls, 1);
   await transcriber.close();
 });
 
@@ -410,6 +458,21 @@ test("destroys a record when its first config write throws and retries without l
   assert.equal(FakeSpeechClient.instances[0].streams.length, 2);
   await transcriber.close();
   assert.equal(failed.destroyCalls, 1);
+});
+
+test("contains a synchronous provider audio-write failure and enters bounded recovery", async () => {
+  const timers = new FakeTimers();
+  const { transcriber } = makeTranscriber({ timers });
+  await transcriber.start();
+  const failed = FakeSpeechClient.instances[0].streams[0];
+  failed.throwOnWrite = true;
+
+  assert.equal(transcriber.write(Buffer.alloc(3_200), 1_000), "degraded");
+  assert.equal(failed.destroyCalls, 1);
+  assert.equal(transcriber.health, "degraded");
+  timers.advance(250);
+  assert.equal(FakeSpeechClient.instances[0].streams.length, 2);
+  await transcriber.close();
 });
 
 test("owns a failed rotation replacement without destroying the old stream before recovery", async () => {

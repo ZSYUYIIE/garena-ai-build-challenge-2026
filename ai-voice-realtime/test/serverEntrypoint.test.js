@@ -39,6 +39,7 @@ test("server shutdown awaits session cleanup before closing the event store", as
   const events = [];
   const eventStore = { close() { events.push("event_store_closed"); } };
   const runtime = createStreamSenseServer({
+    extensionId: "abcdefghijklmnopabcdefghijklmnop",
     eventStore,
     sessionFactory() {
       return {
@@ -67,6 +68,7 @@ test("server retains a browser-closed session until delayed cleanup settles", as
   const events = [];
   const eventStore = { close() { events.push("event_store_closed"); } };
   const runtime = createStreamSenseServer({
+    extensionId: "abcdefghijklmnopabcdefghijklmnop",
     eventStore,
     sessionFactory(browser) {
       let closePromise;

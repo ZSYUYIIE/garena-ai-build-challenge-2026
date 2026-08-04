@@ -4,17 +4,29 @@ import test from "node:test";
 import { isAllowedExtensionOrigin } from "../src/protocol/websocketPolicy.js";
 
 test("accepts only an exact Chrome extension origin", () => {
+  const extensionId = "abcdefghijklmnopabcdefghijklmnop";
   assert.equal(
     isAllowedExtensionOrigin(
-      "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+      `chrome-extension://${extensionId}`,
+      { extensionId },
     ),
     true
   );
   assert.equal(
     isAllowedExtensionOrigin(
-      "chrome-extension://abcdefghijklmnopabcdefghijklmnop/"
+      `chrome-extension://${extensionId}/`,
+      { extensionId },
     ),
     true
+  );
+});
+
+test("requires an exact configured ID unless local permissive mode is explicit", () => {
+  const origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+  assert.equal(isAllowedExtensionOrigin(origin), false);
+  assert.equal(
+    isAllowedExtensionOrigin(origin, { allowAnyExtensionOrigin: true }),
+    true,
   );
 });
 

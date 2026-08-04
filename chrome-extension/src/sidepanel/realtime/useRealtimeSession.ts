@@ -20,7 +20,12 @@ import {
   RealtimeMediaAudio,
   type RealtimeMediaState,
 } from "./mediaAudio";
-import { createSessionGenerationGuard, shouldSyncIdleGuidance } from "./sessionLifecycle";
+import {
+  createSessionCallbackGate,
+  createSessionGenerationGuard,
+  shouldSyncIdleGuidance,
+  type SessionCallbackGate,
+} from "./sessionLifecycle";
 import { SpeechCoordinator } from "./speechCoordinator";
 import { useCaptureTarget } from "./useCaptureTarget";
 import {
@@ -95,6 +100,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const latestFrameRef = useRef<LatestFrame | null>(null);
   const captureFrameRef = useRef<((options: { force: boolean }) => Promise<void>) | null>(null);
   const sessionGenerationRef = useRef(createSessionGenerationGuard());
+  const callbackGateRef = useRef<SessionCallbackGate | null>(null);
   const startingRef = useRef(false);
   const stopRef = useRef<() => void>(() => undefined);
   const observedGuidanceRef = useRef<string | null>(null);
@@ -125,6 +131,8 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
 
   const releaseResources = useCallback((closeWebSocket: boolean) => {
     sessionGenerationRef.current.invalidate();
+    callbackGateRef.current?.close();
+    callbackGateRef.current = null;
     startingRef.current = false;
     if (frameTimerRef.current !== null) {
       window.clearInterval(frameTimerRef.current);
@@ -132,7 +140,11 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     }
     latestFrameRef.current = null;
     lastFrameSignatureRef.current = null;
+    lastFrameSentAtRef.current = 0;
+    captureFrameRef.current = null;
     voiceTurnRef.current = null;
+    nextVoiceTurnIdRef.current = null;
+    tabDiscontinuityPendingRef.current = false;
     activeTurnRef.current = null;
     settlingTurnRef.current = null;
     speakingTurnIdRef.current = null;
@@ -196,6 +208,8 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     let controller: RealtimeMediaAudio | null = null;
     let sessionWebsocket: WebSocket | null = null;
     const isCurrent = () => controller !== null && mediaAudioRef.current === controller && sessionGenerationRef.current.isCurrent(generation);
+    const callbackGate = createSessionCallbackGate(isCurrent);
+    callbackGateRef.current = callbackGate;
     const safelySend = <T,>(send: () => T): T | false => {
       try { return send(); } catch { return false; }
     };
@@ -214,21 +228,22 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     );
     const mediaAudio = new RealtimeMediaAudio({
       onStateChange: (nextState) => {
-        if (!isCurrent()) return;
-        mediaState = nextState;
-        publishVoiceStatus({ microphoneState: nextState.microphoneState });
-        if (
-          nextState.microphoneState === "ready" &&
-          voiceStateRef.current.helloAccepted &&
-          voiceStateRef.current.liveReady &&
-          !voiceStateRef.current.liveDegraded
-        ) {
-          mediaAudio.setUserActivityEnabled(true);
-        }
-        if (nextState.tabAudioState === "absent") setTabContextStatus("absent");
-        else if (nextState.tabAudioState === "degraded") setTabContextStatus("degraded");
-        else setTabContextStatus((current) => current === "ready" ? current : "connecting");
-        safelySend(() => protocol.sendMediaState(nextState));
+        callbackGate.run(() => {
+          mediaState = nextState;
+          publishVoiceStatus({ microphoneState: nextState.microphoneState });
+          if (
+            nextState.microphoneState === "ready" &&
+            voiceStateRef.current.helloAccepted &&
+            voiceStateRef.current.liveReady &&
+            !voiceStateRef.current.liveDegraded
+          ) {
+            mediaAudio.setUserActivityEnabled(true);
+          }
+          if (nextState.tabAudioState === "absent") setTabContextStatus("absent");
+          else if (nextState.tabAudioState === "degraded") setTabContextStatus("degraded");
+          else setTabContextStatus((current) => current === "ready" ? current : "connecting");
+          safelySend(() => protocol.sendMediaState(nextState));
+        });
       },
     });
     controller = mediaAudio;
@@ -281,14 +296,16 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       playback,
       setTabGain: (gain, fadeMs) => mediaAudio.setTabGain(gain, fadeMs),
       onFailTurn: (_turnId, reason) => {
-        if (isCurrent()) setError(reason);
+        callbackGate.run(() => setError(reason));
       },
       onPlaybackIdle: (turnId) => {
-        const speakingTurnId = speakingTurnIdRef.current;
-        speakingTurnIdRef.current = speakingTurnAfterPlaybackIdle(speakingTurnId, turnId);
-        if (speakingTurnId !== speakingTurnIdRef.current) {
-          publishVoiceStatus({ geminiSpeaking: false });
-        }
+        callbackGate.run(() => {
+          const speakingTurnId = speakingTurnIdRef.current;
+          speakingTurnIdRef.current = speakingTurnAfterPlaybackIdle(speakingTurnId, turnId);
+          if (speakingTurnId !== speakingTurnIdRef.current) {
+            publishVoiceStatus({ geminiSpeaking: false });
+          }
+        });
       },
     });
     speechCoordinatorRef.current = coordinator;
@@ -337,19 +354,21 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
 
     const microphonePromise = mediaAudio.startMicrophone({
       onMicPacket: (pcm, timestampMs) => {
-        const turn = voiceTurnRef.current;
-        if (!turn) return;
-        const packet = { pcm, timestampMs };
-        if (turn.pending) {
-          turn.packets.push(packet);
-          turn.bytes += pcm.byteLength;
-          if (turn.bytes > MAX_PENDING_MICROPHONE_BYTES) closeUnsafeMicrophoneTurn(turn.turnId, "Microphone audio backlog exceeded one second.");
-          return;
-        }
-        sendMicrophonePacket(turn, packet);
+        callbackGate.run(() => {
+          const turn = voiceTurnRef.current;
+          if (!turn) return;
+          const packet = { pcm, timestampMs };
+          if (turn.pending) {
+            turn.packets.push(packet);
+            turn.bytes += pcm.byteLength;
+            if (turn.bytes > MAX_PENDING_MICROPHONE_BYTES) closeUnsafeMicrophoneTurn(turn.turnId, "Microphone audio backlog exceeded one second.");
+            return;
+          }
+          sendMicrophonePacket(turn, packet);
+        });
       },
       onUserActivityStart: () => {
-        if (!isCurrent() || !voiceStateRef.current.helloAccepted || !voiceStateRef.current.liveReady) return;
+        if (!callbackGate.allows() || !voiceStateRef.current.helloAccepted || !voiceStateRef.current.liveReady) return;
         const turnId = crypto.randomUUID();
         nextVoiceTurnIdRef.current = turnId;
         const turn: VoiceTurn = { turnId, pending: true, ended: false, packets: [], bytes: 0 };
@@ -385,13 +404,15 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         })();
       },
       onUserActivityEnd: () => {
-        const turn = voiceTurnRef.current;
-        if (!turn) return;
-        turn.ended = true;
-        if (turn.pending) return;
-        safelySend(() => protocol.endUserActivity());
-        coordinator.userEnded(turn.turnId);
-        publishVoiceStatus({ userSpeaking: false });
+        callbackGate.run(() => {
+          const turn = voiceTurnRef.current;
+          if (!turn) return;
+          turn.ended = true;
+          if (turn.pending) return;
+          safelySend(() => protocol.endUserActivity());
+          coordinator.userEnded(turn.turnId);
+          publishVoiceStatus({ userSpeaking: false });
+        });
       },
       tabReference: null,
       modelReference: null,
@@ -418,6 +439,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       await mediaAudio.startTab({
         tabStream: mediaStream,
         onTabPacket: (pcm, timestampMs) => {
+          if (!callbackGate.allows()) return;
           const websocket = websocketRef.current;
           if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
           if (backpressureAction("tab", websocket.bufferedAmount) !== "send") {
@@ -433,14 +455,18 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           safelySend(() => protocol.sendTab(pcm, timestampMs));
         },
         onTabActivity: (active) => {
-          coordinator.tabActivity(active);
-          safelySend(() => protocol.sendTabActivity(active));
+          callbackGate.run(() => {
+            coordinator.tabActivity(active);
+            safelySend(() => protocol.sendTabActivity(active));
+          });
         },
         onTabDiscontinuity: (timestampMs) => {
-          setTabContextStatus("degraded");
-          safelySend(() => protocol.sendTabDiscontinuity(timestampMs));
+          callbackGate.run(() => {
+            setTabContextStatus("degraded");
+            safelySend(() => protocol.sendTabDiscontinuity(timestampMs));
+          });
         },
-        onVideoEnded: () => { if (isCurrent()) stopRef.current(); },
+        onVideoEnded: () => { callbackGate.run(() => stopRef.current()); },
       });
       if (!isCurrent()) { await mediaAudio.stop(); return; }
       const video = document.createElement("video");
@@ -469,7 +495,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         frameTimerRef.current = window.setInterval(() => { void captureFrame({ force: false }); }, VIDEO_FRAME_INTERVAL_MS);
       });
       void microphonePromise.then(() => {
-        if (isCurrent()) publishVoiceStatus({ microphoneState: mediaState.microphoneState });
+        callbackGate.run(() => publishVoiceStatus({ microphoneState: mediaState.microphoneState }));
       });
       websocket.addEventListener("message", (event) => {
         if (!isCurrent()) return;

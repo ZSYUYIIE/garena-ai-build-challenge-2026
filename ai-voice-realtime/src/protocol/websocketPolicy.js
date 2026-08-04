@@ -19,7 +19,10 @@ export function isAllowedExtensionOrigin(
       (parsed.pathname === "" || parsed.pathname === "/")
     );
     if (!validOrigin) return false;
-    return allowAnyExtensionOrigin || !extensionId || parsed.hostname === extensionId;
+    return allowAnyExtensionOrigin || (
+      extensionIdPattern.test(extensionId)
+      && parsed.hostname === extensionId
+    );
   } catch {
     return false;
   }

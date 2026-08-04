@@ -114,10 +114,10 @@ export class GeminiLiveSession {
   }
 
   async start() {
+    if (this.closing) return;
     if (this.startPromise) return this.startPromise;
     if (this.started && this.session) return;
     this.started = true;
-    this.closing = false;
     this.#health("connecting");
     this.startPromise = (async () => {
       try {

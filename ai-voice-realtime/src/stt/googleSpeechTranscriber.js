@@ -2,7 +2,8 @@ import { v2 as speech } from "@google-cloud/speech";
 
 const DEFAULT_ROTATE_AFTER_MS = 285_000;
 const BRIDGE_MAX_BYTES = 16_000;
-const QUEUE_MAX_BYTES = 16_000;
+const QUEUE_MAX_BYTES = 32_000;
+const FINAL_DEDUPLICATION_LIMIT = 64;
 const RETRY_DELAYS_MS = [250, 500, 1_000];
 
 function durationMs(duration) {
@@ -66,6 +67,8 @@ export class GoogleSpeechTranscriber {
   #closed = false;
   #health = "closed";
   #cloudSpeechActive = false;
+  #recentFinalKeys = new Set();
+  #recentFinalOrder = [];
 
   constructor({
     SpeechClient = speech.SpeechClient,
@@ -136,6 +139,8 @@ export class GoogleSpeechTranscriber {
   async markDiscontinuity() {
     if (this.#closed) return;
     this.#clearAudioBuffers();
+    this.#recentFinalKeys.clear();
+    this.#recentFinalOrder = [];
     this.#handleFailure(this.#active);
   }
 
@@ -144,6 +149,8 @@ export class GoogleSpeechTranscriber {
     this.#closed = true;
     this.#clearTimers();
     this.#clearAudioBuffers();
+    this.#recentFinalKeys.clear();
+    this.#recentFinalOrder = [];
     for (const record of this.#records) this.#endRecord(record);
     this.#active = null;
     if (this.#client) await this.#client.close();
@@ -212,7 +219,13 @@ export class GoogleSpeechTranscriber {
       record.originBackendSessionMs = item.firstSampleBackendSessionMs;
     }
     if (retainBridge) this.#appendBridge(item);
-    const accepted = record.stream.write({ audio: item.pcm });
+    let accepted;
+    try {
+      accepted = record.stream.write({ audio: item.pcm });
+    } catch {
+      this.#handleFailure(record);
+      return "degraded";
+    }
     if (!accepted) {
       record.backpressured = true;
       return "backpressured";
@@ -286,12 +299,20 @@ export class GoogleSpeechTranscriber {
       record.activityHadFinal = true;
       const languageCode = item.languageCode?.trim();
       if (!languageCode) continue;
-      this.#onFinal({
+      const segment = {
         startMs: record.originBackendSessionMs + startOffsetMs,
         endMs: record.originBackendSessionMs + endOffsetMs,
         text,
         languageCode,
-      });
+      };
+      const finalKey = JSON.stringify(segment);
+      if (this.#recentFinalKeys.has(finalKey)) continue;
+      this.#recentFinalKeys.add(finalKey);
+      this.#recentFinalOrder.push(finalKey);
+      while (this.#recentFinalOrder.length > FINAL_DEDUPLICATION_LIMIT) {
+        this.#recentFinalKeys.delete(this.#recentFinalOrder.shift());
+      }
+      this.#onFinal(segment);
     }
   }
 

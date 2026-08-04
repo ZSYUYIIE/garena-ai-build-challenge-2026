@@ -528,6 +528,7 @@ export class ClientSession {
         timestampSeconds: snapshot.timestampSeconds,
         signal: record.controller.signal,
       });
+      if (this.closed) return;
       const current = this.activeAtomicAnalysis === record;
       this.recordGroundedAnalysis(analysis, snapshot, {
         initial,
@@ -664,17 +665,33 @@ export class ClientSession {
     this.browser.close(1008, reason);
   }
 
-  async closeProviders() {
-    await Promise.allSettled([this.live?.close?.(), this.transcriber?.close?.()]);
+  async closeProviders(live = this.live, transcriber = this.transcriber) {
+    const closeProvider = (provider) => Promise.resolve().then(() => provider?.close?.());
+    await Promise.allSettled([closeProvider(live), closeProvider(transcriber)]);
   }
 
   close(code = 1000, reason = "Session closed") {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
+    this.transcriberGeneration += 1;
     if (this.speechPolicyTimer) this.timers.clearTimeout(this.speechPolicyTimer);
     if (this.liveFrameTimer) this.timers.clearTimeout(this.liveFrameTimer);
+    this.speechPolicyTimer = null;
+    this.liveFrameTimer = null;
     if (this.activeAtomicAnalysis && !this.activeAtomicAnalysis.controller.signal.aborted) this.activeAtomicAnalysis.controller.abort(new DOMException(reason, "AbortError"));
-    this.closePromise = this.closeProviders().finally(() => {
+    const live = this.live;
+    const transcriber = this.transcriber;
+    this.live = null;
+    this.transcriber = null;
+    this.pendingLiveFrame = null;
+    this.latestFrame = null;
+    this.activeSpeechTurn = null;
+    this.activeAtomicAnalysis = null;
+    this.lastTabPacketTimestampMs = null;
+    this.completedTurnIds.clear();
+    this.tabTranscriptBuffer.clear?.();
+    this.audioSequenceGuard.reset?.();
+    this.closePromise = this.closeProviders(live, transcriber).finally(() => {
       if (this.browser.readyState === WebSocket.OPEN) this.browser.close(code, reason);
     });
     return this.closePromise;

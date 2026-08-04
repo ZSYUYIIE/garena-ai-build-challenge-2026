@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createSessionCallbackGate,
   createRevisionGuard,
   createSessionGenerationGuard,
   shouldSyncIdleGuidance,
@@ -33,6 +34,25 @@ test("invalidates the current startup when the session stops", () => {
   sessions.invalidate();
 
   assert.equal(sessions.isCurrent(startup), false);
+});
+
+test("rejects late media callbacks from a closed generation after replacement", () => {
+  const sessions = createSessionGenerationGuard();
+  const firstGeneration = sessions.begin();
+  const first = createSessionCallbackGate(() => sessions.isCurrent(firstGeneration));
+  let delivered = 0;
+
+  assert.equal(first.run(() => { delivered += 1; }), true);
+  sessions.invalidate();
+  const replacementGeneration = sessions.begin();
+  const replacement = createSessionCallbackGate(() => sessions.isCurrent(replacementGeneration));
+
+  assert.equal(first.run(() => { delivered += 100; }), false);
+  first.close();
+  first.close();
+  assert.equal(first.run(() => { delivered += 100; }), false);
+  assert.equal(replacement.run(() => { delivered += 1; }), true);
+  assert.equal(delivered, 2);
 });
 
 test("rejects initial state after a newer browser event arrives", () => {

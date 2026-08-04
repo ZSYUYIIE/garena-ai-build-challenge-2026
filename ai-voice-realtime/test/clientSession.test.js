@@ -289,6 +289,35 @@ test("returns one close promise and closes providers before the browser", async 
   assert.equal(fixture.browser.closed[0]?.code, 1000);
 });
 
+test("attempts every provider cleanup when another close throws synchronously", async (t) => {
+  let liveCloseCalls = 0;
+  let sttCloseCalls = 0;
+  const live = new FakeLiveSession();
+  live.close = () => {
+    liveCloseCalls += 1;
+    throw new Error("live close failed");
+  };
+  const transcriber = new FakeTranscriber();
+  transcriber.close = () => {
+    sttCloseCalls += 1;
+    throw new Error("stt close failed");
+  };
+  const fixture = createFixture({
+    liveSessionFactory: () => live,
+    transcriberFactory: () => transcriber,
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "captured");
+  await flushAsyncWork();
+
+  await fixture.session.close();
+
+  assert.equal(liveCloseCalls, 1);
+  assert.equal(sttCloseCalls, 1);
+  assert.equal(fixture.browser.closed[0]?.code, 1000);
+});
+
 test("drops a Live audio turn and closes when buffered output cannot carry control", async (t) => {
   let callbacks;
   const live = new FakeLiveSession();
@@ -720,6 +749,36 @@ test("aborts the active request when the client session closes", async (t) => {
   fixture.session.close();
 
   assert.equal(requestSignal?.aborted, true);
+});
+
+test("ignores an atomic provider result that resolves after session teardown", async (t) => {
+  const analysis = deferred();
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({
+    speechPolicy,
+    analyzeFrame() {
+      // Deliberately ignores AbortSignal to model a late provider callback.
+      return analysis.promise;
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.sendVideo(Buffer.from("late frame"), "image/jpeg", 7);
+  fixture.session.requestNarration(false);
+  const messagesBeforeClose = fixture.browser.messages.length;
+  await fixture.session.close();
+
+  analysis.resolve(approvedAnalysis());
+  await flushAsyncWork();
+
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 0);
+  assert.equal(fixture.session.lastGroundedDescription, "");
+  assert.deepEqual(fixture.session.groundedSemanticState, {
+    semanticKey: null,
+    originAcceptedAtMs: null,
+    observedFrameSequence: 0,
+  });
+  assert.equal(speechPolicy.offers.length, 0);
+  assert.equal(fixture.browser.messages.length, messagesBeforeClose);
 });
 
 test("reports a genuine provider error and accepts a later turn", async (t) => {

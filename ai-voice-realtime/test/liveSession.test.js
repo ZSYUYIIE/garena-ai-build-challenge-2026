@@ -599,6 +599,33 @@ test("accepts only JPEG frames and does not reconnect on rejected local input", 
   assert.deepEqual(connection.realtimeInputs, []);
 });
 
+test("cannot be started again after close and never revives a provider", async () => {
+  const connection = new FakeLiveConnection();
+  const h = makeHarness({ connections: [connection] });
+
+  await h.live.close();
+  await h.live.start();
+
+  assert.equal(h.configs.length, 0);
+  assert.equal(h.health.at(-1).state, "closed");
+});
+
+test("closes a provider that resolves after teardown without publishing ready", async () => {
+  const pending = deferred();
+  const lateConnection = new FakeLiveConnection();
+  const h = makeHarness({ connections: [pending.promise] });
+  const starting = h.live.start();
+  await flush();
+
+  await h.live.close();
+  pending.resolve(lateConnection);
+  await starting;
+
+  assert.equal(lateConnection.closed, 1);
+  assert.equal(h.health.at(-1).state, "closed");
+  assert.equal(h.health.some((event, index) => event.state === "ready" && index > h.health.findIndex((item) => item.state === "closed")), false);
+});
+
 function deferred() {
   let resolve;
   const promise = new Promise((resolvePromise) => {
