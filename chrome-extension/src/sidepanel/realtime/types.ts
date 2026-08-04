@@ -148,6 +148,36 @@ function requireOptionalBoolean(value: unknown): void {
   if (value !== undefined && typeof value !== "boolean") invalidServerMessage();
 }
 
+function requireEvent(value: unknown): void {
+  if (!isRecord(value)) invalidServerMessage();
+  requireExactKeys(value, [
+    "id",
+    "timestampSeconds",
+    "timestamp",
+    "eventType",
+    "entities",
+    "description",
+    "importance",
+    "confidence",
+  ]);
+  requireString(value.id);
+  requireString(value.timestamp);
+  requireString(value.eventType);
+  requireString(value.description);
+  if (
+    typeof value.timestampSeconds !== "number" ||
+    !Number.isFinite(value.timestampSeconds) ||
+    typeof value.importance !== "number" ||
+    !Number.isFinite(value.importance) ||
+    typeof value.confidence !== "number" ||
+    !Number.isFinite(value.confidence) ||
+    !Array.isArray(value.entities) ||
+    value.entities.some((entity) => typeof entity !== "string")
+  ) {
+    invalidServerMessage();
+  }
+}
+
 function requirePcmMimeType(value: unknown): void {
   const match = PCM_MIME_PATTERN.exec(requireString(value));
   if (!match) invalidServerMessage();
@@ -167,10 +197,27 @@ export function parseServerMessage(rawText: string): ServerMessage {
   if (!isRecord(value) || typeof value.type !== "string") return invalidServerMessage();
 
   switch (value.type) {
+    case "analysis_error":
+    case "answer":
+    case "error":
+    case "narration":
+    case "status_text":
+    case "telemetry":
+      requireExactKeys(value, ["type"], ["text"]);
+      requireOptionalString(value.text);
+      return value as ServerMessage;
     case "connected":
       requireExactKeys(value, ["type", "protocolVersion"], ["model"]);
       if (value.protocolVersion !== 2) invalidServerMessage();
       requireOptionalString(value.model);
+      return value as ServerMessage;
+    case "event":
+      requireExactKeys(value, ["type"], ["event"]);
+      if (value.event !== undefined) requireEvent(value.event);
+      return value as ServerMessage;
+    case "status":
+      requireExactKeys(value, ["type"], ["mode"]);
+      requireOptionalString(value.mode);
       return value as ServerMessage;
     case "turn_started":
       requireExactKeys(value, ["type", "turnId", "mode"]);

@@ -81,6 +81,52 @@ test("strictly parses protocol-v2 turn-bound server messages", () => {
   assert.deepEqual(messages.map((message) => parseServerMessage(JSON.stringify(message))), messages);
 });
 
+test("parses a strict fixture for every advertised server message type", () => {
+  const turnId = "123e4567-e89b-42d3-a456-426614174000";
+  const fixtures = [
+    { type: "analysis_error", text: "provider unavailable" },
+    { type: "answer", text: "legacy answer" },
+    {
+      type: "answer_update",
+      turnId,
+      mode: "answer",
+      text: "streamed answer",
+      finished: false,
+    },
+    { type: "connected", protocolVersion: 2, model: "gemini-live" },
+    { type: "error", text: "retryable error" },
+    { type: "event" },
+    {
+      type: "model_audio",
+      turnId,
+      mode: "answer",
+      mimeType: "audio/pcm;rate=24000",
+      data: "AQI=",
+    },
+    { type: "playback_clear", turnId, mode: "answer" },
+    { type: "provider_health", provider: "tab_stt", state: "degraded", message: "gap" },
+    { type: "narration", text: "legacy narration" },
+    { type: "narration_update", turnId, mode: "narration", text: "live narration" },
+    { type: "status", mode: "narrating" },
+    { type: "status_text", text: "connected" },
+    { type: "telemetry", text: "frame accepted" },
+    { type: "turn_complete", turnId, mode: "answer", suppressed: false },
+    { type: "turn_started", turnId, mode: "answer" },
+    {
+      type: "user_transcript",
+      turnId,
+      mode: "answer",
+      text: "spoken question",
+      finished: true,
+    },
+  ];
+
+  assert.deepEqual(
+    fixtures.map((fixture) => parseServerMessage(JSON.stringify(fixture)).type),
+    SUPPORTED_SERVER_MESSAGE_TYPES,
+  );
+});
+
 test("rejects malformed strict server messages", () => {
   const turnId = "123e4567-e89b-42d3-a456-426614174000";
   const invalid = [
