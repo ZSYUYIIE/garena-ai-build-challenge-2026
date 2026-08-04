@@ -21,6 +21,8 @@ import {
   createSessionGenerationGuard,
   shouldSyncIdleGuidance,
 } from "./sessionLifecycle";
+import { encodeAudioPacket } from "./audioPacket";
+import { RealtimeMediaAudio, type RealtimeMediaState } from "./mediaAudio";
 import { useCaptureTarget } from "./useCaptureTarget";
 import type {
   RealtimeChatMessage,
@@ -76,6 +78,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const answerFlushTimerRef = useRef<number | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaAudioRef = useRef<RealtimeMediaAudio | null>(null);
   const nextPlaybackAtRef = useRef(0);
   const observedGuidanceRef = useRef<string | null>(null);
 
@@ -115,8 +118,12 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         websocket.close(1000, "Extension session stopped");
       }
 
-      for (const track of mediaStreamRef.current?.getTracks() ?? []) {
-        track.stop();
+      const mediaAudio = mediaAudioRef.current;
+      mediaAudioRef.current = null;
+      if (mediaAudio) {
+        void mediaAudio.stop();
+      } else {
+        for (const track of mediaStreamRef.current?.getTracks() ?? []) track.stop();
       }
       mediaStreamRef.current = null;
 
@@ -129,7 +136,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       captureStartedAtRef.current = null;
       capturedTabIdRef.current = null;
 
-      if (audioContextRef.current) {
+      if (!mediaAudio && audioContextRef.current) {
         void audioContextRef.current.close();
       }
       window.speechSynthesis?.cancel();
@@ -173,6 +180,13 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       const sampleRate = parsePcmRate(mimeType) ?? 24_000;
       const pcm = bytesToInt16(bytes);
       if (!pcm.length) return;
+
+      mediaAudioRef.current?.pushModelReference({
+        source: "model",
+        pcm,
+        sampleRate,
+        firstSampleExtensionSessionMs: Math.round(performance.now()),
+      });
 
       const buffer = audioContext.createBuffer(1, pcm.length, sampleRate);
       const channel = buffer.getChannelData(0);
@@ -477,9 +491,45 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     const target = targetSnapshot.target;
     const generation = sessionGenerationRef.current.begin();
     startingRef.current = true;
+    let mediaState: RealtimeMediaState = {
+      tabAudioState: "absent",
+      microphoneState: "pending",
+    };
+    const sendMediaState = () => {
+      const websocket = websocketRef.current;
+      if (websocket?.readyState !== WebSocket.OPEN) return;
+      websocket.send(JSON.stringify({ type: "media_state", ...mediaState }));
+    };
+    const mediaAudio = new RealtimeMediaAudio({
+      onStateChange: (nextState) => {
+        mediaState = nextState;
+        sendMediaState();
+      },
+    });
+    mediaAudioRef.current = mediaAudio;
+    const preparedAudio = mediaAudio.prepareForUserGesture();
+    audioContextRef.current = preparedAudio.audioContext;
+    nextPlaybackAtRef.current = preparedAudio.audioContext.currentTime;
+    let tabSequence = 0;
+    let microphoneSequence = 0;
+    const microphonePromise = mediaAudio.startMicrophone({
+      onMicPacket: (pcm) => {
+        const websocket = websocketRef.current;
+        if (websocket?.readyState !== WebSocket.OPEN) return;
+        websocket.send(
+          encodeAudioPacket("microphone", microphoneSequence++, Math.round(performance.now()), pcm),
+        );
+      },
+      onUserActivityStart: () => {
+        mediaAudio.setTabGain(0.3, 100);
+      },
+      onUserActivityEnd: () => undefined,
+      tabReference: null,
+      modelReference: null,
+    });
     const mediaStreamPromise = beginAuthorizedCapture(target, {
       requestStreamId: (options) => chrome.tabCapture.getMediaStreamId(options),
-      ensureAudioReady: ensureAudioContext,
+      ensureAudioReady: () => mediaAudio.waitUntilReady(),
       isCurrent: () => sessionGenerationRef.current.isCurrent(generation),
       consumeStreamId: consumeTabStreamId,
     });
@@ -505,6 +555,28 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         return;
       }
       mediaStreamRef.current = mediaStream;
+      const tabAudioState = await mediaAudio.startTab({
+        tabStream: mediaStream,
+        onTabPacket: (pcm) => {
+          const websocket = websocketRef.current;
+          if (websocket?.readyState !== WebSocket.OPEN) return;
+          websocket.send(
+            encodeAudioPacket("tab", tabSequence++, Math.round(performance.now()), pcm),
+          );
+        },
+        onTabActivity: () => undefined,
+        onTabDiscontinuity: () => sendMediaState(),
+        onVideoEnded: () => {
+          if (sessionGenerationRef.current.isCurrent(generation)) stopRef.current();
+        },
+      });
+      if (tabAudioState === "degraded") {
+        setError("Tab audio is unavailable; continuing with video capture.");
+      }
+      if (!sessionGenerationRef.current.isCurrent(generation)) {
+        await mediaAudio.stop();
+        return;
+      }
 
       const video = document.createElement("video");
       video.muted = true;
@@ -524,16 +596,6 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       }
       captureStartedAtRef.current = performance.now();
 
-      mediaStream.getVideoTracks()[0]?.addEventListener(
-        "ended",
-        () => {
-          if (sessionGenerationRef.current.isCurrent(generation)) {
-            stopRef.current();
-          }
-        },
-        { once: true },
-      );
-
       const websocket = new WebSocket(
         import.meta.env.VITE_STREAMSENSE_WS_URL || DEFAULT_WEBSOCKET_URL,
       );
@@ -548,6 +610,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           return;
         }
         websocket.send(JSON.stringify({ type: "capture_source", source: "screen" }));
+        websocket.send(JSON.stringify({ type: "session_hello", ...mediaState }));
         websocket.send(
           JSON.stringify({
             type: "session_config",
@@ -555,6 +618,9 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           }),
         );
         startFrameLoop(generation);
+      });
+      void microphonePromise.then(() => {
+        if (sessionGenerationRef.current.isCurrent(generation)) sendMediaState();
       });
       websocket.addEventListener("message", (event) => {
         if (!sessionGenerationRef.current.isCurrent(generation)) return;
@@ -596,7 +662,6 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     }
   }, [
     clearStreamTimers,
-    ensureAudioContext,
     handleServerMessage,
     releaseResources,
     startFrameLoop,
@@ -663,7 +728,14 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     }
   }, [narrationLevel]);
 
-  useEffect(() => () => releaseResources(true), [releaseResources]);
+  useEffect(() => {
+    const cleanup = () => releaseResources(true);
+    window.addEventListener("pagehide", cleanup);
+    return () => {
+      window.removeEventListener("pagehide", cleanup);
+      cleanup();
+    };
+  }, [releaseResources]);
 
   return {
     status,
@@ -803,6 +875,12 @@ function hasMeaningfulVisualChange(
 }
 
 async function consumeTabStreamId(streamId: string) {
+  const audio = {
+    mandatory: {
+      chromeMediaSource: "tab",
+      chromeMediaSourceId: streamId,
+    },
+  } as unknown as MediaTrackConstraints;
   const video = {
     mandatory: {
       chromeMediaSource: "tab",
@@ -811,5 +889,5 @@ async function consumeTabStreamId(streamId: string) {
     },
   } as unknown as MediaTrackConstraints;
 
-  return navigator.mediaDevices.getUserMedia({ audio: false, video });
+  return navigator.mediaDevices.getUserMedia({ audio, video });
 }
