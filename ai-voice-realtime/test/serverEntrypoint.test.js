@@ -3,6 +3,9 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { WebSocket } from "ws";
+
+import { createStreamSenseServer } from "../src/server/createStreamSenseServer.js";
 
 const projectDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -29,6 +32,33 @@ test("server entrypoint reports its actual ephemeral port", async (t) => {
 
   assert.ok(match, line);
   assert.ok(Number(match[1]) > 0, line);
+});
+
+test("server shutdown awaits session cleanup before closing the event store", async (t) => {
+  const cleanup = deferred();
+  const events = [];
+  const eventStore = { close() { events.push("event_store_closed"); } };
+  const runtime = createStreamSenseServer({
+    eventStore,
+    sessionFactory() {
+      return {
+        start() {},
+        close() {
+          events.push("session_close_started");
+          return cleanup.promise;
+        },
+      };
+    },
+  });
+  const address = await runtime.listen({ host: "127.0.0.1", port: 0 });
+  const browser = await connect(`ws://127.0.0.1:${address.port}/ws`);
+  t.after(() => browser.close());
+
+  const closing = runtime.close();
+  assert.deepEqual(events, ["session_close_started"]);
+  cleanup.resolve();
+  await closing;
+  assert.deepEqual(events, ["session_close_started", "event_store_closed"]);
 });
 
 function readStartupLine(child) {
@@ -61,4 +91,20 @@ function readStartupLine(child) {
       );
     });
   });
+}
+
+function connect(url) {
+  return new Promise((resolve, reject) => {
+    const browser = new WebSocket(url, {
+      origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+    });
+    browser.once("open", () => resolve(browser));
+    browser.once("error", reject);
+  });
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
 }

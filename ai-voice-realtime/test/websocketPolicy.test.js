@@ -70,3 +70,23 @@ test("rejects values that are not valid URLs", () => {
   assert.equal(isAllowedExtensionOrigin("chrome-extension://"), false);
   assert.equal(isAllowedExtensionOrigin("not a url"), false);
 });
+
+test("optionally pins the allowed extension ID without weakening origin syntax", () => {
+  const first = "abcdefghijklmnopabcdefghijklmnop";
+  const second = "bcdefghijklmnopabcdefghijklmnopa";
+  assert.equal(
+    isAllowedExtensionOrigin(`chrome-extension://${first}`, { extensionId: first }),
+    true,
+  );
+  assert.equal(
+    isAllowedExtensionOrigin(`chrome-extension://${second}`, { extensionId: first }),
+    false,
+  );
+  assert.equal(
+    isAllowedExtensionOrigin(`chrome-extension://${second}`, {
+      extensionId: first,
+      allowAnyExtensionOrigin: true,
+    }),
+    true,
+  );
+});

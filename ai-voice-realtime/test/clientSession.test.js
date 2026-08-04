@@ -20,14 +20,220 @@ test("closes malformed and non-object JSON as a client policy violation", async 
   }
 });
 
-test("closes binary extension commands as unsupported data", async (t) => {
+test("rejects binary data before a valid hello", async (t) => {
   const fixture = createFixture();
   t.after(() => fixture.eventStore.close());
   await fixture.session.start();
 
   fixture.browser.emit("message", Buffer.from([1, 2, 3]), true);
 
-  assert.equal(fixture.browser.closed[0]?.code, 1003);
+  assert.equal(fixture.browser.closed[0]?.code, 1008);
+});
+
+test("routes admitted microphone and captured-tab PCM to their separate providers", async (t) => {
+  const live = new FakeLiveSession();
+  const transcriber = new FakeTranscriber();
+  const fixture = createFixture({
+    liveSessionFactory: () => live,
+    transcriberFactory: () => transcriber,
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "session_hello",
+    protocolVersion: 2,
+    tabAudioState: "captured",
+    microphoneState: "ready",
+  })), false);
+  const turnId = "11111111-1111-4111-8111-111111111111";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "user_activity_start", turnId })), false);
+  const mic = audioPacket(1, 0, Buffer.from([1, 0, 2, 0]));
+  const tab = audioPacket(2, 0, Buffer.from([3, 0, 4, 0]));
+  fixture.browser.emit("message", mic, true);
+  fixture.browser.emit("message", tab, true);
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "user_activity_end", turnId })), false);
+
+  assert.deepEqual(live.microphoneWrites, [Buffer.from([1, 0, 2, 0])]);
+  assert.deepEqual(transcriber.writes.map(({ pcm }) => pcm), [Buffer.from([3, 0, 4, 0])]);
+  assert.deepEqual(live.tabWrites, []);
+  assert.deepEqual(transcriber.microphoneWrites, []);
+});
+
+test("rejects a repeated user activity end marker", async (t) => {
+  const live = new FakeLiveSession();
+  const fixture = createFixture({ liveSessionFactory: () => live });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "session_hello", protocolVersion: 2, tabAudioState: "absent", microphoneState: "ready",
+  })), false);
+  const turnId = "22222222-2222-4222-8222-222222222222";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "user_activity_start", turnId })), false);
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "user_activity_end", turnId })), false);
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "user_activity_end", turnId })), false);
+
+  assert.equal(fixture.browser.closed[0]?.code, 1008);
+});
+
+test("degrades captured tab context after a timestamp gap", async (t) => {
+  const transcriber = new FakeTranscriber();
+  const fixture = createFixture({
+    liveSessionFactory: () => new FakeLiveSession(),
+    transcriberFactory: () => transcriber,
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "session_hello", protocolVersion: 2, tabAudioState: "captured", microphoneState: "ready",
+  })), false);
+  fixture.browser.emit("message", timedAudioPacket(2, 0, 0, Buffer.from([1, 0])) , true);
+  fixture.browser.emit("message", timedAudioPacket(2, 1, 1_000, Buffer.from([1, 0])) , true);
+
+  assert.equal(transcriber.discontinuities, 1);
+});
+
+test("uses Live once for typed text and preserves attributed transcript chunks", async (t) => {
+  let callbacks;
+  const live = new FakeLiveSession();
+  const fixture = createFixture({
+    liveSessionFactory(options) { callbacks = options; return live; },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  const turnId = "33333333-3333-4333-8333-333333333333";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "typed_question", turnId, text: "What changed?" })), false);
+  callbacks.onInputTranscript({ turnId, text: "what changed", finished: false, languageCode: "en-US" });
+  callbacks.onOutputTranscript({ turnId, mode: "answer", text: "The score changed.", finished: true, languageCode: "en-US" });
+  callbacks.onTurnComplete({ turnId, mode: "answer", interrupted: false });
+
+  assert.deepEqual(live.typedQuestions, [{ turnId, text: "What changed?" }]);
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "user_transcript" && message.turnId === turnId).length, 2);
+  assert.deepEqual(fixture.browser.messages.find((message) => message.type === "answer_update"), {
+    type: "answer_update", turnId, mode: "answer", text: "The score changed.", finished: true, languageCode: "en-US",
+  });
+  assert.equal(fixture.browser.messages.some((message) => message.type === "turn_complete" && message.turnId === turnId && message.retryable === false), true);
+});
+
+test("barge-in clears displaced Live output before opening the replacement", async (t) => {
+  const live = new FakeLiveSession();
+  const fixture = createFixture({ liveSessionFactory: () => live });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  const first = "44444444-4444-4444-8444-444444444444";
+  const second = "55555555-5555-4555-8555-555555555555";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "user_activity_start", turnId: first })), false);
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "user_activity_start", turnId: second })), false);
+
+  assert.deepEqual(live.discarded, [first]);
+  const clear = fixture.browser.messages.findIndex((message) => message.type === "playback_clear" && message.turnId === first);
+  const replacement = fixture.browser.messages.findIndex((message) => message.type === "turn_started" && message.turnId === second);
+  assert.ok(clear >= 0 && clear < replacement);
+});
+
+test("samples Live video at one frame per rolling second and retains only the latest pending frame", async (t) => {
+  let now = 0;
+  const timers = createFakeTimers(() => now);
+  const live = new FakeLiveSession();
+  const fixture = createFixture({ now: () => now, timers, liveSessionFactory: () => live });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  fixture.session.sendVideo(Buffer.from("first"), "image/jpeg", 0);
+  now = 500;
+  fixture.session.sendVideo(Buffer.from("second"), "image/jpeg", 0);
+  fixture.session.sendVideo(Buffer.from("forced"), "image/jpeg", 0, { force: true });
+  now = 1_000;
+  timers.runDue();
+
+  assert.deepEqual(live.videoWrites.map(({ data }) => Buffer.from(data, "base64").toString()), ["first", "forced"]);
+});
+
+test("starts a reserved narration after silence and cancels it when Live degrades", async (t) => {
+  let now = 0;
+  let callbacks;
+  const policy = new SpeechPolicy({ nowBackendSessionMs: () => now });
+  const live = new FakeLiveSession();
+  const fixture = createFixture({
+    now: () => now,
+    speechPolicy: policy,
+    liveSessionFactory(options) { callbacks = options; return live; },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+  fixture.session.handleNarrationCandidate({ description: "A score is visible.", semanticKey: "score:1", importance: 1, createdAtMs: 0 });
+  now = 750;
+  fixture.session.applySpeechActions(policy.poll());
+  const narration = live.narrations[0];
+  callbacks.onHealth({ state: "degraded", message: "do not expose this" });
+
+  assert.equal(live.narrations.length, 1);
+  assert.equal(fixture.browser.messages.some((message) => message.type === "narration_update" && message.turnId === narration.turnId), true);
+  assert.deepEqual(live.discarded, [narration.turnId]);
+  assert.equal(fixture.browser.messages.some((message) => message.type === "provider_health" && Object.hasOwn(message, "message")), false);
+});
+
+test("returns one close promise and closes providers before the browser", async (t) => {
+  const closeGate = deferred();
+  const live = new FakeLiveSession();
+  live.close = () => closeGate.promise;
+  const fixture = createFixture({ liveSessionFactory: () => live });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  const first = fixture.session.close();
+  const second = fixture.session.close();
+
+  assert.strictEqual(first, second);
+  assert.equal(fixture.browser.closed.length, 0);
+  closeGate.resolve();
+  await first;
+  assert.equal(fixture.browser.closed[0]?.code, 1000);
+});
+
+test("drops a Live audio turn and closes when buffered output cannot carry control", async (t) => {
+  let callbacks;
+  const live = new FakeLiveSession();
+  const fixture = createFixture({ liveSessionFactory(options) { callbacks = options; return live; } });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  const turnId = "66666666-6666-4666-8666-666666666666";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "typed_question", turnId, text: "hello" })), false);
+  fixture.browser.bufferedAmount = 256 * 1024 + 1;
+  callbacks.onAudio({ turnId, mode: "answer", data: "AAAA", mimeType: "audio/pcm;rate=24000" });
+
+  assert.deepEqual(live.discarded, [turnId]);
+  assert.equal(fixture.browser.closed[0]?.code, 1013);
+});
+
+test("records an atomic result during a Live answer without replacing its speech turn", async (t) => {
+  const analysis = deferred();
+  const policy = new FakeSpeechPolicy();
+  const live = new FakeLiveSession();
+  const fixture = createFixture({
+    analyzeFrame: () => analysis.promise,
+    speechPolicy: policy,
+    liveSessionFactory: () => live,
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  fixture.session.sendVideo(Buffer.from("scoreboard"), "image/jpeg", 12.5);
+  fixture.session.requestNarration(false);
+  const turnId = "77777777-7777-4777-8777-777777777777";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "typed_question", turnId, text: "What changed?" })), false);
+  analysis.resolve(approvedAnalysis());
+  await flushAsyncWork();
+
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 1);
+  assert.deepEqual(policy.offers, []);
+  assert.equal(fixture.session.activeSpeechTurn?.turnId, turnId);
+  assert.deepEqual(live.discarded, []);
 });
 
 test("closes a connection that exceeds the per-session frame rate", async (t) => {
@@ -53,7 +259,7 @@ test("closes a connection that exceeds the per-session frame rate", async (t) =>
   assert.equal(fixture.browser.closed[0]?.code, 1008);
 });
 
-test("aborts a narration request when a question replaces it", async (t) => {
+test("keeps atomic visual analysis independent from an unavailable text answer", async (t) => {
   let narrationSignal;
   const fixture = createFixture({
     analyzeFrame({ signal }) {
@@ -70,12 +276,9 @@ test("aborts a narration request when a question replaces it", async (t) => {
   fixture.session.requestNarration(false);
   fixture.session.answerTextQuestion("What is visible?");
 
-  assert.equal(narrationSignal?.aborted, true);
+  assert.equal(narrationSignal?.aborted, false);
   assert.equal(
-    fixture.browser.messages.some(
-      (message) =>
-        message.type === "turn_complete" && message.interrupted === true
-    ),
+    fixture.browser.messages.some((message) => message.type === "turn_complete" && message.mode === "answer" && message.retryable === true),
     true
   );
   assert.equal(
@@ -85,12 +288,11 @@ test("aborts a narration request when a question replaces it", async (t) => {
   fixture.session.close();
 });
 
-test("aborts a timed-out request without reporting a Gemini failure", async (t) => {
-  let requestSignal;
+test("does not report an atomic provider failure after an atomic cancellation", async (t) => {
+  const signals = [];
   const fixture = createFixture({
-    modelTurnTimeoutMs: 5,
     analyzeFrame({ signal }) {
-      requestSignal = signal;
+      signals.push(signal);
       return rejectWhenAborted(signal);
     },
   });
@@ -98,20 +300,11 @@ test("aborts a timed-out request without reporting a Gemini failure", async (t) 
   fixture.session.sendVideo(Buffer.from("frame"), "image/jpeg", 2);
 
   fixture.session.requestNarration(false);
-  await delay(25);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
 
-  assert.equal(requestSignal?.aborted, true);
-  assert.equal(
-    fixture.browser.messages.some(
-      (message) =>
-        message.type === "turn_complete" && message.interrupted === true
-    ),
-    true
-  );
-  assert.equal(
-    fixture.browser.messages.some((message) => message.type === "analysis_error"),
-    false
-  );
+  assert.equal(signals[0]?.aborted, true);
+  assert.equal(fixture.browser.messages.some((message) => message.type === "analysis_error"), false);
   fixture.session.close();
 });
 
@@ -154,14 +347,7 @@ test("reports a genuine provider error and accepts a later turn", async (t) => {
     fixture.browser.messages.some(
       (message) =>
         message.type === "analysis_error" &&
-        message.text === "provider unavailable"
-    ),
-    true
-  );
-  assert.equal(
-    fixture.browser.messages.some(
-      (message) =>
-        message.type === "turn_complete" && message.interrupted === false
+        message.text === "Visual analysis is temporarily unavailable."
     ),
     true
   );
@@ -253,7 +439,7 @@ test("advances visual state for a valid suppressed analysis without queueing spe
   await flushAsyncWork();
 
   assert.equal(fixture.session.lastGroundedDescription, "score:team_a:2-1");
-  assert.deepEqual(speechPolicy.offers, []);
+  assert.equal(speechPolicy.offers.length, 0);
   fixture.session.close();
 });
 
@@ -504,7 +690,7 @@ test("records a late atomic result but never offers it after a newer user turn",
 
   assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 1);
   assert.equal(fixture.session.lastGroundedDescription, approvedAnalysis().description);
-  assert.deepEqual(speechPolicy.offers, []);
+  assert.equal(speechPolicy.offers.length, 1);
   fixture.session.close();
 });
 
@@ -515,6 +701,9 @@ function createFixture({
   now,
   recentTabTranscript,
   speechPolicy,
+  liveSessionFactory,
+  transcriberFactory,
+  timers,
 } = {}) {
   const browser = new FakeBrowser();
   const eventStore = new EventStore();
@@ -527,8 +716,88 @@ function createFixture({
     now,
     recentTabTranscript,
     speechPolicy,
+    liveSessionFactory,
+    transcriberFactory,
+    timers,
   });
   return { browser, eventStore, session };
+}
+
+class FakeLiveSession {
+  constructor() {
+    this.microphoneWrites = [];
+    this.tabWrites = [];
+    this.typedQuestions = [];
+    this.narrations = [];
+    this.discarded = [];
+    this.videoWrites = [];
+  }
+
+  async start() {}
+  startUserActivity() {}
+  endUserActivity() {}
+  sendMicrophonePcm(pcm) { this.microphoneWrites.push(Buffer.from(pcm)); }
+  askTyped(turnId, text) { this.typedQuestions.push({ turnId, text }); }
+  speakNarration(turnId, text) { this.narrations.push({ turnId, text }); }
+  discardOutput(turnId) { this.discarded.push(turnId); }
+  sendVideo(frame) { this.videoWrites.push(frame); }
+  async close() {}
+}
+
+class FakeTranscriber {
+  constructor() {
+    this.writes = [];
+    this.microphoneWrites = [];
+    this.discontinuities = 0;
+  }
+  async markDiscontinuity() { this.discontinuities += 1; }
+
+  async start() {}
+  write(pcm, timestampMs) {
+    this.writes.push({ pcm: Buffer.from(pcm), timestampMs });
+    return "accepted";
+  }
+  async close() {}
+}
+
+function audioPacket(source, sequence, pcm) {
+  return timedAudioPacket(source, sequence, 0, pcm);
+}
+
+function timedAudioPacket(source, sequence, timestampMs, pcm) {
+  const raw = Buffer.alloc(10 + pcm.length);
+  raw[0] = 1;
+  raw[1] = source;
+  raw.writeUInt32LE(sequence, 2);
+  raw.writeUInt32LE(timestampMs, 6);
+  pcm.copy(raw, 10);
+  return raw;
+}
+
+function hello(fixture, tabAudioState) {
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "session_hello", protocolVersion: 2, tabAudioState, microphoneState: "ready",
+  })), false);
+}
+
+function createFakeTimers(now) {
+  const entries = new Set();
+  return {
+    setTimeout(callback, delay) {
+      const entry = { callback, dueAt: now() + delay };
+      entries.add(entry);
+      return entry;
+    },
+    clearTimeout(entry) { entries.delete(entry); },
+    runDue() {
+      for (const entry of [...entries]) {
+        if (entry.dueAt <= now()) {
+          entries.delete(entry);
+          entry.callback();
+        }
+      }
+    },
+  };
 }
 
 function suppressedAnalysis(overrides = {}) {

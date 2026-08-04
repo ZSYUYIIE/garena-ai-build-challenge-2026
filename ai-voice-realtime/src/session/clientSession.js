@@ -1,30 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 
-import {
-  eventCandidateSchema,
-  formatTimestamp,
-  normalizeTimestampSeconds,
-  summarizeValidationError,
-} from "../events/eventSchema.js";
-import {
-  analyzeVisionFrame,
-  answerVisionQuestion,
-} from "../gemini/vision.js";
-import {
-  buildNarrationEventCandidate,
-  shouldSuppressVisualDescription,
-} from "../gemini/transcript.js";
+import { eventCandidateSchema, formatTimestamp, normalizeTimestampSeconds, summarizeValidationError } from "../events/eventSchema.js";
+import { analyzeVisionFrame } from "../gemini/vision.js";
+import { GeminiLiveSession } from "../gemini/liveSession.js";
+import { buildNarrationEventCandidate, shouldSuppressVisualDescription } from "../gemini/transcript.js";
+import { parseAudioPacket, AudioSequenceGuard } from "../protocol/audioPackets.js";
 import { parseBrowserMessage } from "../protocol/browserMessages.js";
 import { SessionRateLimiter } from "../protocol/sessionRateLimiter.js";
+import { SpeechPolicy } from "./speechPolicy.js";
+import { GoogleSpeechTranscriber } from "../stt/googleSpeechTranscriber.js";
+import { TabTranscriptBuffer } from "../transcript/tabTranscriptBuffer.js";
 
-const CAMERA_NARRATION_TICK_SECONDS = 4;
-const SCREEN_NARRATION_TICK_SECONDS = 3;
-
-const Mode = Object.freeze({
-  NARRATING: "narrating",
-  ANSWERING: "answering",
-});
+const OUTPUT_BUFFER_LIMIT_BYTES = 256 * 1024;
+const LIVE_FRAME_INTERVAL_MS = 1_000;
+const MAX_TAB_PACKET_GAP_MS = 500;
+const MAX_COMPLETED_TURNS = 256;
 
 const NarrationLevel = Object.freeze({
   MINIMAL: "minimal",
@@ -33,199 +24,390 @@ const NarrationLevel = Object.freeze({
   QUESTION_ONLY: "question_only",
 });
 
+function safeProviderState(value) {
+  return ["connecting", "ready", "degraded", "closed", "telemetry"].includes(value)
+    ? value
+    : "degraded";
+}
+
+/** Coordinates extension protocol-v2, atomic visual analysis, Live, STT and policy. */
 export class ClientSession {
-  constructor(
-    browser,
-    eventStore,
-    {
-      apiKey,
-      model,
-      analyzeFrame = analyzeVisionFrame,
-      answerQuestion = answerVisionQuestion,
-      modelTurnTimeoutMs = 15_000,
-      now = Date.now,
-      rateLimiter = new SessionRateLimiter(),
-      recentTabTranscript = "",
-      speechPolicy = null,
-    } = {}
-  ) {
+  constructor(browser, eventStore, {
+    apiKey = "",
+    model = "gemini-3.6-flash",
+    liveModel = "gemini-3.1-flash-live-preview",
+    speechProjectId = "",
+    speechLocation = "us",
+    analyzeFrame = analyzeVisionFrame,
+    now = Date.now,
+    timers = globalThis,
+    rateLimiter = new SessionRateLimiter(),
+    audioSequenceGuard = new AudioSequenceGuard(),
+    tabTranscriptBuffer,
+    recentTabTranscript,
+    speechPolicy,
+    liveSessionFactory,
+    transcriberFactory,
+  } = {}) {
     this.browser = browser;
     this.eventStore = eventStore;
-    this.apiKey = apiKey ?? "";
-    this.model = model ?? "gemini-3.6-flash";
+    this.apiKey = apiKey;
+    this.model = model;
+    this.liveModel = liveModel;
+    this.speechProjectId = speechProjectId;
+    this.speechLocation = speechLocation;
     this.analyzeFrame = analyzeFrame;
-    this.answerQuestion = answerQuestion;
-    this.modelTurnTimeoutMs = modelTurnTimeoutMs;
     this.now = now;
+    this.timers = timers;
     this.rateLimiter = rateLimiter;
-    this.recentTabTranscript = recentTabTranscript;
-    this.speechPolicy = speechPolicy;
+    this.audioSequenceGuard = audioSequenceGuard;
     this.sessionId = randomUUID();
-    this.sessionStartedAt = this.now();
-    this.mode = Mode.NARRATING;
+    this.sessionStartedAt = now();
+    this.tabTranscriptBuffer = tabTranscriptBuffer ?? new TabTranscriptBuffer({
+      nowBackendSessionMs: () => this.elapsedMilliseconds,
+    });
+    this.recentTabTranscript = recentTabTranscript;
+    this.speechPolicy = speechPolicy ?? new SpeechPolicy({
+      nowBackendSessionMs: () => this.elapsedMilliseconds,
+    });
+    this.liveSessionFactory = liveSessionFactory ?? ((options) => new GeminiLiveSession(options));
+    this.transcriberFactory = transcriberFactory ?? ((options) => new GoogleSpeechTranscriber(options));
+
+    this.helloReceived = false;
+    this.initialTabAudioState = null;
+    this.tabAudioState = "absent";
+    this.microphoneState = "pending";
+    this.live = null;
+    this.transcriber = null;
+    this.liveHealth = "connecting";
+    this.activeAtomicAnalysis = null;
+    this.activeSpeechTurn = null;
+    this.completedTurnIds = new Set();
     this.closed = false;
-    this.firstVideoFrame = false;
-    this.videoFrames = 0;
-    this.lastNarratedFrameNumber = 0;
-    this.latestTimestampSeconds = 0;
-    this.latestFrame = null;
-    this.lastFrameAcceptedAtMs = 0;
+    this.closePromise = null;
     this.captureSource = "camera";
     this.narrationLevel = NarrationLevel.STANDARD;
-    this.narrationTimer = null;
-    this.activeTurn = null;
-    this.modelTurnInProgress = false;
-    this.currentTurnTranscript = "";
-    this.currentTurnHasEvent = false;
+    this.latestTimestampSeconds = 0;
+    this.latestFrame = null;
+    this.videoFrames = 0;
+    this.firstVideoFrame = false;
+    this.lastFrameAcceptedAtMs = 0;
     this.lastGroundedDescription = "";
-    this.groundedSemanticState = {
-      semanticKey: null,
-      originAcceptedAtMs: null,
-      observedFrameSequence: 0,
-    };
-    this.modelTurnId = 0;
-    this.waitingForFirstFrameResolvers = [];
+    this.groundedSemanticState = { semanticKey: null, originAcceptedAtMs: null, observedFrameSequence: 0 };
+    this.lastTabPacketTimestampMs = null;
+    this.speechPolicyTimer = null;
+    this.liveFrameTimer = null;
+    this.lastLiveFrameAtMs = Number.NEGATIVE_INFINITY;
+    this.pendingLiveFrame = null;
   }
 
   async start() {
-    if (!this.apiKey) {
-      this.sendBrowser({
-        type: "error",
-        text: "Missing GOOGLE_API_KEY. Add it to .env or export it in your shell.",
-      });
-      this.closeSoon();
-      return;
-    }
-
-    this.sendBrowser({
-      type: "status_text",
-      text: "Preparing grounded frame analysis...",
-    });
     this.attachBrowserHandlers();
     this.sendBrowser({ type: "connected", model: this.model });
-    this.sendBrowser({
-      type: "status_text",
-      text: `Waiting for the first ${this.captureSource} frame...`,
-    });
-    this.sendBrowser({ type: "status", mode: this.mode });
-    void this.startNarrationLoop();
+    this.sendBrowser({ type: "status", mode: "narration" });
   }
 
   attachBrowserHandlers() {
     this.browser.on("message", (raw, isBinary) => {
+      if (this.closed) return;
       if (isBinary) {
-        this.close(1003, "Binary extension commands are unsupported.");
+        if (!this.helloReceived) return this.protocolViolation("session_hello is required before binary data");
+        this.handleBrowserAudio(raw);
         return;
       }
-
       let message;
-      try {
-        message = parseBrowserMessage(raw.toString());
-      } catch {
-        this.close(1008, "Invalid extension command.");
-        return;
+      try { message = parseBrowserMessage(raw.toString()); } catch { return this.protocolViolation("Invalid extension command."); }
+      if (!this.helloReceived && message.type !== "session_hello") {
+        return this.protocolViolation("session_hello is required before commands");
       }
-
       const rate = this.rateLimiter.accept(message.type, this.now());
-      if (!rate.allowed) {
-        this.close(1008, `Rate limit exceeded; retry in ${rate.retryAfterMs} ms.`);
-        return;
-      }
+      if (!rate.allowed) return this.protocolViolation("Rate limit exceeded.");
       this.handleBrowserJson(message);
     });
-
-    this.browser.on("close", () => this.close());
-    this.browser.on("error", () => this.close());
+    this.browser.on("close", () => { void this.close(); });
+    this.browser.on("error", () => { void this.close(); });
   }
 
   handleBrowserJson(message) {
-    if (message.type === "capture_source") {
-      this.captureSource = message.source;
-      this.sendBrowser({
-        type: "telemetry",
-        text: `${message.source} narration every ${this.narrationTickSeconds}s`,
-      });
-      return;
+    switch (message.type) {
+      case "session_hello":
+        if (this.helloReceived) return this.protocolViolation("session_hello may only be sent once");
+        return void this.acceptHello(message);
+      case "capture_source":
+        this.captureSource = message.source;
+        this.sendBrowser({ type: "telemetry", text: `${message.source} capture selected` });
+        return;
+      case "session_config":
+        this.narrationLevel = message.narrationLevel;
+        return;
+      case "video_frame":
+        this.sendVideo(Buffer.from(message.data, "base64"), message.mimeType, message.timestampSeconds);
+        return;
+      case "typed_question":
+        return this.beginAnswerTurn({ turnId: message.turnId, source: "typed", text: message.text });
+      case "user_activity_start":
+        return this.beginAnswerTurn({ turnId: message.turnId, source: "microphone" });
+      case "user_activity_end":
+        if (!this.activeSpeechTurn || this.activeSpeechTurn.turnId !== message.turnId || this.activeSpeechTurn.source !== "microphone" || !this.activeSpeechTurn.openActivity) {
+          return this.protocolViolation("user activity end does not match an open turn");
+        }
+        this.activeSpeechTurn.openActivity = false;
+        this.live?.endUserActivity?.(message.turnId);
+        return;
+      case "tab_audio_activity":
+        return this.handleTabSpeech(message.active);
+      case "tab_audio_discontinuity":
+        return void this.degradeTabContext();
+      case "media_state":
+        return this.handleMediaState(message);
+      default:
+        return this.protocolViolation("Unsupported protocol command");
     }
-
-    if (message.type === "video_frame") {
-      this.sendVideo(
-        Buffer.from(message.data, "base64"),
-        message.mimeType,
-        message.timestampSeconds
-      );
-      return;
-    }
-
-    if (message.type === "session_config") {
-      this.narrationLevel = message.narrationLevel;
-      this.sendBrowser({
-        type: "telemetry",
-        text: `narration level: ${message.narrationLevel}`,
-      });
-      return;
-    }
-
-    this.answerTextQuestion(message.text);
   }
 
-  async startNarrationLoop() {
-    await this.waitForFirstVideoFrame();
-    if (this.closed) return;
-
-    this.sendBrowser({ type: "status_text", text: "Observing the active tab." });
-    this.requestNarration(true);
-
-    const tick = () => {
-      if (this.closed) return;
-      if (
-        this.mode === Mode.NARRATING &&
-        !this.modelTurnInProgress &&
-        this.videoFrames > this.lastNarratedFrameNumber
-      ) {
-        this.sendBrowser({ type: "telemetry", text: "narration prompt sent" });
-        this.requestNarration(false);
-      }
-      this.narrationTimer = setTimeout(
-        tick,
-        this.narrationTickSeconds * 1_000
-      );
-    };
-
-    this.narrationTimer = setTimeout(
-      tick,
-      this.narrationTickSeconds * 1_000
-    );
-  }
-
-  get narrationTickSeconds() {
-    const baseInterval =
-      this.captureSource === "screen"
-        ? SCREEN_NARRATION_TICK_SECONDS
-        : CAMERA_NARRATION_TICK_SECONDS;
-    if (this.narrationLevel === NarrationLevel.MINIMAL) return baseInterval * 2;
-    if (this.narrationLevel === NarrationLevel.DETAILED) {
-      return Math.max(2, baseInterval - 1);
-    }
-    return baseInterval;
-  }
-
-  requestNarration(initial) {
-    this.lastNarratedFrameNumber = this.videoFrames;
-    const snapshot = this.captureFrameSnapshot();
-    const turn = this.beginModelTurn(Mode.NARRATING, {
-      initial,
-      timestampSeconds: snapshot?.timestampSeconds ?? this.latestTimestampSeconds,
+  async acceptHello(message) {
+    this.helloReceived = true;
+    this.initialTabAudioState = message.tabAudioState;
+    this.tabAudioState = message.tabAudioState;
+    this.microphoneState = message.microphoneState;
+    // Captured audio is unknown until the cloud stream proves it is clean.
+    this.applySpeechActions(this.speechPolicy.setTabAudioState?.(
+      message.tabAudioState === "absent" ? "absent" : "degraded",
+    ) ?? []);
+    this.live = this.liveSessionFactory({
+      apiKey: this.apiKey,
+      model: this.liveModel,
+      getRecentTranscript: (options) => this.tabTranscriptBuffer.getRecent(options),
+      onAudio: (event) => this.handleLiveMessage({ type: "audio", ...event }),
+      onInputTranscript: (event) => this.handleLiveMessage({ type: "input_transcript", ...event }),
+      onOutputTranscript: (event) => this.handleLiveMessage({ type: "output_transcript", ...event }),
+      onTurnComplete: (event) => this.handleLiveMessage({ type: "turn_complete", ...event }),
+      onPlaybackClear: (event) => this.handleLiveMessage({ type: "playback_clear", ...event }),
+      onHealth: (event) => this.handleLiveMessage({ type: "health", ...event }),
+      now: this.now,
     });
-    void this.runAtomicNarration(turn, initial, snapshot);
+    if (message.tabAudioState === "captured") {
+      this.transcriber = this.transcriberFactory({
+        projectId: this.speechProjectId,
+        location: this.speechLocation,
+        onSpeechState: (active) => this.handleTabSpeech(active, "cloud"),
+        onFinal: (segment) => this.handleSttFinal(segment),
+        onHealth: (state) => this.handleSttHealth(state),
+      });
+    }
+    await Promise.allSettled([this.live?.start?.(), this.transcriber?.start?.()]);
+    if (this.liveHealth === "connecting") this.handleLiveMessage({ type: "health", state: "ready" });
+    this.scheduleSpeechPolicyWake();
   }
 
-  async runAtomicNarration(turn, initial, snapshot) {
-    if (!snapshot) {
-      this.finishModelTurn(turn.id, { interrupted: true });
+  handleBrowserAudio(raw) {
+    let packet;
+    try { packet = parseAudioPacket(raw, this.audioSequenceGuard); } catch { return this.protocolViolation("Invalid audio packet"); }
+    if (packet.source === "microphone") {
+      if (!this.activeSpeechTurn?.openActivity || this.activeSpeechTurn.source !== "microphone") {
+        return this.protocolViolation("microphone PCM is outside an open user activity");
+      }
+      const rate = this.rateLimiter.accept("audio_microphone", this.now());
+      if (!rate.allowed) return this.protocolViolation("microphone rate limit exceeded");
+      this.live?.sendMicrophonePcm?.(packet.pcm);
       return;
     }
+    if (this.tabAudioState !== "captured" || !this.transcriber) {
+      return this.protocolViolation("tab PCM requires captured tab audio");
+    }
+    if (this.lastTabPacketTimestampMs !== null && (
+      packet.timestampMs < this.lastTabPacketTimestampMs
+      || packet.timestampMs - this.lastTabPacketTimestampMs > MAX_TAB_PACKET_GAP_MS
+    )) {
+      return void this.degradeTabContext();
+    }
+    this.lastTabPacketTimestampMs = packet.timestampMs;
+    const rate = this.rateLimiter.accept("audio_tab", this.now());
+    if (!rate.allowed) return void this.degradeTabContext();
+    const result = this.transcriber.write?.(packet.pcm, this.elapsedMilliseconds + packet.timestampMs);
+    if (result !== "accepted") void this.degradeTabContext();
+  }
 
+  beginAnswerTurn({ turnId = randomUUID(), source = "typed", text = "" } = {}) {
+    if (this.completedTurnIds.has(turnId) || this.activeSpeechTurn?.turnId === turnId) {
+      return this.protocolViolation("turnId has already been used");
+    }
+    if (this.activeSpeechTurn) this.discardSpeechTurn(this.activeSpeechTurn, "barge_in");
+    this.applySpeechActions(this.speechPolicy.startUserTurn?.(turnId) ?? []);
+    const turn = { turnId, mode: "answer", source, openActivity: source === "microphone", completed: false };
+    this.activeSpeechTurn = turn;
+    this.sendBrowser({ type: "turn_started", turnId, mode: "answer" });
+    if (source === "typed") this.sendBrowser({ type: "user_transcript", turnId, text, finished: true });
+    if (!this.live || this.liveHealth === "degraded" || this.liveHealth === "closed") {
+      return this.completeSpeechTurn(turn, { interrupted: true, retryable: true });
+    }
+    try {
+      if (source === "typed") this.live.askTyped?.(turnId, text);
+      else this.live.startUserActivity?.(turnId);
+    } catch {
+      this.completeSpeechTurn(turn, { interrupted: true, retryable: true });
+    }
+    this.scheduleSpeechPolicyWake();
+  }
+
+  handleTabSpeech(active, source = "local") {
+    const actions = source === "cloud"
+      ? this.speechPolicy.setCloudTabSpeech?.(active) ?? []
+      : this.speechPolicy.setLocalTabSpeech?.(active) ?? [];
+    this.applySpeechActions(actions);
+    this.applySpeechActions(this.speechPolicy.poll?.() ?? []);
+    this.scheduleSpeechPolicyWake();
+  }
+
+  handleMediaState(message) {
+    if (message.tabAudioState === "absent" && this.initialTabAudioState !== "absent") {
+      return this.protocolViolation("captured audio cannot become absent");
+    }
+    this.tabAudioState = message.tabAudioState;
+    this.microphoneState = message.microphoneState;
+    this.applySpeechActions(this.speechPolicy.setTabAudioState?.(
+      message.tabAudioState === "captured" ? "degraded" : message.tabAudioState,
+    ) ?? []);
+    if (message.tabAudioState !== "captured") void this.transcriber?.close?.();
+    this.scheduleSpeechPolicyWake();
+  }
+
+  async degradeTabContext() {
+    if (this.closed) return;
+    this.tabAudioState = "degraded";
+    this.applySpeechActions(this.speechPolicy.setTabAudioState?.("degraded") ?? []);
+    await this.transcriber?.markDiscontinuity?.();
+    this.scheduleSpeechPolicyWake();
+  }
+
+  handleSttHealth(state) {
+    if (state === "ready" && this.tabAudioState === "captured") {
+      this.applySpeechActions(this.speechPolicy.setTabAudioState?.("healthy") ?? []);
+    } else if (state === "degraded" || state === "closed") {
+      void this.degradeTabContext();
+    }
+    this.sendBrowser({ type: "provider_health", provider: "stt", state: safeProviderState(state) });
+    this.applySpeechActions(this.speechPolicy.poll?.() ?? []);
+    this.scheduleSpeechPolicyWake();
+  }
+
+  handleSttFinal(segment) {
+    try { this.tabTranscriptBuffer.appendFinal(segment); } catch { /* provider input is ignored, never forwarded to Live */ }
+  }
+
+  handleNarrationCandidate(candidate) {
+    this.applySpeechActions(this.speechPolicy.offerNarration?.(candidate) ?? []);
+    this.applySpeechActions(this.speechPolicy.poll?.() ?? []);
+    this.scheduleSpeechPolicyWake();
+  }
+
+  applySpeechActions(actions) {
+    for (const action of actions) {
+      if (action.type === "start_narration") {
+        const turnId = randomUUID();
+        const turn = { turnId, mode: "narration", source: "policy", openActivity: false, completed: false };
+        if (!this.live || this.liveHealth !== "ready") continue;
+        this.activeSpeechTurn = turn;
+        try {
+          this.live.speakNarration?.(turnId, action.candidate.description);
+          this.sendBrowser({ type: "narration_update", turnId, mode: "narration", text: action.candidate.description, finished: false });
+          this.applySpeechActions(this.speechPolicy.markNarrationStarted?.(turnId, action.reservationId) ?? []);
+        } catch {
+          this.applySpeechActions(this.speechPolicy.markNarrationStarted?.(turnId, action.reservationId) ?? [{ type: "cancel_narration", turnId }]);
+        }
+      } else if (action.type === "cancel_narration") {
+        const turn = this.activeSpeechTurn?.turnId === action.turnId ? this.activeSpeechTurn : { turnId: action.turnId, mode: "narration" };
+        this.discardSpeechTurn(turn, "policy_cancel");
+      }
+    }
+    this.scheduleSpeechPolicyWake();
+  }
+
+  scheduleSpeechPolicyWake() {
+    if (this.speechPolicyTimer) this.timers.clearTimeout(this.speechPolicyTimer);
+    this.speechPolicyTimer = null;
+    if (this.closed) return;
+    const wakeAt = this.speechPolicy.nextWakeAtMs?.();
+    if (!Number.isFinite(wakeAt)) return;
+    const delay = Math.max(0, wakeAt - this.elapsedMilliseconds);
+    this.speechPolicyTimer = this.timers.setTimeout(() => {
+      this.speechPolicyTimer = null;
+      this.applySpeechActions(this.speechPolicy.poll?.() ?? []);
+      this.scheduleSpeechPolicyWake();
+    }, delay);
+  }
+
+  handleLiveMessage(event) {
+    if (this.closed) return;
+    if (event.type === "health") {
+      this.liveHealth = safeProviderState(event.state);
+      this.applySpeechActions(this.speechPolicy.setLiveState?.(this.liveHealth === "telemetry" ? "ready" : this.liveHealth) ?? []);
+      this.sendBrowser({ type: "provider_health", provider: "live", state: this.liveHealth });
+      this.applySpeechActions(this.speechPolicy.poll?.() ?? []);
+      return this.scheduleSpeechPolicyWake();
+    }
+    const turn = this.activeSpeechTurn;
+    if (event.turnId && turn?.turnId !== event.turnId) return;
+    if (event.type === "audio") {
+      if (turn) this.sendBrowser({ type: "model_audio", turnId: turn.turnId, mode: turn.mode, data: event.data, mimeType: event.mimeType }, { audio: true });
+      return;
+    }
+    if (event.type === "playback_clear") {
+      this.sendBrowser({ type: "playback_clear", turnId: event.turnId, reason: event.reason ?? "interrupted" });
+      return;
+    }
+    if (event.type === "input_transcript" && turn?.mode === "answer") {
+      this.sendBrowser({ type: "user_transcript", turnId: turn.turnId, text: event.text, finished: event.finished === true, languageCode: event.languageCode });
+      return;
+    }
+    if (event.type === "output_transcript" && turn) {
+      this.sendBrowser({ type: turn.mode === "answer" ? "answer_update" : "narration_update", turnId: turn.turnId, mode: turn.mode, text: event.text, finished: event.finished === true, languageCode: event.languageCode });
+      return;
+    }
+    if (event.type === "turn_complete" && turn) {
+      this.completeSpeechTurn(turn, event);
+    }
+  }
+
+  completeSpeechTurn(turn, { interrupted = false, retryable = false } = {}) {
+    if (!turn || turn.completed) return;
+    turn.completed = true;
+    if (this.activeSpeechTurn === turn) this.activeSpeechTurn = null;
+    this.rememberCompletedTurn(turn.turnId);
+    this.sendBrowser({ type: "turn_complete", turnId: turn.turnId, mode: turn.mode, interrupted: interrupted === true, retryable: retryable === true });
+    this.applySpeechActions(this.speechPolicy.finishTurn?.(turn.turnId) ?? []);
+    this.scheduleSpeechPolicyWake();
+  }
+
+  discardSpeechTurn(turn, reason) {
+    if (!turn || turn.completed) return;
+    turn.completed = true;
+    this.live?.discardOutput?.(turn.turnId);
+    this.sendBrowser({ type: "playback_clear", turnId: turn.turnId, reason });
+    if (this.activeSpeechTurn === turn) this.activeSpeechTurn = null;
+    this.rememberCompletedTurn(turn.turnId);
+    this.sendBrowser({ type: "turn_complete", turnId: turn.turnId, mode: turn.mode, interrupted: true, retryable: false });
+  }
+
+  rememberCompletedTurn(turnId) {
+    this.completedTurnIds.delete(turnId);
+    this.completedTurnIds.add(turnId);
+    while (this.completedTurnIds.size > MAX_COMPLETED_TURNS) this.completedTurnIds.delete(this.completedTurnIds.values().next().value);
+  }
+
+  // Atomic Interactions analyses are intentionally separate from Live turns.
+  requestNarration(initial = false) {
+    const snapshot = this.captureFrameSnapshot();
+    if (!snapshot) return;
+    if (this.activeAtomicAnalysis && !this.activeAtomicAnalysis.controller.signal.aborted) {
+      this.activeAtomicAnalysis.controller.abort(new DOMException("Superseded visual analysis", "AbortError"));
+    }
+    const record = { id: randomUUID(), controller: new AbortController() };
+    this.activeAtomicAnalysis = record;
+    void this.runAtomicNarration(record, initial, snapshot);
+  }
+
+  async runAtomicNarration(record, initial, snapshot) {
     try {
       const analysis = await this.analyzeFrame({
         apiKey: this.apiKey,
@@ -236,344 +418,144 @@ export class ClientSession {
         previousDescription: this.lastGroundedDescription,
         recentTabTranscript: this.getRecentTabTranscript(),
         timestampSeconds: snapshot.timestampSeconds,
-        signal: turn.controller.signal,
+        signal: record.controller.signal,
       });
-      const isCurrent = this.isCurrentTurn(turn.id);
-      this.recordGroundedAnalysis(analysis, snapshot, {
-        initial,
-        offerCandidate: isCurrent,
-      });
-      if (!isCurrent) return;
-      this.finishModelTurn(turn.id);
+      const current = this.activeAtomicAnalysis === record;
+      this.recordGroundedAnalysis(analysis, snapshot, { initial, offerCandidate: current && !this.activeSpeechTurn });
     } catch (error) {
-      this.handleModelTurnError(turn, error);
+      if (!record.controller.signal.aborted) this.sendBrowser({ type: "analysis_error", text: "Visual analysis is temporarily unavailable." });
+    } finally {
+      if (this.activeAtomicAnalysis === record) this.activeAtomicAnalysis = null;
+      this.scheduleSpeechPolicyWake();
     }
   }
 
-  answerTextQuestion(question) {
-    const cleanQuestion = question.trim();
-    if (!cleanQuestion) return;
-
-    this.mode = Mode.ANSWERING;
-    this.sendBrowser({ type: "status", mode: this.mode });
-    this.sendBrowser({ type: "user_transcript", text: cleanQuestion });
-    const snapshot = this.captureFrameSnapshot();
-    const turn = this.beginModelTurn(Mode.ANSWERING, {
-      timestampSeconds: snapshot?.timestampSeconds ?? this.latestTimestampSeconds,
-    });
-    void this.runAtomicAnswer(turn, cleanQuestion, snapshot);
-  }
-
-  async runAtomicAnswer(turn, question, snapshot) {
-    if (!snapshot) {
-      this.currentTurnTranscript = "No video frame is available yet.";
-      this.finishModelTurn(turn.id);
-      return;
+  recordGroundedAnalysis(analysis, snapshot, { initial = false, offerCandidate = true } = {}) {
+    if (analysis.event) this.recordVisionEvent(analysis.event, snapshot.timestampSeconds);
+    else if (analysis.shouldNarrate && analysis.description && !shouldSuppressVisualDescription(analysis.description)) {
+      this.recordNarrationEvent(analysis.description, initial, snapshot.timestampSeconds);
     }
-
-    try {
-      const answer = await this.answerQuestion({
-        apiKey: this.apiKey,
-        model: this.model,
-        frame: snapshot.frame,
-        question,
-        recentEvents: this.eventStore.listBySession(this.sessionId, { limit: 12 }),
-        signal: turn.controller.signal,
-      });
-      if (!this.isCurrentTurn(turn.id)) return;
-      this.currentTurnTranscript = answer;
-      this.finishModelTurn(turn.id);
-    } catch (error) {
-      this.handleModelTurnError(turn, error);
+    this.lastGroundedDescription = analysis.description || analysis.event?.description || analysis.semanticKey || "";
+    if (snapshot.frameSequence > this.groundedSemanticState.observedFrameSequence) {
+      const changed = this.groundedSemanticState.semanticKey !== analysis.semanticKey;
+      this.groundedSemanticState = {
+        semanticKey: analysis.semanticKey,
+        originAcceptedAtMs: changed ? (analysis.semanticKey ? snapshot.acceptedAtMs : null) : this.groundedSemanticState.originAcceptedAtMs,
+        observedFrameSequence: snapshot.frameSequence,
+      };
     }
-  }
-
-  beginModelTurn(responseMode, { initial = false, timestampSeconds = 0 } = {}) {
-    this.interruptActiveTurn("Superseded by a newer model turn.");
-    const controller = new AbortController();
-    const turn = {
-      id: ++this.modelTurnId,
-      controller,
-      responseMode,
-      initial,
-      timestampSeconds,
-      timer: null,
-    };
-    this.activeTurn = turn;
-    this.modelTurnInProgress = true;
-    this.currentTurnTranscript = "";
-    this.currentTurnHasEvent = false;
-    this.sendBrowser({ type: "turn_started", mode: responseMode });
-    turn.timer = setTimeout(() => {
-      if (!this.isCurrentTurn(turn.id)) return;
-      this.sendBrowser({
-        type: "telemetry",
-        text: "model turn timed out; narration loop resumed",
-      });
-      this.interruptActiveTurn("Model turn timed out.");
-    }, this.modelTurnTimeoutMs);
-    return turn;
-  }
-
-  isCurrentTurn(turnId) {
-    return this.modelTurnInProgress && this.activeTurn?.id === turnId;
-  }
-
-  interruptActiveTurn(reason) {
-    const turn = this.activeTurn;
-    if (!turn) return;
-    if (!turn.controller.signal.aborted) {
-      turn.controller.abort(new DOMException(reason, "AbortError"));
-    }
-    this.finishModelTurn(turn.id, { interrupted: true });
-  }
-
-  handleModelTurnError(turn, error) {
-    if (!this.isCurrentTurn(turn.id)) return;
-    if (turn.controller.signal.aborted) {
-      this.finishModelTurn(turn.id, { interrupted: true });
-      return;
-    }
-    this.sendBrowser({ type: "analysis_error", text: toErrorMessage(error) });
-    this.finishModelTurn(turn.id, { interrupted: true });
-  }
-
-  finishModelTurn(turnId, { interrupted = false } = {}) {
-    const turn = this.activeTurn;
-    if (!turn || turn.id !== turnId) return;
-
-    if (turn.timer) clearTimeout(turn.timer);
-    const transcript = this.currentTurnTranscript.trim();
-    const suppressed = false;
-    const publishResponse = Boolean(
-      !interrupted && turn.responseMode === Mode.ANSWERING && transcript
-    );
-
-    if (publishResponse) {
-      this.sendBrowser({
-        type: "answer_update",
-        text: transcript,
-      });
-    }
-
-    this.sendBrowser({
-      type: "turn_complete",
-      mode: turn.responseMode,
-      text: publishResponse ? transcript : "",
-      interrupted,
-      suppressed,
-    });
-
-    this.activeTurn = null;
-    this.modelTurnInProgress = false;
-    this.currentTurnTranscript = "";
-    this.currentTurnHasEvent = false;
-
-    if (turn.responseMode === Mode.ANSWERING) {
-      this.mode = Mode.NARRATING;
-      this.sendBrowser({ type: "status", mode: this.mode });
-    }
+    if (!offerCandidate || !analysis.shouldNarrate || !analysis.isNew || analysis.coveredByTabSpeech || analysis.importance < 0.6 || !analysis.description || !analysis.semanticKey) return;
+    this.handleNarrationCandidate({ description: analysis.description, semanticKey: analysis.semanticKey, importance: analysis.importance, createdAtMs: this.groundedSemanticState.originAcceptedAtMs });
   }
 
   recordNarrationEvent(description, initial, timestampSeconds) {
     try {
-      const result = this.eventStore.record({
-        ...buildNarrationEventCandidate(description, { initial }),
-        sessionId: this.sessionId,
-        timestampSeconds,
-      });
+      const result = this.eventStore.record({ ...buildNarrationEventCandidate(description, { initial }), sessionId: this.sessionId, timestampSeconds });
       if (result.status === "recorded") this.publishEvent(result.event);
-    } catch (error) {
-      this.sendBrowser({
-        type: "telemetry",
-        text: `narration event rejected: ${summarizeValidationError(error)}`,
-      });
-    }
+    } catch (error) { this.sendBrowser({ type: "telemetry", text: `narration event rejected: ${summarizeValidationError(error)}` }); }
   }
 
   recordVisionEvent(candidate, timestampSeconds) {
     try {
-      const validatedCandidate = eventCandidateSchema.parse(candidate);
-      if (shouldSuppressVisualDescription(validatedCandidate.description)) return;
-      const result = this.eventStore.record({
-        ...validatedCandidate,
-        sessionId: this.sessionId,
-        timestampSeconds,
-      });
-      this.currentTurnHasEvent = true;
+      const validated = eventCandidateSchema.parse(candidate);
+      if (shouldSuppressVisualDescription(validated.description)) return;
+      const result = this.eventStore.record({ ...validated, sessionId: this.sessionId, timestampSeconds });
       if (result.status === "recorded") this.publishEvent(result.event);
-    } catch (error) {
-      this.sendBrowser({
-        type: "telemetry",
-        text: `vision event rejected: ${summarizeValidationError(error)}`,
-      });
-    }
-  }
-
-  recordGroundedAnalysis(
-    analysis,
-    snapshot,
-    { initial = false, offerCandidate = true } = {}
-  ) {
-    if (analysis.event) {
-      this.recordVisionEvent(analysis.event, snapshot.timestampSeconds);
-    } else if (
-      analysis.shouldNarrate &&
-      analysis.description &&
-      !shouldSuppressVisualDescription(analysis.description)
-    ) {
-      this.recordNarrationEvent(
-        analysis.description,
-        initial,
-        snapshot.timestampSeconds
-      );
-    }
-
-    this.lastGroundedDescription =
-      analysis.description || analysis.event?.description || analysis.semanticKey || "";
-    if (
-      snapshot.frameSequence > this.groundedSemanticState.observedFrameSequence
-    ) {
-      const semanticChanged =
-        this.groundedSemanticState.semanticKey !== analysis.semanticKey;
-      this.groundedSemanticState = {
-        semanticKey: analysis.semanticKey,
-        originAcceptedAtMs: semanticChanged
-          ? analysis.semanticKey
-            ? snapshot.acceptedAtMs
-            : null
-          : this.groundedSemanticState.originAcceptedAtMs,
-        observedFrameSequence: snapshot.frameSequence,
-      };
-    }
-
-    if (
-      !offerCandidate ||
-      !analysis.shouldNarrate ||
-      !analysis.isNew ||
-      analysis.coveredByTabSpeech ||
-      analysis.importance < 0.6 ||
-      !analysis.description ||
-      !analysis.semanticKey
-    ) {
-      return;
-    }
-
-    this.speechPolicy?.offerNarration({
-      description: analysis.description,
-      semanticKey: analysis.semanticKey,
-      importance: analysis.importance,
-      createdAtMs: this.groundedSemanticState.originAcceptedAtMs,
-    });
+    } catch (error) { this.sendBrowser({ type: "telemetry", text: `vision event rejected: ${summarizeValidationError(error)}` }); }
   }
 
   publishEvent(event) {
     const { sessionId: _sessionId, ...publicEvent } = event;
     this.sendBrowser({ type: "event", event: publicEvent });
-    this.sendBrowser({
-      type: "telemetry",
-      text: `event recorded: ${publicEvent.eventType} at ${publicEvent.timestamp}`,
-    });
+    this.sendBrowser({ type: "telemetry", text: `event recorded: ${publicEvent.eventType} at ${publicEvent.timestamp}` });
   }
 
-  sendVideo(jpegBytes, mimeType, timestampSeconds = this.elapsedTimestampSeconds) {
-    if (!jpegBytes.length) return;
-
-    const frameHash = createHash("sha256").update(jpegBytes).digest("hex");
-    if (this.latestFrame?.hash === frameHash) return;
-
+  sendVideo(jpegBytes, mimeType, timestampSeconds = this.elapsedTimestampSeconds, { force = false } = {}) {
+    if (!jpegBytes.length || mimeType !== "image/jpeg") return;
+    const hash = createHash("sha256").update(jpegBytes).digest("hex");
+    if (!force && this.latestFrame?.hash === hash) return;
     this.videoFrames += 1;
-    this.lastFrameAcceptedAtMs = Math.max(
-      this.lastFrameAcceptedAtMs,
-      this.now() - this.sessionStartedAt,
-      0
-    );
-    this.latestTimestampSeconds = normalizeTimestampSeconds(
-      timestampSeconds,
-      this.elapsedTimestampSeconds
-    );
+    this.lastFrameAcceptedAtMs = Math.max(this.lastFrameAcceptedAtMs, this.elapsedMilliseconds);
+    this.latestTimestampSeconds = normalizeTimestampSeconds(timestampSeconds, this.elapsedTimestampSeconds);
     this.firstVideoFrame = true;
-    this.latestFrame = {
-      data: Buffer.from(jpegBytes).toString("base64"),
-      hash: frameHash,
-      mimeType,
-      acceptedAtMs: this.lastFrameAcceptedAtMs,
-      frameSequence: this.videoFrames,
-    };
-    for (const resolve of this.waitingForFirstFrameResolvers.splice(0)) resolve();
+    this.latestFrame = { data: Buffer.from(jpegBytes).toString("base64"), hash, mimeType, acceptedAtMs: this.lastFrameAcceptedAtMs, frameSequence: this.videoFrames };
+    this.enqueueLiveFrame(this.latestFrame);
+    if (this.videoFrames === 1 || this.videoFrames % 10 === 0) this.sendBrowser({ type: "telemetry", text: `video frames accepted: ${this.videoFrames} at ${formatTimestamp(this.latestTimestampSeconds)}` });
+  }
 
-    if (this.videoFrames === 1 || this.videoFrames % 10 === 0) {
-      this.sendBrowser({
-        type: "telemetry",
-        text:
-          `video frames sent: ${this.videoFrames} at ` +
-          formatTimestamp(this.latestTimestampSeconds),
-      });
-    }
+  enqueueLiveFrame(frame) {
+    this.pendingLiveFrame = frame;
+    const remaining = LIVE_FRAME_INTERVAL_MS - (this.elapsedMilliseconds - this.lastLiveFrameAtMs);
+    if (remaining <= 0) return this.flushLiveFrame();
+    if (!this.liveFrameTimer) this.liveFrameTimer = this.timers.setTimeout(() => {
+      this.liveFrameTimer = null;
+      this.flushLiveFrame();
+    }, remaining);
+  }
+
+  flushLiveFrame() {
+    if (!this.pendingLiveFrame || !this.live) return;
+    const remaining = LIVE_FRAME_INTERVAL_MS - (this.elapsedMilliseconds - this.lastLiveFrameAtMs);
+    if (remaining > 0) return this.enqueueLiveFrame(this.pendingLiveFrame);
+    const frame = this.pendingLiveFrame;
+    this.pendingLiveFrame = null;
+    this.lastLiveFrameAtMs = this.elapsedMilliseconds;
+    try { void this.live.sendVideo?.({ data: frame.data, mimeType: frame.mimeType }); } catch { this.handleLiveMessage({ type: "health", state: "degraded" }); }
   }
 
   captureFrameSnapshot() {
     if (!this.latestFrame) return null;
     const { acceptedAtMs, frameSequence, ...frame } = this.latestFrame;
-    return Object.freeze({
-      frame: Object.freeze(frame),
-      timestampSeconds: this.latestTimestampSeconds,
-      acceptedAtMs,
-      frameSequence,
-    });
+    return Object.freeze({ frame: Object.freeze(frame), timestampSeconds: this.latestTimestampSeconds, acceptedAtMs, frameSequence });
   }
 
   getRecentTabTranscript() {
-    const context =
-      typeof this.recentTabTranscript === "function"
-        ? this.recentTabTranscript()
-        : this.recentTabTranscript;
-    const text =
-      typeof context === "string"
-        ? context
-        : context?.segments
-          ?.map((segment) => segment.text)
-          .filter((segment) => typeof segment === "string")
-          .join("\n") ?? "";
-    const characters = Array.from(text);
-    return characters.length <= 2_000
-      ? text
-      : characters.slice(-2_000).join("");
-  }
-
-  get elapsedTimestampSeconds() {
-    return Math.max(0, (this.now() - this.sessionStartedAt) / 1_000);
-  }
-
-  sendBrowser(message) {
-    if (this.browser.readyState === WebSocket.OPEN) {
-      this.browser.send(JSON.stringify(message));
+    if (typeof this.recentTabTranscript === "function") {
+      return String(this.recentTabTranscript()).slice(-2_000);
     }
+    if (typeof this.recentTabTranscript === "string") return this.recentTabTranscript.slice(-2_000);
+    const context = this.tabTranscriptBuffer.getRecent?.({ maxCharacters: 2_000 }) ?? { segments: [] };
+    return context.segments.map((segment) => segment.text).join("\n").slice(-2_000);
   }
 
-  waitForFirstVideoFrame() {
-    if (this.firstVideoFrame) return Promise.resolve();
-    return new Promise((resolve) => {
-      this.waitingForFirstFrameResolvers.push(resolve);
-    });
+  get elapsedMilliseconds() { return Math.max(0, this.now() - this.sessionStartedAt); }
+  get elapsedTimestampSeconds() { return this.elapsedMilliseconds / 1_000; }
+
+  // Compatibility entry point for existing direct atomic-analysis callers; it never answers text.
+  answerTextQuestion(question) {
+    this.beginAnswerTurn({ turnId: randomUUID(), source: "typed", text: String(question ?? "").trim() });
   }
 
-  closeSoon() {
-    setTimeout(() => this.close(), 250);
+  sendBrowser(message, { audio = false } = {}) {
+    if (this.browser.readyState !== WebSocket.OPEN) return false;
+    if ((this.browser.bufferedAmount ?? 0) > OUTPUT_BUFFER_LIMIT_BYTES) {
+      if (audio) {
+        if (this.activeSpeechTurn) this.discardSpeechTurn(this.activeSpeechTurn, "output_backpressure");
+      } else {
+        this.browser.close(1013, "Output backpressure");
+      }
+      return false;
+    }
+    try { this.browser.send(JSON.stringify(message)); return true; } catch { this.browser.close(1011, "Output delivery failed"); return false; }
+  }
+
+  protocolViolation(reason) {
+    this.browser.close(1008, reason);
+  }
+
+  async closeProviders() {
+    await Promise.allSettled([this.live?.close?.(), this.transcriber?.close?.()]);
   }
 
   close(code = 1000, reason = "Session closed") {
-    if (this.closed) return;
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
-    if (this.narrationTimer) clearTimeout(this.narrationTimer);
-    this.interruptActiveTurn(reason);
-    for (const resolve of this.waitingForFirstFrameResolvers.splice(0)) resolve();
-    if (this.browser.readyState === WebSocket.OPEN) {
-      this.browser.close(code, reason);
-    }
+    if (this.speechPolicyTimer) this.timers.clearTimeout(this.speechPolicyTimer);
+    if (this.liveFrameTimer) this.timers.clearTimeout(this.liveFrameTimer);
+    if (this.activeAtomicAnalysis && !this.activeAtomicAnalysis.controller.signal.aborted) this.activeAtomicAnalysis.controller.abort(new DOMException(reason, "AbortError"));
+    this.closePromise = this.closeProviders().finally(() => {
+      if (this.browser.readyState === WebSocket.OPEN) this.browser.close(code, reason);
+    });
+    return this.closePromise;
   }
-}
-
-function toErrorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
 }

@@ -18,6 +18,11 @@ const projectDirectory = path.resolve(moduleDirectory, "../..");
 export function createStreamSenseServer({
   apiKey = "",
   model = "gemini-3.6-flash",
+  liveModel = "gemini-3.1-flash-live-preview",
+  speechProjectId = "",
+  speechLocation = "us",
+  extensionId = "",
+  allowAnyExtensionOrigin = false,
   databasePath = ":memory:",
   eventStore = new EventStore({ databasePath }),
   sessionFactory,
@@ -30,6 +35,9 @@ export function createStreamSenseServer({
       new ClientSession(browser, sessionEventStore, {
         apiKey,
         model,
+        liveModel,
+        speechProjectId,
+        speechLocation,
         ...sessionOptions,
       }));
 
@@ -63,7 +71,10 @@ export function createStreamSenseServer({
       rejectUpgrade(socket, 404, "WebSocket endpoint not found.");
       return;
     }
-    if (!isAllowedExtensionOrigin(request.headers.origin)) {
+    if (!isAllowedExtensionOrigin(request.headers.origin, {
+      extensionId,
+      allowAnyExtensionOrigin,
+    })) {
       rejectUpgrade(socket, 403, "Chrome extension origin required.");
       return;
     }
@@ -82,12 +93,8 @@ export function createStreamSenseServer({
     sessions.add(session);
     browser.once("close", () => sessions.delete(session));
     Promise.resolve(session.start()).catch((error) => {
-      if (browser.readyState === WebSocket.OPEN) {
-        browser.send(
-          JSON.stringify({ type: "error", text: toErrorMessage(error) })
-        );
-      }
-      session.close();
+      if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify({ type: "error", text: "Session startup failed." }));
+      void session.close();
     });
   });
 
@@ -114,20 +121,20 @@ export function createStreamSenseServer({
     });
   }
 
-  async function close() {
-    if (closing) return;
+  let closePromise = null;
+  function close() {
+    if (closePromise) return closePromise;
     closing = true;
-
-    for (const session of sessions) session.close();
-    for (const browser of browserWss.clients) {
-      if (browser.readyState !== WebSocket.CLOSED) browser.terminate();
-    }
-
-    await Promise.all([
-      closeWebSocketServer(browserWss),
-      closeHttpServer(httpServer),
-    ]);
-    eventStore.close();
+    const sessionsToClose = [...sessions];
+    closePromise = (async () => {
+      await Promise.allSettled(sessionsToClose.map((session) => session.close()));
+      for (const browser of browserWss.clients) {
+        if (browser.readyState !== WebSocket.CLOSED) browser.terminate();
+      }
+      await Promise.allSettled([closeWebSocketServer(browserWss), closeHttpServer(httpServer)]);
+      eventStore.close();
+    })();
+    return closePromise;
   }
 
   return {
@@ -151,8 +158,4 @@ function closeHttpServer(httpServer) {
   return new Promise((resolve, reject) => {
     httpServer.close((error) => (error ? reject(error) : resolve()));
   });
-}
-
-function toErrorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
 }

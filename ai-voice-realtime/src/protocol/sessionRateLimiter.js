@@ -27,4 +27,8 @@ export class SessionRateLimiter {
     this.acceptedAt.set(type, active);
     return { allowed: true, retryAfterMs: 0 };
   }
+
+  reset() {
+    this.acceptedAt.clear();
+  }
 }

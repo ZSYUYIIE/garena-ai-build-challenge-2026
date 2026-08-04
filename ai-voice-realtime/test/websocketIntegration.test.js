@@ -20,16 +20,13 @@ test("rejects missing and untrusted WebSocket origins", async (t) => {
   );
 });
 
-test("connects an extension-origin client to a browser session", async (t) => {
+test("requires hello before extension commands on a real client session", async (t) => {
   const { runtime, url } = await startRealRuntime();
   t.after(() => runtime.close());
   const browser = await connect(url);
-  t.after(() => browser.close());
-
-  const reply = waitForMessageType(browser, "telemetry");
+  const closed = waitForClose(browser);
   browser.send('{"type":"capture_source","source":"screen"}');
-
-  assert.match((await reply).text, /screen narration every/);
+  assert.equal((await closed).code, 1008);
 });
 
 test("closes an oversized client message without stopping the server", async (t) => {
@@ -68,7 +65,7 @@ test("rejects binary input on a real client session", async (t) => {
   const closed = waitForClose(browser);
   browser.send(Buffer.from([1, 2, 3]));
 
-  assert.equal((await closed).code, 1003);
+  assert.equal((await closed).code, 1008);
 });
 
 async function startRealRuntime() {

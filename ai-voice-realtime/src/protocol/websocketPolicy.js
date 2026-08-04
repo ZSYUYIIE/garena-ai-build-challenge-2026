@@ -1,11 +1,14 @@
 const extensionIdPattern = /^[a-p]{32}$/;
 
-export function isAllowedExtensionOrigin(origin) {
+export function isAllowedExtensionOrigin(
+  origin,
+  { extensionId = "", allowAnyExtensionOrigin = false } = {},
+) {
   if (typeof origin !== "string" || !origin) return false;
 
   try {
     const parsed = new URL(origin);
-    return (
+    const validOrigin = (
       parsed.protocol === "chrome-extension:" &&
       extensionIdPattern.test(parsed.hostname) &&
       !parsed.username &&
@@ -15,6 +18,8 @@ export function isAllowedExtensionOrigin(origin) {
       !parsed.hash &&
       (parsed.pathname === "" || parsed.pathname === "/")
     );
+    if (!validOrigin) return false;
+    return allowAnyExtensionOrigin || !extensionId || parsed.hostname === extensionId;
   } catch {
     return false;
   }
