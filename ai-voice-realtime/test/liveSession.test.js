@@ -41,6 +41,7 @@ function makeHarness({ connections = [new FakeLiveConnection()], now = () => 10_
   const outputs = [];
   const completions = [];
   const clears = [];
+  const lifecycle = [];
   let clientCount = 0;
   let transcriptRequests = [];
   const GoogleGenAI = class {
@@ -76,8 +77,14 @@ function makeHarness({ connections = [new FakeLiveConnection()], now = () => 10_
     onAudio: (event) => audio.push(event),
     onInputTranscript: (event) => inputs.push(event),
     onOutputTranscript: (event) => outputs.push(event),
-    onTurnComplete: (event) => completions.push(event),
-    onPlaybackClear: (event) => clears.push(event),
+    onTurnComplete: (event) => {
+      completions.push(event);
+      lifecycle.push({ type: "turn_complete", ...event });
+    },
+    onPlaybackClear: (event) => {
+      clears.push(event);
+      lifecycle.push({ type: "playback_clear", ...event });
+    },
   });
   return {
     live,
@@ -91,6 +98,7 @@ function makeHarness({ connections = [new FakeLiveConnection()], now = () => 10_
     outputs,
     completions,
     clears,
+    lifecycle,
     transcriptRequests: () => transcriptRequests,
     clientCount: () => clientCount,
   };
@@ -263,6 +271,26 @@ test("resumes with only the latest frame and fails active microphone work retrya
   assert.equal(replacement.realtimeInputs.some((input) => input.audio), false);
 });
 
+test("publishes connecting synchronously when GoAway begins reconnect", async () => {
+  const reconnectDelay = deferred();
+  const first = new FakeLiveConnection();
+  const replacement = new FakeLiveConnection();
+  const h = makeHarness({
+    connections: [first, replacement],
+    sleep: () => reconnectDelay.promise,
+  });
+  await h.live.start();
+
+  h.callbacks[0].onmessage({ goAway: {} });
+
+  assert.deepEqual(h.health.at(-1), { state: "connecting" });
+  assert.equal(h.callbacks.length, 1);
+
+  reconnectDelay.resolve();
+  for (let index = 0; index < 4; index += 1) await flush();
+  assert.equal(h.callbacks.length, 2);
+});
+
 test("completes a typed answer once on GoAway and never replays or transfers its response ownership", async () => {
   const first = new FakeLiveConnection();
   const replacement = new FakeLiveConnection();
@@ -372,20 +400,26 @@ test("fails a microphone turn rather than silently losing over one second of que
   assert.equal(typeof release, "function");
   h.live.sendMicrophonePcm(Buffer.alloc(2));
   await flush();
-  assert.deepEqual(h.completions.at(-1), { turnId: "overflow", mode: "answer", interrupted: true, retryable: true });
+  assert.deepEqual(h.clears, [{ turnId: "overflow", reason: "microphone_failure" }]);
+  assert.deepEqual(h.completions, [{ turnId: "overflow", mode: "answer", interrupted: true, retryable: true }]);
+  assert.deepEqual(h.lifecycle, [
+    { type: "playback_clear", turnId: "overflow", reason: "microphone_failure" },
+    { type: "turn_complete", turnId: "overflow", mode: "answer", interrupted: true, retryable: true },
+  ]);
   release();
   await h.live.close();
   await h.live.close();
   assert.equal(connection.closed, 1);
 });
 
-test("fails a rejected microphone write once, suppresses its queued activity end, and resumes without replaying PCM", async () => {
+test("clears output before failing a later rejected microphone write once and never replays PCM", async () => {
   const first = new FakeLiveConnection();
   const replacement = new FakeLiveConnection();
   const delays = [];
+  let audioWrites = 0;
   first.sendRealtimeInput = (payload) => {
     first.realtimeInputs.push(payload);
-    if (payload.audio) return Promise.reject(new Error("socket write failed"));
+    if (payload.audio && ++audioWrites === 2) return Promise.reject(new Error("socket write failed"));
   };
   const h = makeHarness({
     connections: [first, replacement],
@@ -394,14 +428,32 @@ test("fails a rejected microphone write once, suppresses its queued activity end
   await h.live.start();
   h.live.startUserActivity("write-failure");
   h.live.sendMicrophonePcm(Buffer.from([1, 2]));
+  await flush();
+  await flush();
+  h.callbacks[0].onmessage({ serverContent: {
+    modelTurn: { parts: [{ inlineData: { data: "possible-output", mimeType: "audio/pcm;rate=24000" } }] },
+  } });
+  h.live.sendMicrophonePcm(Buffer.from([3, 4]));
   h.live.endUserActivity("write-failure");
   for (let index = 0; index < 6; index += 1) await flush();
 
   assert.deepEqual(first.realtimeInputs, [
     { activityStart: {} },
     { audio: { data: "AQI=", mimeType: "audio/pcm;rate=16000" } },
+    { audio: { data: "AwQ=", mimeType: "audio/pcm;rate=16000" } },
   ]);
+  assert.deepEqual(h.audio, [{
+    turnId: "write-failure",
+    mode: "answer",
+    data: "possible-output",
+    mimeType: "audio/pcm;rate=24000",
+  }]);
+  assert.deepEqual(h.clears, [{ turnId: "write-failure", reason: "microphone_failure" }]);
   assert.deepEqual(h.completions, [{ turnId: "write-failure", mode: "answer", interrupted: true, retryable: true }]);
+  assert.deepEqual(h.lifecycle, [
+    { type: "playback_clear", turnId: "write-failure", reason: "microphone_failure" },
+    { type: "turn_complete", turnId: "write-failure", mode: "answer", interrupted: true, retryable: true },
+  ]);
   assert.deepEqual(delays, [250]);
   assert.equal(replacement.realtimeInputs.some((input) => input.audio || input.activityEnd), false);
 });
@@ -546,3 +598,11 @@ test("accepts only JPEG frames and does not reconnect on rejected local input", 
   assert.equal(h.configs.length, 1);
   assert.deepEqual(connection.realtimeInputs, []);
 });
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}

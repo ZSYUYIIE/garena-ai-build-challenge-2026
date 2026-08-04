@@ -537,16 +537,16 @@ export class GeminiLiveSession {
   }
 
   async #runReconnect() {
+    const oldSession = this.session;
     this.generation += 1;
+    this.session = null;
     this.#completeOwnedTurnsForReconnect();
     this.#clearOwnership();
-    const oldSession = this.session;
-    this.session = null;
+    this.#health("connecting");
     try { await oldSession?.close?.(); } catch {}
     for (; this.reconnectAttempts < RECONNECT_DELAYS_MS.length && !this.closing; this.reconnectAttempts += 1) {
       await this.sleep(RECONNECT_DELAYS_MS[this.reconnectAttempts]);
       try {
-        this.#health("connecting");
         await this.#connect();
         if (this.session) {
           this.#health("ready");
@@ -590,12 +590,18 @@ export class GeminiLiveSession {
   #failMicrophoneTurn(turn) {
     if (turn.failed) return;
     turn.failed = true;
+    turn.completed = true;
+    turn.completedAt = this.now();
+    if (!turn.discarded) {
+      turn.discarded = true;
+      this.onPlaybackClear({ turnId: turn.turnId, reason: "microphone_failure" });
+    }
+    this.onTurnComplete({ turnId: turn.turnId, mode: turn.mode, interrupted: true, retryable: true });
     if (this.activeMicrophoneTurn === turn) this.activeMicrophoneTurn = null;
     this.inputOwners = this.inputOwners.filter((item) => item !== turn);
     this.responseOwners = this.responseOwners.filter((item) => item !== turn);
     this.outputOwners = this.outputOwners.filter((item) => item !== turn);
     this.settling.delete(turn.turnId);
-    this.onTurnComplete({ turnId: turn.turnId, mode: turn.mode, interrupted: true, retryable: true });
   }
 
   #clearOwnership() {

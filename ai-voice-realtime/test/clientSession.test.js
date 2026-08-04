@@ -5,6 +5,7 @@ import test from "node:test";
 import { WebSocket } from "ws";
 
 import { EventStore } from "../src/events/eventStore.js";
+import { GeminiLiveSession } from "../src/gemini/liveSession.js";
 import { ClientSession } from "../src/session/clientSession.js";
 import { SpeechPolicy } from "../src/session/speechPolicy.js";
 
@@ -114,6 +115,60 @@ test("uses Live once for typed text and preserves attributed transcript chunks",
     type: "answer_update", turnId, mode: "answer", text: "The score changed.", finished: true, languageCode: "en-US",
   });
   assert.equal(fixture.browser.messages.some((message) => message.type === "turn_complete" && message.turnId === turnId && message.retryable === false), true);
+});
+
+test("rejects an answer immediately after Live GoAway without leaving an active turn or replaying it", async (t) => {
+  const reconnectDelay = deferred();
+  const callbacks = [];
+  const first = new FakeSdkLiveConnection();
+  const replacement = new FakeSdkLiveConnection();
+  const connections = [first, replacement];
+  const GoogleGenAI = class {
+    constructor() {
+      this.live = {
+        connect: async (options) => {
+          callbacks.push(options.callbacks);
+          return connections.shift();
+        },
+      };
+    }
+  };
+  const fixture = createFixture({
+    liveSessionFactory: (options) => new GeminiLiveSession({
+      ...options,
+      GoogleGenAI,
+      sleep: () => reconnectDelay.promise,
+    }),
+  });
+  t.after(async () => {
+    await fixture.session.close();
+    fixture.eventStore.close();
+  });
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+  assert.equal(fixture.session.liveHealth, "ready");
+
+  callbacks[0].onmessage({ goAway: {} });
+  const turnId = "34343434-3434-4434-8434-343434343434";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "typed_question",
+    turnId,
+    text: "Did reconnect finish?",
+  })), false);
+
+  assert.equal(fixture.session.liveHealth, "connecting");
+  assert.equal(fixture.session.activeSpeechTurn, null);
+  assert.equal(fixture.browser.messages.filter((message) => (
+    message.type === "turn_complete"
+    && message.turnId === turnId
+    && message.retryable === true
+  )).length, 1);
+
+  reconnectDelay.resolve();
+  for (let index = 0; index < 4; index += 1) await flushAsyncWork();
+  assert.deepEqual(replacement.realtimeInputs, []);
+  assert.equal(fixture.session.activeSpeechTurn, null);
 });
 
 test("barge-in clears displaced Live output before opening the replacement", async (t) => {
@@ -1060,6 +1115,18 @@ class FakeLiveSession {
   }
   sendVideo(frame) { this.videoWrites.push(frame); }
   async close() {}
+}
+
+class FakeSdkLiveConnection {
+  constructor() {
+    this.realtimeInputs = [];
+  }
+
+  sendRealtimeInput(payload) {
+    this.realtimeInputs.push(payload);
+  }
+
+  close() {}
 }
 
 class FakeTranscriber {
