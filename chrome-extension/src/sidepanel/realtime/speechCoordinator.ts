@@ -64,6 +64,13 @@ export class SpeechCoordinator {
     this.resetResponseTimer(this.active!);
   }
 
+  answerProgress(turnId: string): void {
+    if (this.stopped || !this.isActiveAnswer(turnId)) return;
+    const active = this.active!;
+    if (active.userSpeaking || active.responseTimer === null) return;
+    this.resetResponseTimer(active);
+  }
+
   tabActivity(active: boolean): void {
     this.tabActive = active;
     if (active && this.active?.mode === "narration") this.clearActive(false);

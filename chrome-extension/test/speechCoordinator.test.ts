@@ -140,6 +140,40 @@ test("regular valid answer progress resets the response watchdog", () => {
   assert.deepEqual(f.failures, []);
 });
 
+test("matching answer transcript progress extends the watchdog until later inactivity expires", () => {
+  const f = fixture();
+  f.coordinator.typedQuestionStarted("answer-1");
+  f.clock.advance(14_000);
+  f.coordinator.answerProgress("answer-1");
+  f.clock.advance(14_000);
+  f.coordinator.answerProgress("answer-1");
+  f.clock.advance(14_000);
+  assert.deepEqual(f.failures, []);
+
+  f.coordinator.answerProgress("stale-answer");
+  f.clock.advance(15_000);
+  assert.deepEqual(f.failures, [{ turnId: "answer-1", reason: "Model response timed out." }]);
+});
+
+test("answer progress never starts or resets a watchdog for speaking, narration, or stopped turns", () => {
+  const f = fixture();
+  f.coordinator.userStarted("answer-1");
+  f.coordinator.answerProgress("answer-1");
+  f.clock.advance(20_000);
+  assert.deepEqual(f.failures, []);
+
+  f.coordinator.userEnded("answer-1");
+  f.clock.advance(14_000);
+  f.coordinator.answerProgress("narration-1");
+  f.clock.advance(1_000);
+  assert.deepEqual(f.failures, [{ turnId: "answer-1", reason: "Model response timed out." }]);
+
+  f.coordinator.stop();
+  f.coordinator.answerProgress("answer-1");
+  f.clock.advance(20_000);
+  assert.equal(f.failures.length, 1);
+});
+
 test("fails overflow rather than truncating the answer queue", () => {
   const f = fixture();
   f.coordinator.typedQuestionStarted("answer-1");

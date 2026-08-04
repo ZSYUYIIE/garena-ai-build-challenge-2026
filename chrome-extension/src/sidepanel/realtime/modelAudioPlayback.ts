@@ -32,6 +32,7 @@ type TurnQueue = {
 };
 
 const MAX_QUEUED_MS = 5_000;
+const MAX_RETIRED_TURNS = 128;
 const PCM_MIME = /^audio\/pcm;rate=([1-9][0-9]*)$/;
 
 /** Schedules one Live-model PCM turn at a time and owns cancellation of its sources. */
@@ -39,6 +40,7 @@ export class ModelAudioPlayback {
   private readonly options: ModelAudioPlaybackOptions;
   private readonly queues = new Map<string, TurnQueue>();
   private readonly retiredTurns = new Set<string>();
+  private readonly retiredTurnOrder: string[] = [];
   private activeTurnId: string | null = null;
   private idleListener: ((turnId: string) => void) | null = null;
 
@@ -48,6 +50,23 @@ export class ModelAudioPlayback {
 
   setOnIdleListener(listener: ((turnId: string) => void) | null): void {
     this.idleListener = listener;
+  }
+
+  /** Bounded lifecycle state for diagnostics without exposing retained audio objects. */
+  getDiagnostics(): {
+    activeTurnId: string | null;
+    queuedTurnCount: number;
+    retainedSourceCount: number;
+    retiredTurnCount: number;
+  } {
+    let retainedSourceCount = 0;
+    for (const queue of this.queues.values()) retainedSourceCount += queue.sources.size;
+    return {
+      activeTurnId: this.activeTurnId,
+      queuedTurnCount: this.queues.size,
+      retainedSourceCount,
+      retiredTurnCount: this.retiredTurns.size,
+    };
   }
 
   enqueue(chunk: ModelAudioChunk): "accepted" | "overflow" {
@@ -109,7 +128,7 @@ export class ModelAudioPlayback {
     if (this.retiredTurns.has(turnId)) return;
     const queue = this.queues.get(turnId);
     if (!queue) {
-      this.retiredTurns.add(turnId);
+      this.retireTurn(turnId);
       if (this.activeTurnId === turnId) this.activeTurnId = null;
       this.notifyIdle(turnId);
       return;
@@ -124,11 +143,12 @@ export class ModelAudioPlayback {
       : [turnId];
     for (const id of ids) {
       const queue = this.queues.get(id);
-      this.retiredTurns.add(id);
+      this.retireTurn(id);
       if (this.activeTurnId === id) this.activeTurnId = null;
       if (!queue) continue;
       // Keep entries until after every source has been stopped: an ended callback may clear reentrantly.
       for (const scheduled of queue.sources) scheduled.source.stop();
+      queue.sources.clear();
       this.queues.delete(id);
     }
   }
@@ -146,15 +166,29 @@ export class ModelAudioPlayback {
   private maybeIdle(queue: TurnQueue): void {
     if (!queue.complete || queue.idleNotified || [...queue.sources].some((scheduled) => !scheduled.ended)) return;
     queue.idleNotified = true;
-    this.retiredTurns.add(queue.turnId);
+    this.retireTurn(queue.turnId);
     if (this.activeTurnId === queue.turnId) this.activeTurnId = null;
     // Invoke while the queue still owns every source so reentrant clear() stops them all.
     this.notifyIdle(queue.turnId);
+    if (this.queues.get(queue.turnId) === queue) {
+      queue.sources.clear();
+      this.queues.delete(queue.turnId);
+    }
   }
 
   private notifyIdle(turnId: string): void {
     this.options.onIdle(turnId);
     this.idleListener?.(turnId);
+  }
+
+  private retireTurn(turnId: string): void {
+    if (this.retiredTurns.has(turnId)) return;
+    this.retiredTurns.add(turnId);
+    this.retiredTurnOrder.push(turnId);
+    while (this.retiredTurnOrder.length > MAX_RETIRED_TURNS) {
+      const expiredTurnId = this.retiredTurnOrder.shift()!;
+      this.retiredTurns.delete(expiredTurnId);
+    }
   }
 
   private validateChunk(chunk: ModelAudioChunk): void {

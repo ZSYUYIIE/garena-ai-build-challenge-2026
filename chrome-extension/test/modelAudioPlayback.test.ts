@@ -110,6 +110,26 @@ test("does not report a turn idle until generation and local PCM playback finish
   assert.deepEqual(f.idleTurns, ["answer-1"]);
 });
 
+test("releases naturally completed source ownership while bounding recent stale-turn tombstones", () => {
+  const f = fixture();
+  for (let index = 0; index < 130; index += 1) {
+    const turnId = `answer-${index}`;
+    assert.equal(f.playback.enqueue(chunk(turnId)), "accepted");
+    f.playback.complete(turnId);
+    f.context.sources.at(-1)!.emitEnded();
+  }
+
+  assert.deepEqual(f.playback.getDiagnostics(), {
+    activeTurnId: null,
+    queuedTurnCount: 0,
+    retainedSourceCount: 0,
+    retiredTurnCount: 128,
+  });
+  assert.throws(() => f.playback.enqueue(chunk("answer-129")), /stale/i);
+  assert.equal(f.playback.enqueue(chunk("answer-0")), "accepted");
+  assert.throws(() => f.playback.enqueue(chunk("answer-new")), /stale/i);
+});
+
 test("clear from an ended callback stops all retained sources and cannot resurrect the turn", () => {
   const f = fixture({ onIdle: () => f.playback.clear("answer-1") });
   f.playback.enqueue(chunk("answer-1"));
