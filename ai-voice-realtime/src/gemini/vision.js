@@ -13,28 +13,32 @@ const visionAnswerSchema = z.object({
 });
 
 const eventProperties = {
-  eventType: { type: "STRING" },
-  entities: { type: "ARRAY", items: { type: "STRING" } },
-  description: { type: "STRING" },
-  importance: { type: "NUMBER" },
-  confidence: { type: "NUMBER" },
+  eventType: { type: "string" },
+  entities: { type: "array", items: { type: "string" } },
+  description: { type: "string" },
+  importance: { type: "number" },
+  confidence: { type: "number" },
 };
 
 const analysisResponseSchema = {
-  type: "OBJECT",
+  type: "object",
   properties: {
-    shouldNarrate: { type: "BOOLEAN" },
-    description: { type: "STRING" },
+    shouldNarrate: { type: "boolean" },
+    description: { type: "string" },
     event: {
-      type: "OBJECT",
-      nullable: true,
-      properties: eventProperties,
-      required: [
-        "eventType",
-        "entities",
-        "description",
-        "importance",
-        "confidence",
+      anyOf: [
+        {
+          type: "object",
+          properties: eventProperties,
+          required: [
+            "eventType",
+            "entities",
+            "description",
+            "importance",
+            "confidence",
+          ],
+        },
+        { type: "null" },
       ],
     },
   },
@@ -42,8 +46,8 @@ const analysisResponseSchema = {
 };
 
 const answerResponseSchema = {
-  type: "OBJECT",
-  properties: { answer: { type: "STRING" } },
+  type: "object",
+  properties: { answer: { type: "string" } },
   required: ["answer"],
 };
 
@@ -147,33 +151,31 @@ async function generateJson({
   signal,
 }) {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}` +
-      `:generateContent?key=${encodeURIComponent(apiKey)}`,
+    "https://generativelanguage.googleapis.com/v1beta/interactions",
     {
       method: "POST",
       signal,
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": apiKey,
+        "Api-Revision": "2026-05-20",
+      },
       body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: prompt },
-              {
-                inlineData: {
-                  mimeType: frame.mimeType,
-                  data: frame.data,
-                },
-              },
-            ],
-          },
+        model,
+        input: [
+          { type: "text", text: prompt },
+          { type: "image", data: frame.data, mime_type: frame.mimeType },
         ],
-        generationConfig: {
-          maxOutputTokens: 512,
-          thinkingConfig: { thinkingLevel: "minimal" },
-          responseMimeType: "application/json",
-          responseSchema,
+        response_format: {
+          type: "text",
+          mime_type: "application/json",
+          schema: responseSchema,
         },
+        generation_config: {
+          max_output_tokens: 512,
+          thinking_level: "minimal",
+        },
+        store: false,
       }),
     }
   );
@@ -184,8 +186,11 @@ async function generateJson({
     throw new Error(`Gemini vision request failed (${response.status}): ${detail}`);
   }
 
-  const text = (payload.candidates?.[0]?.content?.parts || [])
-    .map((part) => part.text || "")
+  const text = (payload.steps || [])
+    .filter((step) => step.type === "model_output")
+    .flatMap((step) => step.content || [])
+    .filter((content) => content.type === "text")
+    .map((content) => content.text || "")
     .join("")
     .trim();
   if (!text) throw new Error("Gemini vision returned no structured result.");

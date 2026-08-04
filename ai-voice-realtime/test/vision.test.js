@@ -21,31 +21,42 @@ test("buildAnalysisPrompt binds narration to the exact frame", () => {
   assert.match(prompt, /A document editor is visible/);
 });
 
-test("analyzeVisionFrame uses Gemini 3 request settings", async (t) => {
+test("analyzeVisionFrame uses the Gemini Interactions contract", async (t) => {
+  let requestUrl;
   let requestBody;
+  let requestHeaders;
   let requestSignal;
   const originalFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;
   });
-  globalThis.fetch = async (_url, init) => {
+  globalThis.fetch = async (url, init) => {
+    requestUrl = url;
     requestBody = JSON.parse(init.body);
+    requestHeaders = new Headers(init.headers);
     requestSignal = init.signal;
     return new Response(
       JSON.stringify({
-        candidates: [
+        id: "interaction-test",
+        model: "gemini-3.6-flash",
+        status: "completed",
+        steps: [
           {
-            content: {
-              parts: [
-                {
-                  text: JSON.stringify({
-                    shouldNarrate: false,
-                    description: "",
-                    event: null,
-                  }),
-                },
-              ],
-            },
+            type: "user_input",
+            content: [{ type: "text", text: "request fixture" }],
+          },
+          {
+            type: "model_output",
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  shouldNarrate: false,
+                  description: "",
+                  event: null,
+                }),
+              },
+            ],
           },
         ],
       }),
@@ -65,9 +76,24 @@ test("analyzeVisionFrame uses Gemini 3 request settings", async (t) => {
     signal: controller.signal,
   });
 
-  assert.deepEqual(requestBody.generationConfig.thinkingConfig, {
-    thinkingLevel: "minimal",
+  assert.equal(
+    requestUrl,
+    "https://generativelanguage.googleapis.com/v1beta/interactions"
+  );
+  assert.equal(requestHeaders.get("x-goog-api-key"), "test-key");
+  assert.equal(requestHeaders.get("api-revision"), "2026-05-20");
+  assert.equal(requestBody.model, "gemini-3.6-flash");
+  assert.equal(requestBody.input[0].type, "text");
+  assert.deepEqual(requestBody.input.slice(1), [
+    { type: "image", data: "test-frame", mime_type: "image/jpeg" },
+  ]);
+  assert.equal(requestBody.response_format.type, "text");
+  assert.equal(requestBody.response_format.mime_type, "application/json");
+  assert.equal(requestBody.response_format.schema.type, "object");
+  assert.deepEqual(requestBody.generation_config, {
+    max_output_tokens: 512,
+    thinking_level: "minimal",
   });
-  assert.equal("temperature" in requestBody.generationConfig, false);
+  assert.equal(requestBody.store, false);
   assert.equal(requestSignal, controller.signal);
 });
