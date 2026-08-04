@@ -81,6 +81,7 @@ export class ClientSession {
     this.transcriber = null;
     this.liveHealth = "connecting";
     this.activeAtomicAnalysis = null;
+    this.pendingAtomicNarration = null;
     this.activeSpeechTurn = null;
     this.completedTurnIds = new Set();
     this.closed = false;
@@ -513,16 +514,24 @@ export class ClientSession {
   }
 
   // Atomic Interactions analyses are intentionally separate from Live turns.
-  requestNarration(initial = false) {
+  requestNarration(initial = false, { coalesce = false } = {}) {
     const snapshot = this.captureFrameSnapshot();
     if (!snapshot) return;
     if (this.activeAtomicAnalysis && !this.activeAtomicAnalysis.controller.signal.aborted) {
+      if (coalesce) {
+        this.pendingAtomicNarration = { initial, snapshot, userTurnEpoch: this.userTurnEpoch };
+        return;
+      }
       this.activeAtomicAnalysis.controller.abort(new DOMException("Superseded visual analysis", "AbortError"));
     }
+    this.startAtomicNarration(initial, snapshot, this.userTurnEpoch);
+  }
+
+  startAtomicNarration(initial, snapshot, userTurnEpoch) {
     const record = {
       id: randomUUID(),
       controller: new AbortController(),
-      userTurnEpoch: this.userTurnEpoch,
+      userTurnEpoch,
     };
     this.activeAtomicAnalysis = record;
     void this.runAtomicNarration(record, initial, snapshot);
@@ -552,7 +561,14 @@ export class ClientSession {
     } catch (error) {
       if (!record.controller.signal.aborted) this.sendBrowser({ type: "analysis_error", text: "Visual analysis is temporarily unavailable." });
     } finally {
-      if (this.activeAtomicAnalysis === record) this.activeAtomicAnalysis = null;
+      if (this.activeAtomicAnalysis === record) {
+        this.activeAtomicAnalysis = null;
+        const pending = this.pendingAtomicNarration;
+        this.pendingAtomicNarration = null;
+        if (!this.closed && pending) {
+          this.startAtomicNarration(pending.initial, pending.snapshot, pending.userTurnEpoch);
+        }
+      }
       this.scheduleSpeechPolicyWake();
     }
   }
@@ -607,7 +623,7 @@ export class ClientSession {
     this.firstVideoFrame = true;
     this.latestFrame = { data: Buffer.from(jpegBytes).toString("base64"), hash, mimeType, acceptedAtMs: this.lastFrameAcceptedAtMs, frameSequence: this.videoFrames };
     this.enqueueLiveFrame(this.latestFrame);
-    if (scheduleNarration) this.requestNarration(this.videoFrames === 1);
+    if (scheduleNarration) this.requestNarration(this.videoFrames === 1, { coalesce: true });
     if (this.videoFrames === 1 || this.videoFrames % 10 === 0) this.sendBrowser({ type: "telemetry", text: `video frames accepted: ${this.videoFrames} at ${formatTimestamp(this.latestTimestampSeconds)}` });
   }
 
@@ -698,6 +714,7 @@ export class ClientSession {
     this.live = null;
     this.transcriber = null;
     this.pendingLiveFrame = null;
+    this.pendingAtomicNarration = null;
     this.latestFrame = null;
     this.activeSpeechTurn = null;
     this.activeAtomicAnalysis = null;

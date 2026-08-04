@@ -123,6 +123,43 @@ test("runs atomic narration from an admitted browser video frame without a direc
   assert.equal(fixture.browser.messages.some((message) => message.type === "event"), true);
 });
 
+test("coalesces sustained admitted frames behind a slow atomic analysis without aborting it", async (t) => {
+  let now = 0;
+  const first = deferred();
+  const second = deferred();
+  const inputs = [];
+  const fixture = createFixture({
+    now: () => now,
+    analyzeFrame(input) {
+      inputs.push(input);
+      return inputs.length === 1 ? first.promise : second.promise;
+    },
+    liveSessionFactory: () => new FakeLiveSession(),
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+
+  const frame = (timestampSeconds, data) => fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "video_frame", timestampSeconds, mimeType: "image/jpeg", data: Buffer.from(data).toString("base64"),
+  })), false);
+  frame(1, "first");
+  await flushAsyncWork();
+  now = 1_000;
+  frame(2, "latest");
+
+  assert.equal(inputs.length, 1);
+  assert.equal(inputs[0].signal.aborted, false);
+  first.resolve(approvedAnalysis({ semanticKey: "first", event: null }));
+  await flushAsyncWork();
+  assert.equal(inputs.length, 2);
+  assert.equal(inputs[1].timestampSeconds, 2);
+  second.resolve(approvedAnalysis({ semanticKey: "latest", event: null }));
+  await flushAsyncWork();
+  assert.equal(fixture.session.lastGroundedDescription, approvedAnalysis({ semanticKey: "latest", event: null }).description);
+});
+
 test("keeps ready captured-tab narration eligibility through a microphone-only media update", async (t) => {
   let now = 0;
   const live = new FakeLiveSession();
