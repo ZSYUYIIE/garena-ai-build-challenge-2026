@@ -88,6 +88,14 @@ export function shouldAcceptTurnUpdate(
   return turnId === activeTurnId || turnId === settlingTurnId;
 }
 
+export function descriptionAfterTurnComplete(
+  currentDescription: string,
+  mode: TurnMode,
+  interrupted: boolean,
+): string {
+  return mode === "narration" && interrupted ? "" : currentDescription;
+}
+
 export function updateTurnChatMessages(
   messages: RealtimeChatMessage[],
   update: {
@@ -146,8 +154,10 @@ type TextServerMessage = {
 type TurnTextServerMessage = {
   type: "narration_update";
   turnId: string;
-  mode: TurnMode;
+  mode: "narration";
   text: string;
+  finished: boolean;
+  languageCode?: string;
 };
 
 type TranscriptServerMessage = {
@@ -187,6 +197,7 @@ export type ServerMessage =
       mode: TurnMode;
       text?: string;
       interrupted?: boolean;
+      retryable: boolean;
       suppressed?: boolean;
     };
 
@@ -315,14 +326,17 @@ export function parseServerMessage(rawText: string): ServerMessage {
     case "answer_update":
       requireExactKeys(value, ["type", "turnId", "mode", "text", "finished"], ["languageCode"]);
       requireTurn(value);
+      if (value.mode !== "answer") invalidServerMessage();
       requireString(value.text);
       if (typeof value.finished !== "boolean") invalidServerMessage();
       requireOptionalString(value.languageCode);
       return value as ServerMessage;
     case "narration_update":
-      requireExactKeys(value, ["type", "turnId", "mode", "text"]);
+      requireExactKeys(value, ["type", "turnId", "mode", "text", "finished"], ["languageCode"]);
       requireTurn(value);
+      if (value.mode !== "narration" || typeof value.finished !== "boolean") invalidServerMessage();
       requireString(value.text);
+      requireOptionalString(value.languageCode);
       return value as ServerMessage;
     case "model_audio":
       requireExactKeys(value, ["type", "turnId", "mode", "mimeType", "data"]);
@@ -339,10 +353,11 @@ export function parseServerMessage(rawText: string): ServerMessage {
       requireOptionalString(value.reason);
       return value as ServerMessage;
     case "turn_complete":
-      requireExactKeys(value, ["type", "turnId", "mode"], ["text", "interrupted", "suppressed"]);
+      requireExactKeys(value, ["type", "turnId", "mode", "retryable"], ["text", "interrupted", "suppressed"]);
       requireTurn(value);
       requireOptionalString(value.text);
       requireOptionalBoolean(value.interrupted);
+      if (typeof value.retryable !== "boolean") invalidServerMessage();
       requireOptionalBoolean(value.suppressed);
       return value as ServerMessage;
     case "provider_health":

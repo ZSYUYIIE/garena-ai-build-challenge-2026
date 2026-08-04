@@ -6,7 +6,7 @@ import { analyzeVisionFrame } from "../gemini/vision.js";
 import { GeminiLiveSession } from "../gemini/liveSession.js";
 import { buildNarrationEventCandidate, shouldSuppressVisualDescription } from "../gemini/transcript.js";
 import { parseAudioPacket, AudioSequenceGuard } from "../protocol/audioPackets.js";
-import { parseBrowserMessage } from "../protocol/browserMessages.js";
+import { parseBrowserMessage, parseServerOutput, PROTOCOL_VERSION } from "../protocol/browserMessages.js";
 import { SessionRateLimiter } from "../protocol/sessionRateLimiter.js";
 import { SpeechPolicy } from "./speechPolicy.js";
 import { GoogleSpeechTranscriber } from "../stt/googleSpeechTranscriber.js";
@@ -105,8 +105,6 @@ export class ClientSession {
 
   async start() {
     this.attachBrowserHandlers();
-    this.sendBrowser({ type: "connected", model: this.model });
-    this.sendBrowser({ type: "status", mode: "narration" });
   }
 
   attachBrowserHandlers() {
@@ -172,6 +170,8 @@ export class ClientSession {
     this.initialTabAudioState = message.tabAudioState;
     this.tabAudioState = message.tabAudioState;
     this.microphoneState = message.microphoneState;
+    this.sendBrowser({ type: "connected", protocolVersion: PROTOCOL_VERSION, model: this.model });
+    this.sendBrowser({ type: "status", mode: "narration" });
     // Captured audio is unknown until the cloud stream proves it is clean.
     this.applySpeechActions(this.speechPolicy.setTabAudioState?.(
       message.tabAudioState === "absent" ? "absent" : "degraded",
@@ -289,7 +289,7 @@ export class ClientSession {
     const turn = { turnId, mode: "answer", source, openActivity: source === "microphone", completed: false };
     this.activeSpeechTurn = turn;
     this.sendBrowser({ type: "turn_started", turnId, mode: "answer" });
-    if (source === "typed") this.sendBrowser({ type: "user_transcript", turnId, text, finished: true });
+    if (source === "typed") this.sendBrowser({ type: "user_transcript", turnId, mode: "answer", text, finished: true });
     if (!this.live || this.liveHealth !== "ready") {
       return this.completeSpeechTurn(turn, { interrupted: true, retryable: true });
     }
@@ -349,7 +349,7 @@ export class ClientSession {
     } else if (state === "degraded" || state === "closed") {
       void this.degradeTabContext();
     }
-    this.sendBrowser({ type: "provider_health", provider: "stt", state: safeProviderState(state) });
+    this.sendBrowser({ type: "provider_health", provider: "tab_stt", state: safeProviderState(state) });
     this.applySpeechActions(this.speechPolicy.poll?.() ?? []);
     this.scheduleSpeechPolicyWake();
   }
@@ -421,8 +421,12 @@ export class ClientSession {
     if (this.closed) return;
     if (event.type === "health") {
       const state = safeProviderState(event.state);
-      if (state !== "telemetry") this.liveHealth = state;
-      this.applySpeechActions(this.speechPolicy.setLiveState?.(state === "telemetry" ? this.liveHealth : state) ?? []);
+      if (state === "telemetry") {
+        this.sendBrowser({ type: "telemetry", text: String(event.message ?? "Live diagnostic event.") });
+        return;
+      }
+      this.liveHealth = state;
+      this.applySpeechActions(this.speechPolicy.setLiveState?.(state) ?? []);
       this.sendBrowser({ type: "provider_health", provider: "live", state });
       this.applySpeechActions(this.speechPolicy.poll?.() ?? []);
       return this.scheduleSpeechPolicyWake();
@@ -438,7 +442,7 @@ export class ClientSession {
       return;
     }
     if (event.type === "input_transcript" && turn?.mode === "answer") {
-      this.sendBrowser({ type: "user_transcript", turnId: turn.turnId, text: event.text, finished: event.finished === true, languageCode: event.languageCode });
+      this.sendBrowser({ type: "user_transcript", turnId: turn.turnId, mode: "answer", text: event.text, finished: event.finished === true, languageCode: event.languageCode });
       return;
     }
     if (event.type === "output_transcript" && turn) {
@@ -474,7 +478,7 @@ export class ClientSession {
   sendPlaybackClear(turn, reason) {
     if (turn.playbackCleared) return;
     turn.playbackCleared = true;
-    this.sendBrowser({ type: "playback_clear", turnId: turn.turnId, reason });
+    this.sendBrowser({ type: "playback_clear", turnId: turn.turnId, mode: turn.mode, reason });
   }
 
   sendTurnComplete(turn, { interrupted = false, retryable = false } = {}) {
@@ -637,7 +641,7 @@ export class ClientSession {
 
   sendBrowser(message, { audio = false } = {}) {
     if (this.browser.readyState !== WebSocket.OPEN) return false;
-    const serialized = JSON.stringify(message);
+    const serialized = JSON.stringify(parseServerOutput(message));
     const messageBytes = Buffer.byteLength(serialized, "utf8");
     if ((this.browser.bufferedAmount ?? 0) + messageBytes > OUTPUT_BUFFER_LIMIT_BYTES) {
       if (audio) {

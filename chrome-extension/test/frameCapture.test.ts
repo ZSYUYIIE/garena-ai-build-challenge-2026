@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   calculateFrameDimensions,
+  createFrameCaptureScheduler,
 } from "../src/sidepanel/realtime/frameCapture.ts";
 
 test("caps a 1080p tab at 1280x720", () => {
@@ -31,4 +32,28 @@ test("uses a 1280x720 fallback for unavailable dimensions", () => {
     width: 1280,
     height: 720,
   });
+});
+
+test("queues a forced capture behind an unchanged routine capture without overlap", async () => {
+  const calls: boolean[] = [];
+  let active = 0;
+  let maxActive = 0;
+  let releaseRoutine: (() => void) | null = null;
+  const scheduler = createFrameCaptureScheduler(async ({ force }) => {
+    calls.push(force);
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    if (!force) await new Promise<void>((resolve) => { releaseRoutine = resolve; });
+    active -= 1;
+  });
+
+  const routine = scheduler.capture({ force: false });
+  await Promise.resolve();
+  const forced = scheduler.capture({ force: true });
+  assert.deepEqual(calls, [false]);
+  releaseRoutine?.();
+  await Promise.all([routine, forced]);
+
+  assert.deepEqual(calls, [false, true]);
+  assert.equal(maxActive, 1);
 });

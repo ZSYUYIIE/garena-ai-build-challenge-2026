@@ -3,8 +3,33 @@ import test from "node:test";
 
 import {
   RealtimeMediaAudio,
+  createContextTimeToExtensionSessionMs,
   createMediaSocketProtocol,
 } from "../src/sidepanel/realtime/mediaAudio.ts";
+
+function sinePcm(durationMs: number, amplitude: number, frequency: number, sampleRate: number): Int16Array {
+  return Int16Array.from(
+    { length: (durationMs * sampleRate) / 1_000 },
+    (_, index) => Math.round(Math.sin((index * Math.PI * 2 * frequency) / sampleRate) * amplitude * 32_767),
+  );
+}
+
+function sineFloats(durationMs: number, amplitude: number, frequency: number, sampleRate: number): Float32Array {
+  return Float32Array.from(
+    { length: (durationMs * sampleRate) / 1_000 },
+    (_, index) => Math.sin((index * Math.PI * 2 * frequency) / sampleRate) * amplitude,
+  );
+}
+
+test("maps scheduled AudioContext time onto the performance session clock", () => {
+  const map = createContextTimeToExtensionSessionMs({
+    contextTime: 1.25,
+    extensionSessionMs: 10_000,
+  });
+
+  assert.equal(map(1.5), 10_250);
+  assert.equal(map(1), 9_750);
+});
 
 type Listener = () => void;
 
@@ -375,6 +400,33 @@ test("suppresses mic VAD while disabled and restarts it from a reset detector", 
   media.context.worklets[1].emit(new Float32Array(9_600).fill(0.6));
   assert.deepEqual(media.userEvents, ["start"]);
   assert.ok(media.micPackets.length > 0);
+});
+
+test("feeds scheduled model playback into live mic echo rejection without blocking independent speech", async () => {
+  const referencePcm = sinePcm(800, 0.2, 310, 48_000);
+  const leakage = sineFloats(300, 0.09, 310, 48_000);
+  const echo = fixture({ now: () => 1_080 });
+  await startBoth(echo);
+  echo.audio.pushPlaybackReference({
+    source: "model",
+    pcm: referencePcm,
+    sampleRate: 48_000,
+    firstSampleExtensionSessionMs: 1_000,
+  });
+  echo.context.worklets[1].emit(leakage);
+  assert.deepEqual(echo.userEvents, []);
+
+  const speech = fixture({ now: () => 1_080 });
+  await startBoth(speech);
+  speech.audio.pushPlaybackReference({
+    source: "model",
+    pcm: referencePcm,
+    sampleRate: 48_000,
+    firstSampleExtensionSessionMs: 1_000,
+  });
+  const user = sineFloats(300, 0.42, 760, 48_000);
+  speech.context.worklets[1].emit(Float32Array.from(leakage, (sample, index) => sample + user[index]));
+  assert.deepEqual(speech.userEvents, ["start"]);
 });
 
 test("reports first-sample timestamps from sample-duration cursors", async () => {

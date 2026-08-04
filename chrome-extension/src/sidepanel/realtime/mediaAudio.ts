@@ -14,6 +14,16 @@ export type RealtimeMediaState = {
   microphoneState: MicrophoneState;
 };
 
+export function createContextTimeToExtensionSessionMs(origin: {
+  contextTime: number;
+  extensionSessionMs: number;
+}): (contextTime: number) => number {
+  return (contextTime) => Math.max(
+    0,
+    Math.round(origin.extensionSessionMs + (contextTime - origin.contextTime) * 1_000),
+  );
+}
+
 type TabOptions = {
   tabStream: MediaStream;
   onTabPacket: (packet: Int16Array, firstSampleTimestampMs: number) => void;
@@ -289,6 +299,11 @@ export class RealtimeMediaAudio {
     this.micChunker = this.audioContext ? new PcmChunker(640) : null;
     this.micNextPacketTimestampMs = null;
     this.userVad.reset();
+  }
+
+  pushPlaybackReference(reference: PlaybackReference): void {
+    if (this.stopped) return;
+    this.userVad.pushReference(reference);
   }
 
   setTabGain(gain: 0.3 | 1, fadeMs: number): void {

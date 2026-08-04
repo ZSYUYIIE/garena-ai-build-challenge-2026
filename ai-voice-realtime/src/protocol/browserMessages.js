@@ -2,6 +2,8 @@ import { z } from "zod";
 
 export const MAX_WEBSOCKET_PAYLOAD_BYTES = 2 * 1024 * 1024;
 export const PROTOCOL_VERSION = 2;
+const base64Pattern =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 export const SERVER_MESSAGE_TYPES = Object.freeze([
   "analysis_error",
@@ -21,8 +23,67 @@ export const SERVER_MESSAGE_TYPES = Object.freeze([
   "user_transcript",
 ]);
 
-const base64Pattern =
-  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const turnId = z.string().uuid();
+const turnMode = z.enum(["answer", "narration"]);
+const providerState = z.enum(["connecting", "ready", "degraded", "closed"]);
+const pcmMimeType = z.string().refine((value) => {
+  const match = /^audio\/pcm;rate=([1-9][0-9]*)$/.exec(value);
+  if (!match) return false;
+  const sampleRate = Number(match[1]);
+  return Number.isSafeInteger(sampleRate) && sampleRate >= 8_000 && sampleRate <= 48_000;
+});
+const serverEvent = z.object({
+  id: z.string(),
+  timestampSeconds: z.number().finite(),
+  timestamp: z.string(),
+  eventType: z.string(),
+  entities: z.array(z.string()),
+  description: z.string(),
+  importance: z.number().finite(),
+  confidence: z.number().finite(),
+}).strict();
+
+const serverOutputSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("analysis_error"), text: z.string().optional() }).strict(),
+  z.object({
+    type: z.literal("answer_update"), turnId, mode: z.literal("answer"),
+    text: z.string(), finished: z.boolean(), languageCode: z.string().optional(),
+  }).strict(),
+  z.object({ type: z.literal("connected"), protocolVersion: z.literal(2), model: z.string().optional() }).strict(),
+  z.object({ type: z.literal("error"), text: z.string().optional() }).strict(),
+  z.object({ type: z.literal("event"), event: serverEvent.optional() }).strict(),
+  z.object({
+    type: z.literal("narration_update"), turnId, mode: z.literal("narration"),
+    text: z.string(), finished: z.boolean(), languageCode: z.string().optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("model_audio"), turnId, mode: turnMode,
+    mimeType: pcmMimeType,
+    data: z.string().min(1).regex(base64Pattern),
+  }).strict(),
+  z.object({ type: z.literal("playback_clear"), turnId, mode: turnMode, reason: z.string().optional() }).strict(),
+  z.object({
+    type: z.literal("provider_health"), provider: z.enum(["live", "tab_stt"]),
+    state: providerState, message: z.string().optional(),
+  }).strict(),
+  z.object({ type: z.literal("status"), mode: z.string().optional() }).strict(),
+  z.object({ type: z.literal("status_text"), text: z.string().optional() }).strict(),
+  z.object({ type: z.literal("telemetry"), text: z.string().optional() }).strict(),
+  z.object({
+    type: z.literal("turn_complete"), turnId, mode: turnMode,
+    interrupted: z.boolean().optional(), retryable: z.boolean(), text: z.string().optional(),
+    suppressed: z.boolean().optional(),
+  }).strict(),
+  z.object({ type: z.literal("turn_started"), turnId, mode: turnMode }).strict(),
+  z.object({
+    type: z.literal("user_transcript"), turnId, mode: z.literal("answer"),
+    text: z.string(), finished: z.boolean(), languageCode: z.string().optional(),
+  }).strict(),
+]);
+
+export function parseServerOutput(value) {
+  return serverOutputSchema.parse(value);
+}
 
 const tabAudioState = z.enum(["absent", "captured", "degraded"]);
 const microphoneState = z.enum(["pending", "ready", "denied", "degraded"]);

@@ -7,6 +7,7 @@ import {
   shouldSyncIdleGuidance,
 } from "../src/sidepanel/realtime/sessionLifecycle.ts";
 import { shouldAcceptTurnUpdate } from "../src/sidepanel/realtime/types.ts";
+import { descriptionAfterTurnComplete } from "../src/sidepanel/realtime/types.ts";
 
 test("invalidates an older startup when a replacement session begins", () => {
   const sessions = createSessionGenerationGuard();
@@ -77,4 +78,19 @@ test("keeps one bounded completed turn available for late transcript settlement"
   assert.equal(shouldAcceptTurnUpdate(turnId, null, turnId), true);
   assert.equal(shouldAcceptTurnUpdate(turnId, null, displaced), false);
   assert.equal(shouldAcceptTurnUpdate(turnId, null, null), false);
+});
+
+test("keeps completed narration visible and clears only interrupted narration", () => {
+  assert.equal(
+    descriptionAfterTurnComplete("The scoreboard shows 2-1.", "narration", false),
+    "The scoreboard shows 2-1.",
+  );
+  assert.equal(
+    descriptionAfterTurnComplete("Stale narration", "narration", true),
+    "",
+  );
+  assert.equal(
+    descriptionAfterTurnComplete("Current description", "answer", true),
+    "Current description",
+  );
 });

@@ -6,8 +6,46 @@ import { WebSocket } from "ws";
 
 import { EventStore } from "../src/events/eventStore.js";
 import { GeminiLiveSession } from "../src/gemini/liveSession.js";
+import { parseServerOutput } from "../src/protocol/browserMessages.js";
 import { ClientSession } from "../src/session/clientSession.js";
 import { SpeechPolicy } from "../src/session/speechPolicy.js";
+
+test("acknowledges protocol v2 only after hello and validates every emitted server message", async (t) => {
+  const fixture = createFixture({ liveSessionFactory: () => new FakeLiveSession() });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+
+  assert.deepEqual(fixture.browser.messages, []);
+  hello(fixture, "absent");
+  await flushAsyncWork();
+
+  assert.deepEqual(fixture.browser.messages[0], {
+    type: "connected",
+    protocolVersion: 2,
+    model: "test-model",
+  });
+  for (const message of fixture.browser.messages) {
+    assert.deepEqual(parseServerOutput(message), message);
+  }
+});
+
+test("routes Live telemetry diagnostics outside provider readiness health", async (t) => {
+  const fixture = createFixture({ liveSessionFactory: () => new FakeLiveSession() });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+
+  fixture.session.handleLiveMessage({ type: "health", state: "telemetry", message: "Dropped stale output." });
+
+  assert.equal(
+    fixture.browser.messages.some((message) => message.type === "provider_health" && message.state === "telemetry"),
+    false,
+  );
+  assert.deepEqual(fixture.browser.messages.at(-1), {
+    type: "telemetry",
+    text: "Dropped stale output.",
+  });
+});
 
 test("closes malformed and non-object JSON as a client policy violation", async () => {
   for (const raw of ["{", "null", "[]"]) {
@@ -111,6 +149,7 @@ test("uses Live once for typed text and preserves attributed transcript chunks",
 
   assert.deepEqual(live.typedQuestions, [{ turnId, text: "What changed?" }]);
   assert.equal(fixture.browser.messages.filter((message) => message.type === "user_transcript" && message.turnId === turnId).length, 2);
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "user_transcript" && message.turnId === turnId).every((message) => message.mode === "answer"), true);
   assert.deepEqual(fixture.browser.messages.find((message) => message.type === "answer_update"), {
     type: "answer_update", turnId, mode: "answer", text: "The score changed.", finished: true, languageCode: "en-US",
   });
@@ -507,9 +546,9 @@ test("rejected STT startup remains degraded until an authoritative ready callbac
   hello(fixture, "captured");
   await flushAsyncWork();
 
-  assert.equal(fixture.browser.messages.filter((message) => message.type === "provider_health" && message.provider === "stt").at(-1).state, "degraded");
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "provider_health" && message.provider === "tab_stt").at(-1).state, "degraded");
   callbacks.onHealth("ready");
-  assert.equal(fixture.browser.messages.filter((message) => message.type === "provider_health" && message.provider === "stt").at(-1).state, "ready");
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "provider_health" && message.provider === "tab_stt").at(-1).state, "ready");
 });
 
 test("pending Live startup does not accept typed or microphone traffic", async (t) => {

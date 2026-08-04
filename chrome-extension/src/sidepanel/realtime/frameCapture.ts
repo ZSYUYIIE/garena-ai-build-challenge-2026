@@ -5,6 +5,35 @@ const FALLBACK_SOURCE_HEIGHT = 720;
 export const FRAME_CAPTURE_JPEG_QUALITY = 0.8;
 export const FRAME_CAPTURE_MAX_BYTES = 512 * 1024;
 
+export function createFrameCaptureScheduler(
+  runCapture: (options: { force: boolean }) => Promise<void>,
+): { capture: (options: { force: boolean }) => Promise<void> } {
+  let inFlight: Promise<void> | null = null;
+  let forcePending = false;
+
+  const capture = (options: { force: boolean }): Promise<void> => {
+    if (options.force) forcePending = true;
+    if (inFlight) return inFlight;
+
+    const initialForce = forcePending;
+    forcePending = false;
+    const task = (async () => {
+      let force = initialForce;
+      do {
+        await runCapture({ force });
+        force = forcePending;
+        forcePending = false;
+      } while (force);
+    })().finally(() => {
+      if (inFlight === task) inFlight = null;
+    });
+    inFlight = task;
+    return task;
+  };
+
+  return { capture };
+}
+
 export function calculateFrameDimensions(
   sourceWidth: number,
   sourceHeight: number,

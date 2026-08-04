@@ -9,11 +9,13 @@ import {
 import type { NarrationMode } from "../context/ConfigurationContext";
 import {
   calculateFrameDimensions,
+  createFrameCaptureScheduler,
   encodeJpegWithinBudget,
   FRAME_CAPTURE_MAX_BYTES,
 } from "./frameCapture";
 import { ModelAudioPlayback } from "./modelAudioPlayback";
 import {
+  createContextTimeToExtensionSessionMs,
   createMediaSocketProtocol,
   RealtimeMediaAudio,
   type RealtimeMediaState,
@@ -23,6 +25,7 @@ import { SpeechCoordinator } from "./speechCoordinator";
 import { useCaptureTarget } from "./useCaptureTarget";
 import {
   backpressureAction,
+  descriptionAfterTurnComplete,
   parseServerMessage,
   shouldAcceptTurnUpdate,
   updateTurnChatMessages,
@@ -82,7 +85,6 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const captureStartedAtRef = useRef<number | null>(null);
   const capturedTabIdRef = useRef<number | null>(null);
   const frameTimerRef = useRef<number | null>(null);
-  const frameInFlightRef = useRef<Promise<void> | null>(null);
   const lastFrameSignatureRef = useRef<Uint8Array | null>(null);
   const lastFrameSentAtRef = useRef(0);
   const latestFrameRef = useRef<LatestFrame | null>(null);
@@ -122,7 +124,6 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       window.clearInterval(frameTimerRef.current);
       frameTimerRef.current = null;
     }
-    frameInFlightRef.current = null;
     latestFrameRef.current = null;
     lastFrameSignatureRef.current = null;
     voiceTurnRef.current = null;
@@ -226,6 +227,11 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     controller = mediaAudio;
     mediaAudioRef.current = mediaAudio;
     const preparedAudio = mediaAudio.prepareForUserGesture();
+    const audioClockOrigin = {
+      contextTime: preparedAudio.audioContext.currentTime,
+      extensionSessionMs: performance.now(),
+    };
+    const contextTimeToExtensionSessionMs = createContextTimeToExtensionSessionMs(audioClockOrigin);
     publishVoiceStatus({ sessionActive: true, microphoneState: "pending" });
 
     const closeUnsafeMicrophoneTurn = (turnId: string, reason: string) => {
@@ -255,8 +261,13 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     };
     const playback = new ModelAudioPlayback({
       audioContext: preparedAudio.audioContext,
-      contextTimeToExtensionSessionMs: (contextTime) => Math.max(0, Math.round(contextTime * 1_000)),
-      onReferencePcm: () => undefined,
+      contextTimeToExtensionSessionMs,
+      onReferencePcm: (reference) => mediaAudio.pushPlaybackReference({
+        source: "model",
+        pcm: reference.pcm,
+        sampleRate: reference.sampleRate,
+        firstSampleExtensionSessionMs: reference.firstSampleExtensionSessionMs,
+      }),
       onIdle: () => undefined,
     });
     const coordinator = new SpeechCoordinator({
@@ -273,7 +284,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     });
     speechCoordinatorRef.current = coordinator;
 
-    const captureFrame = async ({ force }: { force: boolean }): Promise<void> => {
+    const runFrameCapture = async ({ force }: { force: boolean }): Promise<void> => {
       const websocket = websocketRef.current;
       const video = captureVideoRef.current;
       const canvas = captureCanvasRef.current;
@@ -288,8 +299,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         return true;
       };
       flushLatest();
-      if (frameInFlightRef.current) return frameInFlightRef.current;
-      const task = (async () => {
+      await (async () => {
         const context = canvas.getContext("2d", { alpha: false });
         if (!context) throw new Error("Unable to create the frame capture canvas.");
         const { width, height } = calculateFrameDimensions(video.videoWidth, video.videoHeight);
@@ -311,12 +321,9 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         lastFrameSentAtRef.current = performance.now();
       })().catch((cause) => {
         if (isCurrent()) setError(`Could not capture a frame: ${toErrorMessage(cause)}`);
-      }).finally(() => {
-        if (frameInFlightRef.current === task) frameInFlightRef.current = null;
       });
-      frameInFlightRef.current = task;
-      return task;
     };
+    const { capture: captureFrame } = createFrameCaptureScheduler(runFrameCapture);
     captureFrameRef.current = captureFrame;
 
     const microphonePromise = mediaAudio.startMicrophone({
@@ -498,7 +505,11 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             } catch { websocket.close(1002, "Invalid audio payload"); }
             break;
           }
-          case "playback_clear": coordinator.clearPlayback(message.turnId); publishVoiceStatus({ geminiSpeaking: false }); break;
+          case "playback_clear":
+            coordinator.clearPlayback(message.turnId);
+            publishVoiceStatus({ geminiSpeaking: false });
+            if (message.mode === "narration") setDescription("");
+            break;
           case "turn_complete":
             coordinator.turnComplete(message);
             if (activeTurnIdRef.current === message.turnId) {
@@ -510,7 +521,11 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
                 settlingTurnTimerRef.current = null;
               }, LATE_TRANSCRIPT_SETTLEMENT_MS);
             }
-            if (message.mode === "narration") setDescription("");
+            setDescription((current) => descriptionAfterTurnComplete(
+              current,
+              message.mode,
+              message.interrupted === true,
+            ));
             break;
           case "status_text": if (message.text) setStatusText(message.text); break;
           case "narration":

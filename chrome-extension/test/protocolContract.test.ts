@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   parseBrowserMessage,
+  parseServerOutput,
   SERVER_MESSAGE_TYPES,
 } from "../../ai-voice-realtime/src/protocol/browserMessages.js";
 import {
@@ -157,6 +158,7 @@ test("strictly parses protocol-v2 turn-bound server messages", () => {
       turnId,
       mode: "narration",
       text: "The page has loaded.",
+      finished: false,
     },
     {
       type: "model_audio",
@@ -166,10 +168,11 @@ test("strictly parses protocol-v2 turn-bound server messages", () => {
       data: "AQI=",
     },
     { type: "playback_clear", turnId, mode: "answer", reason: "barge_in" },
-    { type: "turn_complete", turnId, mode: "answer", interrupted: false },
+    { type: "turn_complete", turnId, mode: "answer", interrupted: false, retryable: false },
     { type: "provider_health", provider: "live", state: "ready" },
   ];
 
+  assert.deepEqual(messages.map((message) => parseServerOutput(message)), messages);
   assert.deepEqual(messages.map((message) => parseServerMessage(JSON.stringify(message))), messages);
 });
 
@@ -198,11 +201,11 @@ test("parses a strict fixture for every advertised server message type", () => {
     { type: "playback_clear", turnId, mode: "answer" },
     { type: "provider_health", provider: "tab_stt", state: "degraded", message: "gap" },
     { type: "narration", text: "legacy narration" },
-    { type: "narration_update", turnId, mode: "narration", text: "live narration" },
+    { type: "narration_update", turnId, mode: "narration", text: "live narration", finished: true, languageCode: "en-US" },
     { type: "status", mode: "narrating" },
     { type: "status_text", text: "connected" },
     { type: "telemetry", text: "frame accepted" },
-    { type: "turn_complete", turnId, mode: "answer", suppressed: false },
+    { type: "turn_complete", turnId, mode: "answer", suppressed: false, retryable: false },
     { type: "turn_started", turnId, mode: "answer" },
     {
       type: "user_transcript",
@@ -243,13 +246,22 @@ test("rejects malformed strict server messages", () => {
       type: "model_audio",
       turnId,
       mode: "answer",
+      mimeType: "audio/pcm;rate=99999",
+      data: "AQI=",
+    },
+    {
+      type: "model_audio",
+      turnId,
+      mode: "answer",
       mimeType: "audio/pcm;rate=24000",
       data: "not-base64%%",
     },
     { type: "provider_health", provider: "live", state: "ready", text: "leak" },
+    { type: "provider_health", provider: "live", state: "telemetry" },
   ];
 
   for (const message of invalid) {
+    assert.throws(() => parseServerOutput(message));
     assert.throws(() => parseServerMessage(JSON.stringify(message)), /invalid server message/i);
   }
 });
