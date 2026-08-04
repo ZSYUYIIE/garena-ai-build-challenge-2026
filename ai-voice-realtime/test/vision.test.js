@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildAnalysisPrompt } from "../src/gemini/vision.js";
+import {
+  analyzeVisionFrame,
+  buildAnalysisPrompt,
+} from "../src/gemini/vision.js";
 
 test("buildAnalysisPrompt binds narration to the exact frame", () => {
   const prompt = buildAnalysisPrompt({
@@ -16,4 +19,50 @@ test("buildAnalysisPrompt binds narration to the exact frame", () => {
   assert.match(prompt, /StreamSense interface/i);
   assert.match(prompt, /03:42/);
   assert.match(prompt, /A document editor is visible/);
+});
+
+test("analyzeVisionFrame uses Gemini 3 request settings", async (t) => {
+  let requestBody;
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async (_url, init) => {
+    requestBody = JSON.parse(init.body);
+    return new Response(
+      JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    shouldNarrate: false,
+                    description: "",
+                    event: null,
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+
+  await analyzeVisionFrame({
+    apiKey: "test-key",
+    model: "gemini-3.6-flash",
+    frame: { mimeType: "image/jpeg", data: "test-frame" },
+    initial: true,
+    narrationLevel: "standard",
+    previousDescription: "",
+    timestampSeconds: 0,
+  });
+
+  assert.deepEqual(requestBody.generationConfig.thinkingConfig, {
+    thinkingLevel: "minimal",
+  });
+  assert.equal("temperature" in requestBody.generationConfig, false);
 });

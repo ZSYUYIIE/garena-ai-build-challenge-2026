@@ -28,7 +28,7 @@ const __dirname = path.dirname(__filename);
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "";
 const GEMINI_VISION_MODEL =
-  process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash";
+  process.env.GEMINI_VISION_MODEL || "gemini-3.6-flash";
 
 const PORT = Number(process.env.PORT || 8000);
 const HOST = process.env.HOST || "127.0.0.1";

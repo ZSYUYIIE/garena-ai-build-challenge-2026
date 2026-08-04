@@ -157,9 +157,8 @@ async function generateJson({ apiKey, model, frame, prompt, responseSchema }) {
           },
         ],
         generationConfig: {
-          temperature: 0,
           maxOutputTokens: 512,
-          thinkingConfig: { thinkingBudget: 0 },
+          thinkingConfig: { thinkingLevel: "minimal" },
           responseMimeType: "application/json",
           responseSchema,
         },
