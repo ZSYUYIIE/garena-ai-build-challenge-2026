@@ -78,6 +78,7 @@ export class ClientSession {
     this.currentTurnTranscript = "";
     this.currentTurnHasEvent = false;
     this.lastGroundedDescription = "";
+    this.groundedSemanticState = null;
     this.modelTurnId = 0;
     this.waitingForFirstFrameResolvers = [];
   }
@@ -234,7 +235,10 @@ export class ClientSession {
         signal: turn.controller.signal,
       });
       const isCurrent = this.isCurrentTurn(turn.id);
-      this.recordGroundedAnalysis(analysis, snapshot, { offerCandidate: isCurrent });
+      this.recordGroundedAnalysis(analysis, snapshot, {
+        initial,
+        offerCandidate: isCurrent,
+      });
       if (!isCurrent) return;
       this.finishModelTurn(turn.id);
     } catch (error) {
@@ -402,13 +406,37 @@ export class ClientSession {
     }
   }
 
-  recordGroundedAnalysis(analysis, snapshot, { offerCandidate = true } = {}) {
+  recordGroundedAnalysis(
+    analysis,
+    snapshot,
+    { initial = false, offerCandidate = true } = {}
+  ) {
     if (analysis.event) {
       this.recordVisionEvent(analysis.event, snapshot.timestampSeconds);
+    } else if (
+      analysis.shouldNarrate &&
+      analysis.description &&
+      !shouldSuppressVisualDescription(analysis.description)
+    ) {
+      this.recordNarrationEvent(
+        analysis.description,
+        initial,
+        snapshot.timestampSeconds
+      );
     }
 
     this.lastGroundedDescription =
       analysis.description || analysis.event?.description || analysis.semanticKey || "";
+    if (!analysis.semanticKey) {
+      this.groundedSemanticState = null;
+    } else if (
+      this.groundedSemanticState?.semanticKey !== analysis.semanticKey
+    ) {
+      this.groundedSemanticState = {
+        semanticKey: analysis.semanticKey,
+        originAcceptedAtMs: snapshot.acceptedAtMs,
+      };
+    }
 
     if (
       !offerCandidate ||
@@ -426,7 +454,7 @@ export class ClientSession {
       description: analysis.description,
       semanticKey: analysis.semanticKey,
       importance: analysis.importance,
-      createdAtMs: snapshot.acceptedAtMs,
+      createdAtMs: this.groundedSemanticState.originAcceptedAtMs,
     });
   }
 

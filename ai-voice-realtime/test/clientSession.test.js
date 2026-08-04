@@ -310,8 +310,55 @@ test("does not refresh a repeated sports candidate TTL during commentary", async
   fixture.session.requestNarration(false);
   await flushAsyncWork();
   speechPolicy.setCloudTabSpeech(false);
+  now = 6_751;
 
   assert.deepEqual(speechPolicy.poll(), []);
+  fixture.session.close();
+});
+
+test("records and publishes a fallback event before speech policy starts", async (t) => {
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({
+    speechPolicy,
+    async analyzeFrame() {
+      return approvedAnalysis({ event: null });
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.sendVideo(Buffer.from("opening scoreboard"), "image/jpeg", 7.5);
+  fixture.session.requestNarration(true);
+  await flushAsyncWork();
+
+  assert.equal(speechPolicy.offers.length, 1);
+  const events = fixture.eventStore.listBySession(fixture.session.sessionId);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].eventType, "scene_observed");
+  assert.equal(events[0].timestampSeconds, 7.5);
+  assert.equal(
+    fixture.browser.messages.filter((message) => message.type === "event").length,
+    1,
+  );
+  fixture.session.close();
+});
+
+test("does not record a fallback event for a self-description", async (t) => {
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({
+    speechPolicy,
+    async analyzeFrame() {
+      return approvedAnalysis({
+        description: "The StreamSense Now Describing panel shows a score.",
+        event: null,
+      });
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.sendVideo(Buffer.from("streamsense panel"), "image/jpeg", 8);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 0);
+  assert.equal(speechPolicy.offers.length, 1);
   fixture.session.close();
 });
 
