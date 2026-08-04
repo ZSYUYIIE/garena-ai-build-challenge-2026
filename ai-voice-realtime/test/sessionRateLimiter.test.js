@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { SessionRateLimiter } from "../src/protocol/sessionRateLimiter.js";
 
-test("allows two frames per rolling second and rejects the third", () => {
+test("allows one frame per rolling second and rejects another in the window", () => {
   const limiter = new SessionRateLimiter();
 
   assert.deepEqual(limiter.accept("video_frame", 0), {
@@ -11,8 +11,8 @@ test("allows two frames per rolling second and rejects the third", () => {
     retryAfterMs: 0,
   });
   assert.deepEqual(limiter.accept("video_frame", 499), {
-    allowed: true,
-    retryAfterMs: 0,
+    allowed: false,
+    retryAfterMs: 501,
   });
   assert.deepEqual(limiter.accept("video_frame", 999), {
     allowed: false,
@@ -42,4 +42,24 @@ test("does not rate-limit capture or configuration commands", () => {
     assert.equal(limiter.accept("capture_source", 0).allowed, true);
     assert.equal(limiter.accept("session_config", 0).allowed, true);
   }
+});
+
+test("keeps microphone and tab audio packet buckets independent", () => {
+  const limiter = new SessionRateLimiter();
+
+  for (let index = 0; index < 75; index += 1) {
+    assert.equal(limiter.accept("audio_microphone", 0).allowed, true);
+  }
+  assert.deepEqual(limiter.accept("audio_microphone", 0), {
+    allowed: false,
+    retryAfterMs: 1_000,
+  });
+
+  for (let index = 0; index < 15; index += 1) {
+    assert.equal(limiter.accept("audio_tab", 0).allowed, true);
+  }
+  assert.deepEqual(limiter.accept("audio_tab", 0), {
+    allowed: false,
+    retryAfterMs: 1_000,
+  });
 });

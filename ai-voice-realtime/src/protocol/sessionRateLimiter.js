@@ -1,6 +1,8 @@
 const LIMITS = Object.freeze({
-  video_frame: { count: 2, windowMs: 1_000 },
+  video_frame: { count: 1, windowMs: 1_000 },
   typed_question: { count: 1, windowMs: 2_000 },
+  audio_microphone: { count: 75, windowMs: 1_000 },
+  audio_tab: { count: 15, windowMs: 1_000 },
 });
 
 export class SessionRateLimiter {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const MAX_WEBSOCKET_PAYLOAD_BYTES = 2 * 1024 * 1024;
+export const PROTOCOL_VERSION = 2;
 
 export const SERVER_MESSAGE_TYPES = Object.freeze([
   "analysis_error",
@@ -9,6 +10,9 @@ export const SERVER_MESSAGE_TYPES = Object.freeze([
   "error",
   "event",
   "narration_update",
+  "model_audio",
+  "playback_clear",
+  "provider_health",
   "status",
   "status_text",
   "telemetry",
@@ -19,6 +23,9 @@ export const SERVER_MESSAGE_TYPES = Object.freeze([
 
 const base64Pattern =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+const tabAudioState = z.enum(["absent", "captured", "degraded"]);
+const microphoneState = z.enum(["pending", "ready", "denied", "degraded"]);
 
 const browserMessageSchema = z.discriminatedUnion("type", [
   z
@@ -54,8 +61,28 @@ const browserMessageSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("typed_question"),
       text: z.string().trim().min(1).max(500),
+      turnId: z.string().uuid(),
     })
     .strict(),
+  z
+    .object({
+      type: z.literal("session_hello"),
+      protocolVersion: z.literal(PROTOCOL_VERSION),
+      tabAudioState,
+      microphoneState,
+    })
+    .strict(),
+  z.object({ type: z.literal("media_state"), tabAudioState, microphoneState }).strict(),
+  z.object({ type: z.literal("tab_audio_activity"), active: z.boolean() }).strict(),
+  z
+    .object({
+      type: z.literal("tab_audio_discontinuity"),
+      timestampMs: z.number().int().nonnegative().max(0xffff_ffff),
+      reason: z.enum(["websocket_backpressure", "capture_gap", "track_ended"]),
+    })
+    .strict(),
+  z.object({ type: z.literal("user_activity_start"), turnId: z.string().uuid() }).strict(),
+  z.object({ type: z.literal("user_activity_end"), turnId: z.string().uuid() }).strict(),
 ]);
 
 export class BrowserMessageError extends Error {
