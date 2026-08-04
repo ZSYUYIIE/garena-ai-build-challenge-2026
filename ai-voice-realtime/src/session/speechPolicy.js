@@ -41,6 +41,14 @@ function addBounded(set, value, limit) {
   }
 }
 
+function addBoundedMap(map, key, value, limit) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > limit) {
+    map.delete(map.keys().next().value);
+  }
+}
+
 function copyCandidate(candidate) {
   return { ...candidate };
 }
@@ -71,7 +79,9 @@ function validateCandidate(candidate) {
  * can consume only the matching current reservation. The no-token overload is
  * retained solely for seeding an already-active narration in state tests and
  * never consumes a tokenized reservation; if one is outstanding, the untracked
- * no-token turn is cancelled by its supplied turn ID.
+ * no-token turn is cancelled by its supplied turn ID. Settlement replay
+ * identity is the exact `(reservationId, turnId)` pair (or the direct turn ID),
+ * so reusing a settled token for a different turn produces a new cancellation.
  */
 export class SpeechPolicy {
   #nowBackendSessionMs;
@@ -92,7 +102,7 @@ export class SpeechPolicy {
   #activeTurn = null;
   #nextReservationSequence = 1;
   #invalidatedReservationIds = new Set();
-  #recentSettlements = new Set();
+  #recentSettlements = new Map();
   #cooldowns = new Map();
 
   constructor({
@@ -213,8 +223,7 @@ export class SpeechPolicy {
 
     const actions = this.#discardExpired(nowMs);
     if (reservationId !== undefined) {
-      const settlementKey = `reservation:${reservationId}`;
-      if (this.#recentSettlements.has(settlementKey)) return actions;
+      if (this.#hasSettlement(reservationId, turnId)) return actions;
 
       if (
         this.#startReservation?.reservationId === reservationId
@@ -223,26 +232,29 @@ export class SpeechPolicy {
         const candidate = this.#startReservation.candidate;
         this.#startReservation = null;
         this.#invalidatedReservationIds.delete(reservationId);
-        this.#recordSettlement(settlementKey);
+        this.#recordSettlement(reservationId, turnId);
         this.#recordCooldown(candidate.semanticKey, nowMs);
         this.#activeTurn = { mode: "narration", turnId };
         return actions;
       }
 
       this.#invalidatedReservationIds.delete(reservationId);
-      this.#recordSettlement(settlementKey);
+      this.#recordSettlement(reservationId, turnId);
       actions.push({ type: "cancel_narration", turnId });
       return actions;
     }
 
-    const settlementKey = `direct:${turnId}`;
-    if (this.#recentSettlements.has(settlementKey)) return actions;
-    this.#recordSettlement(settlementKey);
+    if (this.#hasSettlement(null, turnId)) return actions;
+    this.#recordSettlement(null, turnId);
     if (this.#startReservation) {
       actions.push({ type: "cancel_narration", turnId });
       return actions;
     }
-    if (actions.length > 0 || this.#activeTurn) {
+    if (actions.length > 0) return actions;
+    if (this.#activeTurn) {
+      if (this.#activeTurn.turnId !== turnId) {
+        actions.push({ type: "cancel_narration", turnId });
+      }
       return actions;
     }
     this.#activeTurn = { mode: "narration", turnId };
@@ -384,12 +396,25 @@ export class SpeechPolicy {
     }
   }
 
-  #recordSettlement(settlementKey) {
-    addBounded(
+  #hasSettlement(reservationId, turnId) {
+    return this.#recentSettlements.has(JSON.stringify([reservationId, turnId]));
+  }
+
+  #recordSettlement(reservationId, turnId) {
+    const key = JSON.stringify([reservationId, turnId]);
+    addBoundedMap(
       this.#recentSettlements,
-      settlementKey,
+      key,
+      { reservationId, turnId },
       this.#recentSettlementLimit,
     );
+  }
+
+  #hasSettledReservationId(reservationId) {
+    for (const settlement of this.#recentSettlements.values()) {
+      if (settlement.reservationId === reservationId) return true;
+    }
+    return false;
   }
 
   #createReservationId() {
@@ -401,7 +426,7 @@ export class SpeechPolicy {
       if (
         this.#startReservation?.reservationId !== reservationId
         && !this.#invalidatedReservationIds.has(reservationId)
-        && !this.#recentSettlements.has(`reservation:${reservationId}`)
+        && !this.#hasSettledReservationId(reservationId)
       ) {
         return reservationId;
       }

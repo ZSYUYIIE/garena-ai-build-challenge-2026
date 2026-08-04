@@ -184,7 +184,9 @@ test("a user turn drops pending narration and keeps only one Live speech turn ac
   ]);
   fixture.setNow(1_000);
   assert.deepEqual(fixture.policy.poll(), []);
-  assert.deepEqual(fixture.policy.markNarrationStarted("narration-1"), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-1"), [
+    { type: "cancel_narration", turnId: "narration-1" },
+  ]);
   assert.deepEqual(fixture.policy.startUserTurn("answer-2"), []);
   assert.deepEqual(fixture.policy.finishTurn("narration-1"), []);
   assert.deepEqual(fixture.policy.finishTurn("answer-1"), []);
@@ -534,4 +536,94 @@ test("semantic cooldown storage is capped and all expired keys are pruned before
   const afterExpiry = candidate("fresh:C", { createdAtMs: 15_000 });
   fresh.policy.offerNarration(afterExpiry);
   assertStartAction(fresh.policy.poll()[0], afterExpiry);
+});
+
+test("a no-token mark cancels a different turn while narration is active exactly once", () => {
+  const fixture = createPolicy();
+  fixture.policy.markNarrationStarted("active-narration");
+
+  assert.deepEqual(fixture.policy.markNarrationStarted("late-narration"), [
+    { type: "cancel_narration", turnId: "late-narration" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("late-narration"), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("active-narration"), []);
+  assert.deepEqual(fixture.policy.setCloudTabSpeech(true), [
+    { type: "cancel_narration", turnId: "active-narration" },
+  ]);
+});
+
+test("a no-token mark cancels a different turn while a user answer is active exactly once", () => {
+  const fixture = createPolicy();
+  fixture.policy.startUserTurn("active-answer");
+
+  assert.deepEqual(fixture.policy.markNarrationStarted("late-narration"), [
+    { type: "cancel_narration", turnId: "late-narration" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("late-narration"), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("active-answer"), []);
+  assert.deepEqual(fixture.policy.finishTurn("active-answer"), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("late-narration"), []);
+});
+
+test("a settled reservation is idempotent only for the same supplied turn while active", () => {
+  const fixture = createPolicy({ narrationSilenceMs: 0 });
+  makeReadyForNarration(fixture);
+  const event = candidate("score:bound");
+  fixture.policy.offerNarration(event);
+  const reservationId = assertStartAction(fixture.policy.poll()[0], event);
+
+  assert.deepEqual(fixture.policy.markNarrationStarted("authorized", reservationId), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("authorized", reservationId), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("impostor", reservationId), [
+    { type: "cancel_narration", turnId: "impostor" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("impostor", reservationId), []);
+  assert.deepEqual(fixture.policy.setLocalTabSpeech(true), [
+    { type: "cancel_narration", turnId: "authorized" },
+  ]);
+});
+
+test("a settled reservation keeps turn identity after active completion", () => {
+  const fixture = createPolicy({ narrationSilenceMs: 0 });
+  makeReadyForNarration(fixture);
+  const event = candidate("score:complete");
+  fixture.policy.offerNarration(event);
+  const reservationId = assertStartAction(fixture.policy.poll()[0], event);
+  fixture.policy.markNarrationStarted("authorized", reservationId);
+  fixture.policy.finishTurn("authorized");
+
+  assert.deepEqual(fixture.policy.markNarrationStarted("authorized", reservationId), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("impostor", reservationId), [
+    { type: "cancel_narration", turnId: "impostor" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("impostor", reservationId), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("another-impostor", reservationId), [
+    { type: "cancel_narration", turnId: "another-impostor" },
+  ]);
+  assert.deepEqual(
+    fixture.policy.markNarrationStarted("another-impostor", reservationId),
+    [],
+  );
+});
+
+test("turn-aware cancellation settlements retain a strict bounded recent window", () => {
+  const fixture = createPolicy({
+    narrationSilenceMs: 0,
+    recentSettlementLimit: 2,
+  });
+  makeReadyForNarration(fixture);
+  const event = candidate("score:bounded-settlements");
+  fixture.policy.offerNarration(event);
+  const reservationId = assertStartAction(fixture.policy.poll()[0], event);
+  fixture.policy.setLocalTabSpeech(true);
+
+  for (const turnId of ["late-1", "late-2", "late-3"]) {
+    assert.deepEqual(fixture.policy.markNarrationStarted(turnId, reservationId), [
+      { type: "cancel_narration", turnId },
+    ]);
+  }
+  assert.deepEqual(fixture.policy.markNarrationStarted("late-3", reservationId), []);
+  assert.deepEqual(fixture.policy.markNarrationStarted("late-1", reservationId), [
+    { type: "cancel_narration", turnId: "late-1" },
+  ]);
 });
