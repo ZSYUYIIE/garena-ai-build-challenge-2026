@@ -113,7 +113,7 @@ export class GoogleSpeechTranscriber {
     try {
       this.#openStream();
     } catch {
-      this.#handleFailure(this.#active);
+      this.#handleFailure(null);
     }
   }
 
@@ -151,33 +151,40 @@ export class GoogleSpeechTranscriber {
   }
 
   #openStream() {
-    const stream = this.#client._streamingRecognize();
-    const record = {
-      stream,
-      originBackendSessionMs: null,
-      activityStartOffsetMs: null,
-      priorFinalEndOffsetMs: 0,
-      activityHadFinal: false,
-      speechActive: false,
-      pendingReplay: [...this.#bridge],
-      backpressured: false,
-      ended: false,
-      destroyed: false,
-      retiring: false,
-    };
-    this.#records.add(record);
-    this.#active = record;
-    stream.on("data", (response) => this.#handleResponse(record, response));
-    stream.on("error", () => this.#handleFailure(record));
-    stream.on("drain", () => this.#handleDrain(record));
-    stream.on("close", () => this.#handleTerminal(record));
-    stream.on("end", () => this.#handleTerminal(record));
-    if (stream.write(streamConfig(this.#projectId, this.#location)) === false) {
-      record.backpressured = true;
+    let record = null;
+    try {
+      const stream = this.#client._streamingRecognize();
+      record = {
+        stream,
+        originBackendSessionMs: null,
+        activityStartOffsetMs: null,
+        priorFinalEndOffsetMs: 0,
+        activityHadFinal: false,
+        speechActive: false,
+        pendingReplay: [...this.#bridge],
+        backpressured: false,
+        ended: false,
+        destroyed: false,
+        retiring: false,
+      };
+      this.#records.add(record);
+      stream.on("data", (response) => this.#handleResponse(record, response));
+      stream.on("error", () => this.#handleFailure(record));
+      stream.on("drain", () => this.#handleDrain(record));
+      stream.on("close", () => this.#handleTerminal(record));
+      stream.on("end", () => this.#handleTerminal(record));
+      if (stream.write(streamConfig(this.#projectId, this.#location)) === false) {
+        record.backpressured = true;
+      }
+      this.#active = record;
+      this.#setHealth("ready");
+      this.#flushRecord(record);
+      this.#scheduleRotation(record);
+      return record;
+    } catch (error) {
+      if (record) this.#destroyRecord(record);
+      throw error;
     }
-    this.#setHealth("ready");
-    this.#flushRecord(record);
-    this.#scheduleRotation(record);
   }
 
   #scheduleRotation(record) {
@@ -189,7 +196,7 @@ export class GoogleSpeechTranscriber {
         this.#openStream();
         this.#endRecord(record);
       } catch {
-        this.#handleFailure(record);
+        this.#handleFailure(null);
       }
     }, this.#rotateAfterMs);
   }
@@ -304,9 +311,11 @@ export class GoogleSpeechTranscriber {
       if (this.#closed) return;
       this.#setHealth("connecting");
       try {
+        const previous = this.#active;
         this.#openStream();
+        if (previous && previous !== this.#active) this.#endRecord(previous);
       } catch {
-        this.#handleFailure(this.#active);
+        this.#handleFailure(null);
       }
     }, delay);
   }

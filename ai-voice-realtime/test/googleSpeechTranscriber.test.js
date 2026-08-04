@@ -411,3 +411,32 @@ test("destroys a record when its first config write throws and retries without l
   await transcriber.close();
   assert.equal(failed.destroyCalls, 1);
 });
+
+test("owns a failed rotation replacement without destroying the old stream before recovery", async () => {
+  const timers = new FakeTimers();
+  const { transcriber } = makeTranscriber({
+    timers,
+    rotateAfterMs: 100,
+    streamSetup: (stream, index) => { if (index === 1) stream.throwOnWrite = true; },
+  });
+  await transcriber.start();
+  const client = FakeSpeechClient.instances[0];
+  const oldStream = client.streams[0];
+  transcriber.write(Buffer.alloc(3_200), 1_000);
+  timers.advance(100);
+
+  const failedReplacement = client.streams[1];
+  assert.equal(failedReplacement.destroyCalls, 1);
+  assert.equal(failedReplacement.endCalls, 0);
+  assert.equal(oldStream.destroyCalls, 0);
+  assert.equal(oldStream.endCalls, 0);
+  assert.equal(transcriber.health, "degraded");
+  timers.advance(250);
+  assert.equal(client.streams.length, 3);
+  assert.equal(oldStream.endCalls, 1);
+
+  await transcriber.close();
+  await transcriber.close();
+  assert.equal(failedReplacement.destroyCalls, 1);
+  assert.equal(client.closeCalls, 1);
+});
