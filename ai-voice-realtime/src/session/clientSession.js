@@ -99,6 +99,8 @@ export class ClientSession {
     this.liveFrameTimer = null;
     this.lastLiveFrameAtMs = Number.NEGATIVE_INFINITY;
     this.pendingLiveFrame = null;
+    this.userTurnEpoch = 0;
+    this.transcriberGeneration = 0;
   }
 
   async start() {
@@ -174,7 +176,7 @@ export class ClientSession {
     this.applySpeechActions(this.speechPolicy.setTabAudioState?.(
       message.tabAudioState === "absent" ? "absent" : "degraded",
     ) ?? []);
-    this.live = this.liveSessionFactory({
+    const liveOptions = {
       apiKey: this.apiKey,
       model: this.liveModel,
       getRecentTranscript: (options) => this.tabTranscriptBuffer.getRecent(options),
@@ -185,19 +187,63 @@ export class ClientSession {
       onPlaybackClear: (event) => this.handleLiveMessage({ type: "playback_clear", ...event }),
       onHealth: (event) => this.handleLiveMessage({ type: "health", ...event }),
       now: this.now,
-    });
-    if (message.tabAudioState === "captured") {
-      this.transcriber = this.transcriberFactory({
-        projectId: this.speechProjectId,
-        location: this.speechLocation,
-        onSpeechState: (active) => this.handleTabSpeech(active, "cloud"),
-        onFinal: (segment) => this.handleSttFinal(segment),
-        onHealth: (state) => this.handleSttHealth(state),
-      });
+    };
+    try {
+      this.live = this.liveSessionFactory(liveOptions);
+    } catch {
+      this.live = null;
+      this.handleLiveMessage({ type: "health", state: "degraded" });
     }
-    await Promise.allSettled([this.live?.start?.(), this.transcriber?.start?.()]);
-    if (this.liveHealth === "connecting") this.handleLiveMessage({ type: "health", state: "ready" });
+    if (message.tabAudioState === "captured") {
+      this.createCapturedTranscriber();
+    }
+    const startLive = this.live
+      ? Promise.resolve().then(() => this.live.start?.()).catch(() => {
+        this.handleLiveMessage({ type: "health", state: "degraded" });
+      })
+      : Promise.resolve();
+    const startTranscriber = this.transcriber
+      ? Promise.resolve().then(() => this.transcriber.start?.()).catch(() => {
+        this.handleSttHealth("degraded");
+      })
+      : Promise.resolve();
+    await Promise.allSettled([startLive, startTranscriber]);
     this.scheduleSpeechPolicyWake();
+  }
+
+  createCapturedTranscriber() {
+    const generation = ++this.transcriberGeneration;
+    const current = () => generation === this.transcriberGeneration;
+    const transcriberOptions = {
+      projectId: this.speechProjectId,
+      location: this.speechLocation,
+      onSpeechState: (active) => {
+        if (current()) this.handleTabSpeech(active, "cloud");
+      },
+      onFinal: (segment) => {
+        if (current()) this.handleSttFinal(segment);
+      },
+      onHealth: (state) => {
+        if (current()) this.handleSttHealth(state);
+      },
+    };
+    try {
+      this.transcriber = this.transcriberFactory(transcriberOptions);
+    } catch {
+      this.transcriber = null;
+      this.handleSttHealth("degraded");
+    }
+    return this.transcriber;
+  }
+
+  startCapturedTranscriber() {
+    const transcriber = this.transcriber ?? this.createCapturedTranscriber();
+    if (!transcriber) return Promise.resolve();
+    return Promise.resolve()
+      .then(() => transcriber.start?.())
+      .catch(() => {
+        if (this.transcriber === transcriber) this.handleSttHealth("degraded");
+      });
   }
 
   handleBrowserAudio(raw) {
@@ -212,19 +258,24 @@ export class ClientSession {
       this.live?.sendMicrophonePcm?.(packet.pcm);
       return;
     }
-    if (this.tabAudioState !== "captured" || !this.transcriber) {
+    if (this.tabAudioState !== "captured") {
       return this.protocolViolation("tab PCM requires captured tab audio");
+    }
+    if (!this.transcriber) {
+      void this.degradeTabContext();
+      return;
     }
     if (this.lastTabPacketTimestampMs !== null && (
       packet.timestampMs < this.lastTabPacketTimestampMs
       || packet.timestampMs - this.lastTabPacketTimestampMs > MAX_TAB_PACKET_GAP_MS
     )) {
+      this.lastTabPacketTimestampMs = null;
       return void this.degradeTabContext();
     }
     this.lastTabPacketTimestampMs = packet.timestampMs;
     const rate = this.rateLimiter.accept("audio_tab", this.now());
     if (!rate.allowed) return void this.degradeTabContext();
-    const result = this.transcriber.write?.(packet.pcm, this.elapsedMilliseconds + packet.timestampMs);
+    const result = this.transcriber.write?.(packet.pcm, this.elapsedMilliseconds);
     if (result !== "accepted") void this.degradeTabContext();
   }
 
@@ -232,13 +283,14 @@ export class ClientSession {
     if (this.completedTurnIds.has(turnId) || this.activeSpeechTurn?.turnId === turnId) {
       return this.protocolViolation("turnId has already been used");
     }
+    this.userTurnEpoch += 1;
     if (this.activeSpeechTurn) this.discardSpeechTurn(this.activeSpeechTurn, "barge_in");
     this.applySpeechActions(this.speechPolicy.startUserTurn?.(turnId) ?? []);
     const turn = { turnId, mode: "answer", source, openActivity: source === "microphone", completed: false };
     this.activeSpeechTurn = turn;
     this.sendBrowser({ type: "turn_started", turnId, mode: "answer" });
     if (source === "typed") this.sendBrowser({ type: "user_transcript", turnId, text, finished: true });
-    if (!this.live || this.liveHealth === "degraded" || this.liveHealth === "closed") {
+    if (!this.live || this.liveHealth !== "ready") {
       return this.completeSpeechTurn(turn, { interrupted: true, retryable: true });
     }
     try {
@@ -263,20 +315,31 @@ export class ClientSession {
     if (message.tabAudioState === "absent" && this.initialTabAudioState !== "absent") {
       return this.protocolViolation("captured audio cannot become absent");
     }
+    const previousTabAudioState = this.tabAudioState;
     this.tabAudioState = message.tabAudioState;
     this.microphoneState = message.microphoneState;
     this.applySpeechActions(this.speechPolicy.setTabAudioState?.(
       message.tabAudioState === "captured" ? "degraded" : message.tabAudioState,
     ) ?? []);
-    if (message.tabAudioState !== "captured") void this.transcriber?.close?.();
+    if (message.tabAudioState !== "captured") {
+      const oldTranscriber = this.transcriber;
+      this.transcriber = null;
+      this.transcriberGeneration += 1;
+      void Promise.resolve(oldTranscriber?.close?.()).catch(() => {});
+    } else if (previousTabAudioState !== "captured" && !this.transcriber) {
+      void this.startCapturedTranscriber();
+    }
     this.scheduleSpeechPolicyWake();
   }
 
   async degradeTabContext() {
     if (this.closed) return;
-    this.tabAudioState = "degraded";
     this.applySpeechActions(this.speechPolicy.setTabAudioState?.("degraded") ?? []);
-    await this.transcriber?.markDiscontinuity?.();
+    try {
+      await this.transcriber?.markDiscontinuity?.();
+    } catch {
+      // STT provider detail is intentionally not sent to the extension.
+    }
     this.scheduleSpeechPolicyWake();
   }
 
@@ -306,21 +369,38 @@ export class ClientSession {
       if (action.type === "start_narration") {
         const turnId = randomUUID();
         const turn = { turnId, mode: "narration", source: "policy", openActivity: false, completed: false };
-        if (!this.live || this.liveHealth !== "ready") continue;
-        this.activeSpeechTurn = turn;
+        if (!this.live || this.liveHealth !== "ready") {
+          this.invalidateNarrationDispatch(turn, action, this.liveHealth === "closed" ? "closed" : "connecting");
+          continue;
+        }
         try {
           this.live.speakNarration?.(turnId, action.candidate.description);
+          this.activeSpeechTurn = turn;
           this.sendBrowser({ type: "narration_update", turnId, mode: "narration", text: action.candidate.description, finished: false });
           this.applySpeechActions(this.speechPolicy.markNarrationStarted?.(turnId, action.reservationId) ?? []);
         } catch {
-          this.applySpeechActions(this.speechPolicy.markNarrationStarted?.(turnId, action.reservationId) ?? [{ type: "cancel_narration", turnId }]);
+          this.liveHealth = "degraded";
+          this.invalidateNarrationDispatch(turn, action, "degraded");
         }
       } else if (action.type === "cancel_narration") {
-        const turn = this.activeSpeechTurn?.turnId === action.turnId ? this.activeSpeechTurn : { turnId: action.turnId, mode: "narration" };
-        this.discardSpeechTurn(turn, "policy_cancel");
+        const active = this.activeSpeechTurn?.turnId === action.turnId
+          ? this.activeSpeechTurn
+          : null;
+        const turn = active ?? { turnId: action.turnId, mode: "narration", completed: false };
+        this.discardSpeechTurn(turn, "policy_cancel", { retryable: !active });
       }
     }
     this.scheduleSpeechPolicyWake();
+  }
+
+  invalidateNarrationDispatch(turn, action, state) {
+    const invalidations = this.speechPolicy.setLiveState?.(state) ?? [];
+    this.applySpeechActions(invalidations);
+    const settlement = this.speechPolicy.markNarrationStarted?.(
+      turn.turnId,
+      action.reservationId,
+    ) ?? [{ type: "cancel_narration", turnId: turn.turnId }];
+    this.applySpeechActions(settlement);
   }
 
   scheduleSpeechPolicyWake() {
@@ -340,9 +420,10 @@ export class ClientSession {
   handleLiveMessage(event) {
     if (this.closed) return;
     if (event.type === "health") {
-      this.liveHealth = safeProviderState(event.state);
-      this.applySpeechActions(this.speechPolicy.setLiveState?.(this.liveHealth === "telemetry" ? "ready" : this.liveHealth) ?? []);
-      this.sendBrowser({ type: "provider_health", provider: "live", state: this.liveHealth });
+      const state = safeProviderState(event.state);
+      if (state !== "telemetry") this.liveHealth = state;
+      this.applySpeechActions(this.speechPolicy.setLiveState?.(state === "telemetry" ? this.liveHealth : state) ?? []);
+      this.sendBrowser({ type: "provider_health", provider: "live", state });
       this.applySpeechActions(this.speechPolicy.poll?.() ?? []);
       return this.scheduleSpeechPolicyWake();
     }
@@ -353,7 +434,7 @@ export class ClientSession {
       return;
     }
     if (event.type === "playback_clear") {
-      this.sendBrowser({ type: "playback_clear", turnId: event.turnId, reason: event.reason ?? "interrupted" });
+      if (turn) this.sendPlaybackClear(turn, event.reason ?? "interrupted");
       return;
     }
     if (event.type === "input_transcript" && turn?.mode === "answer") {
@@ -373,20 +454,39 @@ export class ClientSession {
     if (!turn || turn.completed) return;
     turn.completed = true;
     if (this.activeSpeechTurn === turn) this.activeSpeechTurn = null;
-    this.rememberCompletedTurn(turn.turnId);
-    this.sendBrowser({ type: "turn_complete", turnId: turn.turnId, mode: turn.mode, interrupted: interrupted === true, retryable: retryable === true });
     this.applySpeechActions(this.speechPolicy.finishTurn?.(turn.turnId) ?? []);
+    this.rememberCompletedTurn(turn.turnId);
+    this.sendTurnComplete(turn, { interrupted, retryable });
     this.scheduleSpeechPolicyWake();
   }
 
-  discardSpeechTurn(turn, reason) {
+  discardSpeechTurn(turn, reason, { retryable = false } = {}) {
     if (!turn || turn.completed) return;
     turn.completed = true;
-    this.live?.discardOutput?.(turn.turnId);
-    this.sendBrowser({ type: "playback_clear", turnId: turn.turnId, reason });
     if (this.activeSpeechTurn === turn) this.activeSpeechTurn = null;
+    this.applySpeechActions(this.speechPolicy.finishTurn?.(turn.turnId) ?? []);
+    this.live?.discardOutput?.(turn.turnId);
+    this.sendPlaybackClear(turn, reason);
     this.rememberCompletedTurn(turn.turnId);
-    this.sendBrowser({ type: "turn_complete", turnId: turn.turnId, mode: turn.mode, interrupted: true, retryable: false });
+    this.sendTurnComplete(turn, { interrupted: true, retryable });
+  }
+
+  sendPlaybackClear(turn, reason) {
+    if (turn.playbackCleared) return;
+    turn.playbackCleared = true;
+    this.sendBrowser({ type: "playback_clear", turnId: turn.turnId, reason });
+  }
+
+  sendTurnComplete(turn, { interrupted = false, retryable = false } = {}) {
+    if (turn.completionSent) return;
+    turn.completionSent = true;
+    this.sendBrowser({
+      type: "turn_complete",
+      turnId: turn.turnId,
+      mode: turn.mode,
+      interrupted: interrupted === true,
+      retryable: retryable === true,
+    });
   }
 
   rememberCompletedTurn(turnId) {
@@ -402,7 +502,11 @@ export class ClientSession {
     if (this.activeAtomicAnalysis && !this.activeAtomicAnalysis.controller.signal.aborted) {
       this.activeAtomicAnalysis.controller.abort(new DOMException("Superseded visual analysis", "AbortError"));
     }
-    const record = { id: randomUUID(), controller: new AbortController() };
+    const record = {
+      id: randomUUID(),
+      controller: new AbortController(),
+      userTurnEpoch: this.userTurnEpoch,
+    };
     this.activeAtomicAnalysis = record;
     void this.runAtomicNarration(record, initial, snapshot);
   }
@@ -421,7 +525,12 @@ export class ClientSession {
         signal: record.controller.signal,
       });
       const current = this.activeAtomicAnalysis === record;
-      this.recordGroundedAnalysis(analysis, snapshot, { initial, offerCandidate: current && !this.activeSpeechTurn });
+      this.recordGroundedAnalysis(analysis, snapshot, {
+        initial,
+        offerCandidate: current
+          && record.userTurnEpoch === this.userTurnEpoch
+          && !this.activeSpeechTurn,
+      });
     } catch (error) {
       if (!record.controller.signal.aborted) this.sendBrowser({ type: "analysis_error", text: "Visual analysis is temporarily unavailable." });
     } finally {
@@ -528,15 +637,23 @@ export class ClientSession {
 
   sendBrowser(message, { audio = false } = {}) {
     if (this.browser.readyState !== WebSocket.OPEN) return false;
-    if ((this.browser.bufferedAmount ?? 0) > OUTPUT_BUFFER_LIMIT_BYTES) {
+    const serialized = JSON.stringify(message);
+    const messageBytes = Buffer.byteLength(serialized, "utf8");
+    if ((this.browser.bufferedAmount ?? 0) + messageBytes > OUTPUT_BUFFER_LIMIT_BYTES) {
       if (audio) {
-        if (this.activeSpeechTurn) this.discardSpeechTurn(this.activeSpeechTurn, "output_backpressure");
+        if (this.activeSpeechTurn) {
+          this.discardSpeechTurn(
+            this.activeSpeechTurn,
+            "output_backpressure",
+            { retryable: true },
+          );
+        }
       } else {
         this.browser.close(1013, "Output backpressure");
       }
       return false;
     }
-    try { this.browser.send(JSON.stringify(message)); return true; } catch { this.browser.close(1011, "Output delivery failed"); return false; }
+    try { this.browser.send(serialized); return true; } catch { this.browser.close(1011, "Output delivery failed"); return false; }
   }
 
   protocolViolation(reason) {

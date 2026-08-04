@@ -55,10 +55,51 @@ test("server shutdown awaits session cleanup before closing the event store", as
   t.after(() => browser.close());
 
   const closing = runtime.close();
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(events, ["session_close_started"]);
   cleanup.resolve();
   await closing;
   assert.deepEqual(events, ["session_close_started", "event_store_closed"]);
+});
+
+test("server retains a browser-closed session until delayed cleanup settles", async () => {
+  const cleanup = deferred();
+  const events = [];
+  const eventStore = { close() { events.push("event_store_closed"); } };
+  const runtime = createStreamSenseServer({
+    eventStore,
+    sessionFactory(browser) {
+      let closePromise;
+      const session = {
+        start() { browser.once("close", () => { void session.close(); }); },
+        close() {
+          closePromise ??= (async () => {
+            events.push("session_close_started");
+            await cleanup.promise;
+            events.push("session_close_finished");
+          })();
+          return closePromise;
+        },
+      };
+      return session;
+    },
+  });
+  const address = await runtime.listen({ host: "127.0.0.1", port: 0 });
+  const browser = await connect(`ws://127.0.0.1:${address.port}/ws`);
+  const browserClosed = onceClosed(browser);
+  browser.close();
+  await browserClosed;
+  const closing = runtime.close();
+  const closedBeforeCleanup = await Promise.race([
+    closing.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 25)),
+  ]);
+
+  assert.equal(closedBeforeCleanup, false);
+  assert.deepEqual(events, ["session_close_started"]);
+  cleanup.resolve();
+  await closing;
+  assert.deepEqual(events, ["session_close_started", "session_close_finished", "event_store_closed"]);
 });
 
 function readStartupLine(child) {
@@ -101,6 +142,10 @@ function connect(url) {
     browser.once("open", () => resolve(browser));
     browser.once("error", reject);
   });
+}
+
+function onceClosed(browser) {
+  return new Promise((resolve) => browser.once("close", resolve));
 }
 
 function deferred() {

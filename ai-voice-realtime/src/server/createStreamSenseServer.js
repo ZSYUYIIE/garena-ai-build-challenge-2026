@@ -48,6 +48,7 @@ export function createStreamSenseServer({
     maxPayload: MAX_WEBSOCKET_PAYLOAD_BYTES,
   });
   const sessions = new Set();
+  const sessionClosures = new WeakMap();
   let closing = false;
 
   app.use("/static", express.static(staticDirectory));
@@ -91,10 +92,24 @@ export function createStreamSenseServer({
     });
     const session = createSession(browser, eventStore);
     sessions.add(session);
-    browser.once("close", () => sessions.delete(session));
+    const closeSession = () => {
+      let sessionClose = sessionClosures.get(session);
+      if (!sessionClose) {
+        sessionClose = Promise.resolve()
+          .then(() => session.close())
+          .finally(() => {
+            sessions.delete(session);
+          });
+        sessionClosures.set(session, sessionClose);
+      }
+      return sessionClose;
+    };
+    browser.once("close", () => {
+      void closeSession();
+    });
     Promise.resolve(session.start()).catch((error) => {
       if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify({ type: "error", text: "Session startup failed." }));
-      void session.close();
+      void closeSession();
     });
   });
 
@@ -127,7 +142,17 @@ export function createStreamSenseServer({
     closing = true;
     const sessionsToClose = [...sessions];
     closePromise = (async () => {
-      await Promise.allSettled(sessionsToClose.map((session) => session.close()));
+      await Promise.allSettled(sessionsToClose.map((session) => {
+        const existing = sessionClosures.get(session);
+        if (existing) return existing;
+        const sessionClose = Promise.resolve()
+          .then(() => session.close())
+          .finally(() => {
+            sessions.delete(session);
+          });
+        sessionClosures.set(session, sessionClose);
+        return sessionClose;
+      }));
       for (const browser of browserWss.clients) {
         if (browser.readyState !== WebSocket.CLOSED) browser.terminate();
       }

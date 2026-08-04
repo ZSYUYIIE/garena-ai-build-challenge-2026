@@ -236,6 +236,309 @@ test("records an atomic result during a Live answer without replacing its speech
   assert.deepEqual(live.discarded, []);
 });
 
+test("keeps captured routing through an STT restart and clean ready recovery", async (t) => {
+  let sttCallbacks;
+  const transcriber = new FakeTranscriber();
+  const fixture = createFixture({
+    liveSessionFactory: () => new FakeLiveSession(),
+    transcriberFactory(options) { sttCallbacks = options; return transcriber; },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "captured");
+  fixture.browser.emit("message", timedAudioPacket(2, 0, 0, Buffer.from([1, 0])), true);
+  fixture.browser.emit("message", timedAudioPacket(2, 1, 1_000, Buffer.from([2, 0])), true);
+  await flushAsyncWork();
+  sttCallbacks.onHealth("ready");
+  fixture.browser.emit("message", timedAudioPacket(2, 2, 1_100, Buffer.from([3, 0])), true);
+
+  assert.equal(fixture.browser.readyState, WebSocket.OPEN);
+  assert.deepEqual(transcriber.writes.map(({ pcm }) => [...pcm]), [[1, 0], [3, 0]]);
+});
+
+test("uses backend acceptance time for STT regardless of packet timestamp origin", async (t) => {
+  async function acceptedAt(packetTimestampMs) {
+    let now = 0;
+    const transcriber = new FakeTranscriber();
+    const fixture = createFixture({
+      now: () => now,
+      liveSessionFactory: () => new FakeLiveSession(),
+      transcriberFactory: () => transcriber,
+    });
+    t.after(() => fixture.eventStore.close());
+    await fixture.session.start();
+    now = 10_000;
+    hello(fixture, "captured");
+    fixture.browser.emit("message", timedAudioPacket(2, 0, packetTimestampMs, Buffer.from([1, 0])), true);
+    return transcriber.writes[0].timestampMs;
+  }
+
+  assert.equal(await acceptedAt(12), 10_000);
+  assert.equal(await acceptedAt(900_000), 10_000);
+});
+
+test("recreates captured STT after media degradation and restores PCM on clean ready", async (t) => {
+  const transcribers = [];
+  const fixture = createFixture({
+    liveSessionFactory: () => new FakeLiveSession(),
+    transcriberFactory() {
+      const transcriber = new FakeTranscriber();
+      transcribers.push(transcriber);
+      return transcriber;
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "captured");
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "media_state", tabAudioState: "degraded", microphoneState: "ready",
+  })), false);
+  await flushAsyncWork();
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "media_state", tabAudioState: "captured", microphoneState: "ready",
+  })), false);
+  await flushAsyncWork();
+  fixture.browser.emit("message", timedAudioPacket(2, 0, 50, Buffer.from([7, 0])), true);
+
+  assert.equal(transcribers.length, 2);
+  assert.equal(fixture.browser.readyState, WebSocket.OPEN);
+  assert.deepEqual(transcribers[1].writes.map(({ pcm }) => [...pcm]), [[7, 0]]);
+});
+
+test("answer barge-in retires exact policy ownership without duplicate cleanup", async (t) => {
+  let now = 0;
+  let callbacks;
+  const policy = new SpeechPolicy({ nowBackendSessionMs: () => now });
+  const live = new FakeLiveSession();
+  const fixture = createFixture({
+    now: () => now,
+    speechPolicy: policy,
+    liveSessionFactory(options) {
+      callbacks = options;
+      live.onDiscard = (turnId) => callbacks.onPlaybackClear({ turnId, reason: "discarded" });
+      return live;
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+  const first = "88888888-8888-4888-8888-888888888888";
+  const second = "99999999-9999-4999-8999-999999999999";
+  fixture.session.beginAnswerTurn({ turnId: first, source: "typed", text: "first" });
+  fixture.session.beginAnswerTurn({ turnId: second, source: "typed", text: "second" });
+  callbacks.onTurnComplete({ turnId: second, mode: "answer" });
+  fixture.session.handleNarrationCandidate({ description: "Eligible again.", semanticKey: "again", importance: 1, createdAtMs: 0 });
+  now = 750;
+  fixture.session.applySpeechActions(policy.poll());
+
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "playback_clear" && message.turnId === first).length, 1);
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "turn_complete" && message.turnId === first).length, 1);
+  assert.equal(live.narrations.length, 1);
+});
+
+test("narration barge-in retires exact policy ownership without duplicate cleanup", async (t) => {
+  let now = 0;
+  let callbacks;
+  const policy = new SpeechPolicy({ nowBackendSessionMs: () => now });
+  const live = new FakeLiveSession();
+  const fixture = createFixture({
+    now: () => now,
+    speechPolicy: policy,
+    liveSessionFactory(options) {
+      callbacks = options;
+      live.onDiscard = (turnId) => callbacks.onPlaybackClear({ turnId, reason: "discarded" });
+      return live;
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+  fixture.session.handleNarrationCandidate({ description: "Narrate.", semanticKey: "n", importance: 1, createdAtMs: 0 });
+  now = 750;
+  fixture.session.applySpeechActions(policy.poll());
+  const narrationId = live.narrations[0].turnId;
+  fixture.session.beginAnswerTurn({ turnId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", source: "typed", text: "stop" });
+
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "playback_clear" && message.turnId === narrationId).length, 1);
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "turn_complete" && message.turnId === narrationId).length, 1);
+  assert.equal(live.discarded.filter((turnId) => turnId === narrationId).length, 1);
+});
+
+test("invalidates a reserved narration when Live is unavailable at dispatch", async (t) => {
+  let now = 0;
+  const policy = new SpeechPolicy({ nowBackendSessionMs: () => now });
+  const fixture = createFixture({ now: () => now, speechPolicy: policy, liveSessionFactory: () => new FakeLiveSession() });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+  fixture.session.handleNarrationCandidate({ description: "Narrate.", semanticKey: "n", importance: 1, createdAtMs: 0 });
+  now = 750;
+  const reserved = policy.poll();
+  fixture.session.liveHealth = "connecting";
+  fixture.session.applySpeechActions(reserved);
+
+  assert.equal(fixture.session.activeSpeechTurn, null);
+  assert.equal(policy.nextWakeAtMs(), null);
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "playback_clear").length, 1);
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "turn_complete" && message.retryable).length, 1);
+});
+
+test("failed narration dispatch has no cooldown and leaves no active turn", async (t) => {
+  let now = 0;
+  const policy = new SpeechPolicy({ nowBackendSessionMs: () => now });
+  const live = new FakeLiveSession();
+  live.speakNarration = () => { throw new Error("dispatch failed"); };
+  const fixture = createFixture({ now: () => now, speechPolicy: policy, liveSessionFactory: () => live });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+  fixture.session.handleNarrationCandidate({ description: "Narrate.", semanticKey: "n", importance: 1, createdAtMs: 0 });
+  now = 750;
+  fixture.session.applySpeechActions(policy.poll());
+
+  assert.equal(fixture.session.activeSpeechTurn, null);
+  assert.equal(policy.nextWakeAtMs(), null);
+  live.speakNarration = FakeLiveSession.prototype.speakNarration;
+  fixture.session.handleLiveMessage({ type: "health", state: "ready" });
+  now = 751;
+  fixture.session.handleNarrationCandidate({ description: "Narrate again.", semanticKey: "n", importance: 1, createdAtMs: 751 });
+  now = 1_501;
+  fixture.session.applySpeechActions(policy.poll());
+  assert.equal(live.narrations.length, 1);
+});
+
+test("sync provider factory failures stay degraded without an unhandled rejection", async (t) => {
+  const fixture = createFixture({ liveSessionFactory() { throw new Error("factory secret"); } });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+
+  assert.equal(fixture.session.liveHealth, "degraded");
+  assert.equal(fixture.browser.messages.some((message) => JSON.stringify(message).includes("factory secret")), false);
+});
+
+test("rejected Live startup is never fabricated ready and questions fail retryably once", async (t) => {
+  const live = new FakeLiveSession();
+  live.autoReady = false;
+  live.start = async () => { throw new Error("start failed"); };
+  const fixture = createFixture({ liveSessionFactory: () => live });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+  const turnId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  fixture.session.beginAnswerTurn({ turnId, source: "typed", text: "hello" });
+
+  assert.equal(fixture.session.liveHealth, "degraded");
+  assert.deepEqual(live.typedQuestions, []);
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "turn_complete" && message.turnId === turnId && message.retryable).length, 1);
+});
+
+test("rejected STT startup remains degraded until an authoritative ready callback", async (t) => {
+  let callbacks;
+  const transcriber = new FakeTranscriber();
+  transcriber.start = async () => { throw new Error("stt start failed"); };
+  const fixture = createFixture({
+    liveSessionFactory: () => new FakeLiveSession(),
+    transcriberFactory(options) { callbacks = options; return transcriber; },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "captured");
+  await flushAsyncWork();
+
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "provider_health" && message.provider === "stt").at(-1).state, "degraded");
+  callbacks.onHealth("ready");
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "provider_health" && message.provider === "stt").at(-1).state, "ready");
+});
+
+test("pending Live startup does not accept typed or microphone traffic", async (t) => {
+  const startup = deferred();
+  const live = new FakeLiveSession();
+  live.autoReady = false;
+  live.start = () => startup.promise;
+  const fixture = createFixture({ liveSessionFactory: () => live });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  const typed = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const mic = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  fixture.session.beginAnswerTurn({ turnId: typed, source: "typed", text: "hello" });
+  fixture.session.beginAnswerTurn({ turnId: mic, source: "microphone" });
+
+  assert.deepEqual(live.typedQuestions, []);
+  assert.deepEqual(live.microphoneWrites, []);
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "turn_complete" && message.retryable).length, 2);
+  startup.resolve();
+});
+
+test("a completed newer user turn still invalidates late atomic speech eligibility", async (t) => {
+  let callbacks;
+  const analysis = deferred();
+  const policy = new FakeSpeechPolicy();
+  const live = new FakeLiveSession();
+  const fixture = createFixture({
+    analyzeFrame: () => analysis.promise,
+    speechPolicy: policy,
+    liveSessionFactory(options) { callbacks = options; return live; },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+  fixture.session.sendVideo(Buffer.from("frame"), "image/jpeg", 1);
+  fixture.session.requestNarration(false);
+  const turnId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  fixture.session.beginAnswerTurn({ turnId, source: "typed", text: "question" });
+  callbacks.onTurnComplete({ turnId, mode: "answer" });
+  analysis.resolve(approvedAnalysis());
+  await flushAsyncWork();
+
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 1);
+  assert.deepEqual(policy.offers, []);
+});
+
+test("accounts serialized model audio bytes before crossing the 256 KiB budget", async (t) => {
+  let callbacks;
+  const live = new FakeLiveSession();
+  const fixture = createFixture({ liveSessionFactory(options) { callbacks = options; return live; } });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+  const turnId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  fixture.session.beginAnswerTurn({ turnId, source: "typed", text: "question" });
+  fixture.browser.bufferedAmount = 256 * 1024 - 1_024;
+  callbacks.onAudio({ turnId, mode: "answer", data: "A".repeat(2_000), mimeType: "audio/pcm;rate=24000" });
+
+  assert.equal(fixture.browser.messages.some((message) => message.type === "model_audio" && message.turnId === turnId), false);
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "playback_clear" && message.turnId === turnId).length, 1);
+  assert.equal(fixture.browser.messages.filter((message) => message.type === "turn_complete" && message.turnId === turnId && message.retryable).length, 1);
+});
+
+test("allows a serialized model audio message exactly at the 256 KiB budget", async (t) => {
+  let callbacks;
+  const live = new FakeLiveSession();
+  const fixture = createFixture({ liveSessionFactory(options) { callbacks = options; return live; } });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  const turnId = "12121212-1212-4212-8212-121212121212";
+  fixture.session.beginAnswerTurn({ turnId, source: "typed", text: "question" });
+  const event = { turnId, mode: "answer", data: "AAAA", mimeType: "audio/pcm;rate=24000" };
+  const message = { type: "model_audio", ...event };
+  fixture.browser.bufferedAmount = (256 * 1024) - Buffer.byteLength(JSON.stringify(message));
+  callbacks.onAudio(event);
+
+  assert.equal(fixture.browser.messages.filter((item) => item.type === "model_audio" && item.turnId === turnId).length, 1);
+  assert.deepEqual(live.discarded, []);
+});
+
 test("closes a connection that exceeds the per-session frame rate", async (t) => {
   const fixture = createFixture();
   t.after(() => fixture.eventStore.close());
@@ -690,7 +993,7 @@ test("records a late atomic result but never offers it after a newer user turn",
 
   assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 1);
   assert.equal(fixture.session.lastGroundedDescription, approvedAnalysis().description);
-  assert.equal(speechPolicy.offers.length, 1);
+  assert.equal(speechPolicy.offers.length, 0);
   fixture.session.close();
 });
 
@@ -716,8 +1019,19 @@ function createFixture({
     now,
     recentTabTranscript,
     speechPolicy,
-    liveSessionFactory,
-    transcriberFactory,
+    liveSessionFactory: liveSessionFactory && ((options) => {
+      const live = liveSessionFactory(options);
+      if (live instanceof FakeLiveSession) {
+        live.callbacks = options;
+        if (live.autoReady) options.onHealth({ state: "ready" });
+      }
+      return live;
+    }),
+    transcriberFactory: transcriberFactory && ((options) => {
+      const transcriber = transcriberFactory(options);
+      if (transcriber instanceof FakeTranscriber) transcriber.callbacks = options;
+      return transcriber;
+    }),
     timers,
   });
   return { browser, eventStore, session };
@@ -725,6 +1039,7 @@ function createFixture({
 
 class FakeLiveSession {
   constructor() {
+    this.autoReady = true;
     this.microphoneWrites = [];
     this.tabWrites = [];
     this.typedQuestions = [];
@@ -739,7 +1054,10 @@ class FakeLiveSession {
   sendMicrophonePcm(pcm) { this.microphoneWrites.push(Buffer.from(pcm)); }
   askTyped(turnId, text) { this.typedQuestions.push({ turnId, text }); }
   speakNarration(turnId, text) { this.narrations.push({ turnId, text }); }
-  discardOutput(turnId) { this.discarded.push(turnId); }
+  discardOutput(turnId) {
+    this.discarded.push(turnId);
+    this.onDiscard?.(turnId);
+  }
   sendVideo(frame) { this.videoWrites.push(frame); }
   async close() {}
 }
@@ -749,15 +1067,17 @@ class FakeTranscriber {
     this.writes = [];
     this.microphoneWrites = [];
     this.discontinuities = 0;
+    this.closed = false;
   }
   async markDiscontinuity() { this.discontinuities += 1; }
 
-  async start() {}
+  async start() { this.callbacks?.onHealth("ready"); }
   write(pcm, timestampMs) {
+    if (this.closed) return "degraded";
     this.writes.push({ pcm: Buffer.from(pcm), timestampMs });
     return "accepted";
   }
-  async close() {}
+  async close() { this.closed = true; }
 }
 
 function audioPacket(source, sequence, pcm) {
