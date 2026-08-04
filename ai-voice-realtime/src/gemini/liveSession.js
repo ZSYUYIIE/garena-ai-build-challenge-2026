@@ -450,7 +450,9 @@ export class GeminiLiveSession {
       batch.sent = true;
       const functionResponses = batch.responses.filter((response) => !batch.cancelled.has(response.id));
       for (const response of batch.responses) {
-        if (typeof response.id === "string") this.pendingToolBatches.delete(response.id);
+        if (typeof response.id === "string") {
+          this.#releaseToolBatchOwnership(response.id, batch);
+        }
       }
       if (
         functionResponses.length > 0
@@ -510,6 +512,12 @@ export class GeminiLiveSession {
       const batch = this.pendingToolBatches.get(id);
       if (!batch) continue;
       batch.cancelled.add(id);
+      this.#releaseToolBatchOwnership(id, batch);
+    }
+  }
+
+  #releaseToolBatchOwnership(id, batch) {
+    if (this.pendingToolBatches.get(id) === batch) {
       this.pendingToolBatches.delete(id);
     }
   }

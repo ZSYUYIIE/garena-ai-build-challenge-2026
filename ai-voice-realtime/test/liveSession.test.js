@@ -355,6 +355,47 @@ test("never transfers a tool batch queued behind blocked old-session output to a
   assert.equal(replacement.toolResponses.length, 0);
 });
 
+test("stale tool cleanup cannot erase cancellation ownership for a reused call id", async () => {
+  const first = new FakeLiveConnection();
+  const replacement = new FakeLiveConnection();
+  let releaseOldVideo;
+  let releaseReplacementVideo;
+  first.sendRealtimeInput = (payload) => {
+    first.realtimeInputs.push(payload);
+    if (payload.video) return new Promise((resolve) => { releaseOldVideo = resolve; });
+  };
+  replacement.sendRealtimeInput = (payload) => {
+    replacement.realtimeInputs.push(payload);
+    if (payload.video) return new Promise((resolve) => { releaseReplacementVideo = resolve; });
+  };
+  const h = makeHarness({ connections: [first, replacement] });
+  await h.live.start();
+  h.live.sendVideo({ data: "latest", mimeType: "image/jpeg" });
+  await flush();
+  assert.equal(typeof releaseOldVideo, "function");
+
+  const reusedCall = {
+    id: "reused-id",
+    name: "get_recent_tab_transcript",
+    args: {},
+  };
+  h.callbacks[0].onmessage({ toolCall: { functionCalls: [reusedCall] } });
+  h.callbacks[0].onmessage({ goAway: {} });
+  for (let index = 0; index < 3; index += 1) await flush();
+  assert.equal(h.callbacks.length, 2);
+  h.callbacks[1].onmessage({ toolCall: { functionCalls: [reusedCall] } });
+
+  releaseOldVideo();
+  for (let index = 0; index < 3; index += 1) await flush();
+  assert.equal(typeof releaseReplacementVideo, "function");
+  h.callbacks[1].onmessage({ toolCallCancellation: { ids: ["reused-id"] } });
+  releaseReplacementVideo();
+  for (let index = 0; index < 3; index += 1) await flush();
+
+  assert.equal(first.toolResponses.length, 0);
+  assert.equal(replacement.toolResponses.length, 0);
+});
+
 test("retries an initial Live connection failure once and reuses one client", async () => {
   const replacement = new FakeLiveConnection();
   const delays = [];
