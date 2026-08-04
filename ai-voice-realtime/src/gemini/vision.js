@@ -55,6 +55,7 @@ export async function analyzeVisionFrame({
   narrationLevel,
   previousDescription,
   timestampSeconds,
+  signal,
 }) {
   const result = await generateJson({
     apiKey,
@@ -67,6 +68,7 @@ export async function analyzeVisionFrame({
       timestampSeconds,
     }),
     responseSchema: analysisResponseSchema,
+    signal,
   });
   return visionAnalysisSchema.parse(result);
 }
@@ -77,6 +79,7 @@ export async function answerVisionQuestion({
   frame,
   question,
   recentEvents,
+  signal,
 }) {
   const memory = recentEvents.length
     ? recentEvents
@@ -94,6 +97,7 @@ export async function answerVisionQuestion({
       "If the evidence is insufficient, say that clearly and briefly.\n\n" +
       `Question: ${question}\n\nSession memory:\n${memory}`,
     responseSchema: answerResponseSchema,
+    signal,
   });
   return visionAnswerSchema.parse(result).answer;
 }
@@ -134,12 +138,20 @@ export function buildAnalysisPrompt({
   );
 }
 
-async function generateJson({ apiKey, model, frame, prompt, responseSchema }) {
+async function generateJson({
+  apiKey,
+  model,
+  frame,
+  prompt,
+  responseSchema,
+  signal,
+}) {
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}` +
       `:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
       method: "POST",
+      signal,
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         contents: [

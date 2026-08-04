@@ -23,12 +23,14 @@ test("buildAnalysisPrompt binds narration to the exact frame", () => {
 
 test("analyzeVisionFrame uses Gemini 3 request settings", async (t) => {
   let requestBody;
+  let requestSignal;
   const originalFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async (_url, init) => {
     requestBody = JSON.parse(init.body);
+    requestSignal = init.signal;
     return new Response(
       JSON.stringify({
         candidates: [
@@ -51,6 +53,7 @@ test("analyzeVisionFrame uses Gemini 3 request settings", async (t) => {
     );
   };
 
+  const controller = new AbortController();
   await analyzeVisionFrame({
     apiKey: "test-key",
     model: "gemini-3.6-flash",
@@ -59,10 +62,12 @@ test("analyzeVisionFrame uses Gemini 3 request settings", async (t) => {
     narrationLevel: "standard",
     previousDescription: "",
     timestampSeconds: 0,
+    signal: controller.signal,
   });
 
   assert.deepEqual(requestBody.generationConfig.thinkingConfig, {
     thinkingLevel: "minimal",
   });
   assert.equal("temperature" in requestBody.generationConfig, false);
+  assert.equal(requestSignal, controller.signal);
 });

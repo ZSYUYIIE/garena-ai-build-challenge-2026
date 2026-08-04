@@ -1,0 +1,72 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { isAllowedExtensionOrigin } from "../src/protocol/websocketPolicy.js";
+
+test("accepts only an exact Chrome extension origin", () => {
+  assert.equal(
+    isAllowedExtensionOrigin(
+      "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    ),
+    true
+  );
+  assert.equal(
+    isAllowedExtensionOrigin(
+      "chrome-extension://abcdefghijklmnopabcdefghijklmnop/"
+    ),
+    true
+  );
+});
+
+test("rejects missing and ordinary web origins", () => {
+  assert.equal(isAllowedExtensionOrigin(undefined), false);
+  assert.equal(isAllowedExtensionOrigin(""), false);
+  assert.equal(isAllowedExtensionOrigin("https://example.com"), false);
+  assert.equal(isAllowedExtensionOrigin("http://127.0.0.1:8000"), false);
+});
+
+test("rejects malformed extension identifiers", () => {
+  assert.equal(
+    isAllowedExtensionOrigin("chrome-extension://abcdefghijklmnop"),
+    false
+  );
+  assert.equal(
+    isAllowedExtensionOrigin(
+      "chrome-extension://abcdefghijklmnopabcdefghijklmnoq"
+    ),
+    false
+  );
+  assert.equal(
+    isAllowedExtensionOrigin(
+      "chrome-extension://ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP"
+    ),
+    false
+  );
+});
+
+test("rejects origin strings containing request components", () => {
+  const extensionId = "abcdefghijklmnopabcdefghijklmnop";
+  for (const suffix of [
+    "/sidepanel.html",
+    "/?debug=1",
+    "/#fragment",
+    ":80",
+  ]) {
+    assert.equal(
+      isAllowedExtensionOrigin(`chrome-extension://${extensionId}${suffix}`),
+      false,
+      suffix
+    );
+  }
+  assert.equal(
+    isAllowedExtensionOrigin(
+      `chrome-extension://user:password@${extensionId}`
+    ),
+    false
+  );
+});
+
+test("rejects values that are not valid URLs", () => {
+  assert.equal(isAllowedExtensionOrigin("chrome-extension://"), false);
+  assert.equal(isAllowedExtensionOrigin("not a url"), false);
+});
