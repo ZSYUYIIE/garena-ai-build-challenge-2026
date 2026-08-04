@@ -41,9 +41,11 @@ function makeHarness({ connections = [new FakeLiveConnection()], now = () => 10_
   const outputs = [];
   const completions = [];
   const clears = [];
+  let clientCount = 0;
   let transcriptRequests = [];
   const GoogleGenAI = class {
     constructor(options) {
+      clientCount += 1;
       this.options = options;
       this.live = {
         connect: async (options) => {
@@ -51,6 +53,7 @@ function makeHarness({ connections = [new FakeLiveConnection()], now = () => 10_
           callbacks.push(options.callbacks);
           const connection = connections.shift();
           if (!connection) throw new Error("no fake connection available");
+          if (connection instanceof Error) throw connection;
           return connection;
         },
       };
@@ -89,6 +92,7 @@ function makeHarness({ connections = [new FakeLiveConnection()], now = () => 10_
     completions,
     clears,
     transcriptRequests: () => transcriptRequests,
+    clientCount: () => clientCount,
   };
 }
 
@@ -295,4 +299,131 @@ test("fails a microphone turn rather than silently losing over one second of que
   await h.live.close();
   await h.live.close();
   assert.equal(connection.closed, 1);
+});
+
+test("fails a rejected microphone write once, suppresses its queued activity end, and resumes without replaying PCM", async () => {
+  const first = new FakeLiveConnection();
+  const replacement = new FakeLiveConnection();
+  const delays = [];
+  first.sendRealtimeInput = (payload) => {
+    first.realtimeInputs.push(payload);
+    if (payload.audio) return Promise.reject(new Error("socket write failed"));
+  };
+  const h = makeHarness({
+    connections: [first, replacement],
+    sleep: async (delay) => { delays.push(delay); },
+  });
+  await h.live.start();
+  h.live.startUserActivity("write-failure");
+  h.live.sendMicrophonePcm(Buffer.from([1, 2]));
+  h.live.endUserActivity("write-failure");
+  for (let index = 0; index < 6; index += 1) await flush();
+
+  assert.deepEqual(first.realtimeInputs, [
+    { activityStart: {} },
+    { audio: { data: "AQI=", mimeType: "audio/pcm;rate=16000" } },
+  ]);
+  assert.deepEqual(h.completions, [{ turnId: "write-failure", mode: "answer", interrupted: true, retryable: true }]);
+  assert.deepEqual(delays, [250]);
+  assert.equal(replacement.realtimeInputs.some((input) => input.audio || input.activityEnd), false);
+});
+
+test("never transfers a tool batch queued behind blocked old-session output to a replacement session", async () => {
+  const first = new FakeLiveConnection();
+  const replacement = new FakeLiveConnection();
+  let releaseVideo;
+  first.sendRealtimeInput = (payload) => {
+    first.realtimeInputs.push(payload);
+    if (payload.video) return new Promise((resolve) => { releaseVideo = resolve; });
+  };
+  const h = makeHarness({ connections: [first, replacement] });
+  await h.live.start();
+  h.live.sendVideo({ data: "blocked", mimeType: "image/jpeg" });
+  await flush();
+  assert.equal(typeof releaseVideo, "function");
+  h.callbacks[0].onmessage({ toolCall: { functionCalls: [{
+    id: "old-tool",
+    name: "get_recent_tab_transcript",
+    args: {},
+  }] } });
+  h.callbacks[0].onmessage({ goAway: {} });
+  await flush();
+  releaseVideo();
+  for (let index = 0; index < 4; index += 1) await flush();
+
+  assert.equal(first.toolResponses.length, 0);
+  assert.equal(replacement.toolResponses.length, 0);
+});
+
+test("retries an initial Live connection failure once and reuses one client", async () => {
+  const replacement = new FakeLiveConnection();
+  const delays = [];
+  const h = makeHarness({
+    connections: [new Error("initial connect failed"), replacement],
+    sleep: async (delay) => { delays.push(delay); },
+  });
+
+  await h.live.start();
+
+  assert.deepEqual(delays, [250]);
+  assert.equal(h.configs.length, 2);
+  assert.equal(h.clientCount(), 1);
+  assert.equal(h.health.at(-1).state, "ready");
+});
+
+test("ends an exhausted initial Live connection attempt in a retryable degraded state", async () => {
+  const delays = [];
+  const h = makeHarness({
+    connections: [
+      new Error("initial connect failed"),
+      new Error("retry one failed"),
+      new Error("retry two failed"),
+      new Error("retry three failed"),
+    ],
+    sleep: async (delay) => { delays.push(delay); },
+  });
+
+  await h.live.start();
+
+  assert.deepEqual(delays, [250, 500, 1_000]);
+  assert.equal(h.configs.length, 4);
+  assert.equal(h.health.at(-1).state, "degraded");
+  assert.equal(h.clientCount(), 1);
+});
+
+test("keeps reconnect single-flight when close synchronously emits close and error callbacks", async () => {
+  const first = new FakeLiveConnection();
+  const replacement = new FakeLiveConnection();
+  const delays = [];
+  const h = makeHarness({
+    connections: [first, replacement],
+    sleep: async (delay) => { delays.push(delay); },
+  });
+  await h.live.start();
+  first.close = () => {
+    first.closed += 1;
+    h.callbacks[0].onclose();
+    h.callbacks[0].onerror(new Error("closed while reconnecting"));
+  };
+
+  h.callbacks[0].onmessage({ goAway: {} });
+  for (let index = 0; index < 5; index += 1) await flush();
+
+  assert.equal(first.closed, 1);
+  assert.deepEqual(delays, [250]);
+  assert.equal(h.configs.length, 2);
+});
+
+test("accepts only JPEG frames and does not reconnect on rejected local input", async () => {
+  const connection = new FakeLiveConnection();
+  const delays = [];
+  const h = makeHarness({ connections: [connection], sleep: async (delay) => { delays.push(delay); } });
+  await h.live.start();
+
+  assert.throws(() => h.live.sendVideo({ data: "png", mimeType: "image/png" }), /image\/jpeg/i);
+  await flush();
+
+  assert.deepEqual(delays, []);
+  assert.equal(h.configs.length, 1);
+  assert.deepEqual(connection.realtimeInputs, []);
 });

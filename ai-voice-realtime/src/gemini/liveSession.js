@@ -94,6 +94,7 @@ export class GeminiLiveSession {
     this.client = null;
     this.session = null;
     this.started = false;
+    this.startPromise = null;
     this.closing = false;
     this.closePromise = null;
     this.generation = 0;
@@ -113,17 +114,31 @@ export class GeminiLiveSession {
   }
 
   async start() {
-    if (this.started) return;
+    if (this.startPromise) return this.startPromise;
+    if (this.started && this.session) return;
     this.started = true;
     this.closing = false;
     this.#health("connecting");
-    await this.#connect();
-    this.#health("ready");
+    this.startPromise = (async () => {
+      try {
+        await this.#connect();
+      } catch {
+        await this.#reconnect();
+      }
+      if (this.session) {
+        this.#health("ready");
+      } else {
+        this.started = false;
+      }
+    })().finally(() => {
+      this.startPromise = null;
+    });
+    return this.startPromise;
   }
 
   sendVideo({ data, mimeType } = {}) {
-    if (typeof data !== "string" || typeof mimeType !== "string" || !mimeType.startsWith("image/")) {
-      throw new TypeError("video requires encoded image data and an image MIME type");
+    if (typeof data !== "string" || mimeType !== "image/jpeg") {
+      throw new TypeError("video requires encoded image data with image/jpeg MIME type");
     }
     this.latestFrame = { data, mimeType };
     if (this.videoQueued || this.closing) return;
@@ -157,10 +172,15 @@ export class GeminiLiveSession {
     const generation = this.generation;
     this.#enqueue(async () => {
       try {
-        if (!turn.failed && !this.closing) {
+        if (!turn.failed && !this.closing && generation === this.generation) {
           await this.#sendRealtime({
             audio: { data: bytes.toString("base64"), mimeType: MICROPHONE_MIME_TYPE },
           }, generation);
+        }
+      } catch {
+        if (!turn.failed && !this.closing && generation === this.generation) {
+          this.#failMicrophoneTurn(turn, "Gemini Live microphone write failed.");
+          void this.#reconnect();
         }
       } finally {
         this.microphoneQueuedBytes = Math.max(0, this.microphoneQueuedBytes - bytes.byteLength);
@@ -169,10 +189,14 @@ export class GeminiLiveSession {
   }
 
   endUserActivity(turnId) {
-    if (!this.activeMicrophoneTurn || this.activeMicrophoneTurn.turnId !== turnId) return;
+    const turn = this.activeMicrophoneTurn;
+    if (!turn || turn.turnId !== turnId) return;
     this.activeMicrophoneTurn = null;
     const generation = this.generation;
-    this.#enqueue(() => this.#sendRealtime({ activityEnd: {} }, generation));
+    this.#enqueue(() => {
+      if (turn.failed || this.closing || generation !== this.generation) return;
+      return this.#sendRealtime({ activityEnd: {} }, generation);
+    });
   }
 
   askTyped(turnId, text) {
@@ -295,6 +319,7 @@ export class GeminiLiveSession {
       return;
     }
     this.session = session;
+    this.reconnectAttempts = 0;
     if (this.latestFrame) this.#queueLatestFrame();
   }
 
@@ -414,6 +439,8 @@ export class GeminiLiveSession {
     const calls = toolCall?.functionCalls ?? toolCall?.function_calls;
     if (!Array.isArray(calls) || calls.length === 0) return;
     const batch = { responses: [], cancelled: new Set(), sent: false };
+    const generation = this.generation;
+    const session = this.session;
     for (const call of calls) {
       const response = this.#toolResponse(call);
       batch.responses.push(response);
@@ -425,8 +452,14 @@ export class GeminiLiveSession {
       for (const response of batch.responses) {
         if (typeof response.id === "string") this.pendingToolBatches.delete(response.id);
       }
-      if (functionResponses.length > 0 && this.session && !this.closing) {
-        await this.session.sendToolResponse({ functionResponses });
+      if (
+        functionResponses.length > 0
+        && session
+        && session === this.session
+        && generation === this.generation
+        && !this.closing
+      ) {
+        await session.sendToolResponse({ functionResponses });
       }
     });
   }
@@ -483,31 +516,38 @@ export class GeminiLiveSession {
 
   async #reconnect() {
     if (this.reconnectPromise || this.closing) return this.reconnectPromise;
-    this.reconnectPromise = (async () => {
-      this.#failActiveMicrophoneForReconnect();
-      this.#clearOwnership();
-      const oldSession = this.session;
-      this.session = null;
-      try { await oldSession?.close?.(); } catch {}
-      for (; this.reconnectAttempts < RECONNECT_DELAYS_MS.length && !this.closing; this.reconnectAttempts += 1) {
-        await this.sleep(RECONNECT_DELAYS_MS[this.reconnectAttempts]);
-        try {
-          this.#health("connecting");
-          await this.#connect();
-          if (this.session) {
-            this.reconnectAttempts = 0;
-            this.#health("ready");
-            return;
-          }
-        } catch {
-          // The next bounded delay is the only retry path.
-        }
-      }
-      if (!this.closing) this.#health("degraded", "Unable to resume Gemini Live session.");
-    })().finally(() => {
-      this.reconnectPromise = null;
+    let settleReconnect;
+    const reconnectPromise = new Promise((resolve) => {
+      settleReconnect = resolve;
     });
-    return this.reconnectPromise;
+    this.reconnectPromise = reconnectPromise;
+    void this.#runReconnect().finally(() => {
+      if (this.reconnectPromise === reconnectPromise) this.reconnectPromise = null;
+      settleReconnect();
+    });
+    return reconnectPromise;
+  }
+
+  async #runReconnect() {
+    this.#failActiveMicrophoneForReconnect();
+    this.#clearOwnership();
+    const oldSession = this.session;
+    this.session = null;
+    try { await oldSession?.close?.(); } catch {}
+    for (; this.reconnectAttempts < RECONNECT_DELAYS_MS.length && !this.closing; this.reconnectAttempts += 1) {
+      await this.sleep(RECONNECT_DELAYS_MS[this.reconnectAttempts]);
+      try {
+        this.#health("connecting");
+        await this.#connect();
+        if (this.session) {
+          this.#health("ready");
+          return;
+        }
+      } catch {
+        // The next bounded delay is the only retry path.
+      }
+    }
+    if (!this.closing) this.#health("degraded", "Unable to resume Gemini Live session.");
   }
 
   #failActiveMicrophoneForReconnect() {
