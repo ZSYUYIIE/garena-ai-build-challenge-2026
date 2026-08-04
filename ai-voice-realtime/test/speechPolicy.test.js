@@ -35,6 +35,15 @@ function makeReadyForNarration(fixture) {
   fixture.policy.setCloudTabSpeech(false);
 }
 
+function dispatchNarration(fixture, event = candidate("score:2-1")) {
+  makeReadyForNarration(fixture);
+  fixture.policy.offerNarration(event);
+  fixture.setNow(750);
+  assert.deepEqual(fixture.policy.poll(), [
+    { type: "start_narration", candidate: event },
+  ]);
+}
+
 test("permits narration only after healthy tab silence and before expiry", () => {
   const fixture = createPolicy();
   makeReadyForNarration(fixture);
@@ -251,4 +260,99 @@ test("requires a finite monotonic backend session clock", () => {
   fixture.policy.poll();
   fixture.setNow(9);
   assert.throws(() => fixture.policy.poll(), /monotonic/i);
+});
+
+test("Live reconnect cancels active narration and repeated connecting is idempotent", () => {
+  const fixture = createPolicy();
+  makeReadyForNarration(fixture);
+  fixture.policy.markNarrationStarted("narration-1");
+
+  assert.deepEqual(fixture.policy.setLiveState("connecting"), [
+    { type: "cancel_narration", turnId: "narration-1" },
+  ]);
+  assert.deepEqual(fixture.policy.setLiveState("connecting"), []);
+});
+
+test("local or Cloud speech invalidates a dispatched narration and cancels a late start once", () => {
+  for (const setSpeech of [
+    (policy) => policy.setLocalTabSpeech(true),
+    (policy) => policy.setCloudTabSpeech(true),
+  ]) {
+    const fixture = createPolicy();
+    dispatchNarration(fixture);
+
+    assert.deepEqual(setSpeech(fixture.policy), [
+      { type: "drop_narration", reason: "tab_speech" },
+    ]);
+    assert.equal(fixture.policy.nextWakeAtMs(), null);
+    assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), [
+      { type: "cancel_narration", turnId: "narration-late" },
+    ]);
+    assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), []);
+  }
+});
+
+test("a user turn invalidates a dispatched narration and a late mark cannot replace the answer", () => {
+  const fixture = createPolicy();
+  dispatchNarration(fixture);
+
+  assert.deepEqual(fixture.policy.startUserTurn("answer-1"), [
+    { type: "drop_narration", reason: "user_turn" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), [
+    { type: "cancel_narration", turnId: "narration-late" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), []);
+  assert.deepEqual(fixture.policy.finishTurn("answer-1"), []);
+
+  fixture.policy.markNarrationStarted("narration-2");
+  assert.deepEqual(fixture.policy.setCloudTabSpeech(true), [
+    { type: "cancel_narration", turnId: "narration-2" },
+  ]);
+});
+
+test("STT degradation invalidates a dispatched narration and cancels its late start once", () => {
+  const fixture = createPolicy();
+  dispatchNarration(fixture);
+
+  assert.deepEqual(fixture.policy.setTabAudioState("degraded"), [
+    { type: "drop_narration", reason: "tab_audio_degraded" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), [
+    { type: "cancel_narration", turnId: "narration-late" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), []);
+});
+
+test("Live reconnect invalidates a dispatched narration and cancels its late start once", () => {
+  const fixture = createPolicy();
+  dispatchNarration(fixture);
+
+  assert.deepEqual(fixture.policy.setLiveState("connecting"), [
+    { type: "drop_narration", reason: "live_degraded" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), [
+    { type: "cancel_narration", turnId: "narration-late" },
+  ]);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), []);
+  assert.deepEqual(fixture.policy.setLiveState("connecting"), []);
+});
+
+test("a dispatched start schedules only its future expiry and expiry remains observable to poll", () => {
+  const fixture = createPolicy();
+  dispatchNarration(fixture);
+
+  assert.equal(fixture.policy.nextWakeAtMs(), 5_000);
+  assert.equal(fixture.policy.nextWakeAtMs(), 5_000);
+  fixture.setNow(5_000);
+  assert.equal(fixture.policy.nextWakeAtMs(), null);
+  assert.equal(fixture.policy.nextWakeAtMs(), null);
+  assert.deepEqual(fixture.policy.poll(), [
+    { type: "drop_narration", reason: "expired" },
+  ]);
+  assert.deepEqual(fixture.policy.poll(), []);
+  assert.equal(fixture.policy.nextWakeAtMs(), null);
+  assert.deepEqual(fixture.policy.markNarrationStarted("narration-late"), [
+    { type: "cancel_narration", turnId: "narration-late" },
+  ]);
 });

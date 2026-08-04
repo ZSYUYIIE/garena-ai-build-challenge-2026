@@ -53,8 +53,9 @@ export class SpeechPolicy {
   #liveState = "connecting";
   #silenceSinceMs = null;
   #pendingCandidate = null;
-  #startingCandidate = null;
+  #startReservation = null;
   #activeTurn = null;
+  #seenNarrationTurnIds = new Set();
   #cooldowns = new Map();
 
   constructor({
@@ -109,7 +110,7 @@ export class SpeechPolicy {
 
     this.#liveState = state;
     this.#refreshSilence(nowMs);
-    if (state === "degraded" || state === "closed") {
+    if (state !== "ready") {
       return this.#cancelAndDrop("live_degraded");
     }
     return [];
@@ -118,27 +119,28 @@ export class SpeechPolicy {
   offerNarration(candidate) {
     validateCandidate(candidate);
     const nowMs = this.#readNow();
-    this.#discardExpired(nowMs);
+    const actions = this.#discardExpired(nowMs);
 
     if (this.#isExpired(candidate, nowMs) || this.#isCoolingDown(candidate.semanticKey, nowMs)) {
-      return [];
+      return actions;
     }
-    if (this.#activeTurn?.mode === "user" || this.#startingCandidate) return [];
+    if (this.#activeTurn?.mode === "user" || this.#startReservation) return actions;
 
     if (!this.#pendingCandidate) {
       this.#pendingCandidate = copyCandidate(candidate);
-      return [];
+      return actions;
     }
-    if (this.#pendingCandidate.semanticKey === candidate.semanticKey) return [];
+    if (this.#pendingCandidate.semanticKey === candidate.semanticKey) return actions;
     if (
       candidate.createdAtMs <= this.#pendingCandidate.createdAtMs
       || candidate.importance < this.#pendingCandidate.importance
     ) {
-      return [];
+      return actions;
     }
 
     this.#pendingCandidate = copyCandidate(candidate);
-    return [{ type: "drop_narration", reason: "replaced" }];
+    actions.push({ type: "drop_narration", reason: "replaced" });
+    return actions;
   }
 
   startUserTurn(turnId) {
@@ -159,14 +161,23 @@ export class SpeechPolicy {
   markNarrationStarted(turnId) {
     assertTurnId(turnId);
     const nowMs = this.#readNow();
+    if (this.#seenNarrationTurnIds.has(turnId)) return [];
+
     const actions = this.#discardExpired(nowMs);
+    if (this.#startReservation?.invalidated) {
+      this.#startReservation = null;
+      this.#seenNarrationTurnIds.add(turnId);
+      actions.push({ type: "cancel_narration", turnId });
+      return actions;
+    }
     if (actions.length > 0 || this.#activeTurn) return actions;
 
-    const candidate = this.#startingCandidate;
-    this.#startingCandidate = null;
+    const candidate = this.#startReservation?.candidate ?? null;
+    this.#startReservation = null;
     if (candidate) {
       this.#cooldowns.set(candidate.semanticKey, nowMs + this.#semanticCooldownMs);
     }
+    this.#seenNarrationTurnIds.add(turnId);
     this.#activeTurn = { mode: "narration", turnId };
     return actions;
   }
@@ -183,21 +194,31 @@ export class SpeechPolicy {
     const nowMs = this.#readNow();
     const actions = this.#discardExpired(nowMs);
     if (actions.length > 0) return actions;
-    if (!this.#pendingCandidate || this.#startingCandidate || this.#activeTurn) return [];
+    if (!this.#pendingCandidate || this.#startReservation || this.#activeTurn) return [];
     if (!this.#canNarrate() || nowMs < this.#silenceDeadlineMs()) return [];
 
-    this.#startingCandidate = this.#pendingCandidate;
+    this.#startReservation = {
+      candidate: this.#pendingCandidate,
+      invalidated: false,
+    };
     this.#pendingCandidate = null;
-    return [{ type: "start_narration", candidate: copyCandidate(this.#startingCandidate) }];
+    return [{
+      type: "start_narration",
+      candidate: copyCandidate(this.#startReservation.candidate),
+    }];
   }
 
   nextWakeAtMs() {
     const nowMs = this.#readNow();
-    this.#discardExpired(nowMs);
-    const candidate = this.#pendingCandidate ?? this.#startingCandidate;
+    const reservation = this.#startReservation;
+    const candidate = this.#pendingCandidate ?? (
+      reservation && !reservation.invalidated ? reservation.candidate : null
+    );
     if (!candidate) return null;
 
     const expiryMs = candidate.createdAtMs + this.#narrationTtlMs;
+    if (expiryMs <= nowMs) return null;
+    if (reservation) return expiryMs;
     if (!this.#canNarrate()) return expiryMs;
     return Math.max(nowMs, Math.min(expiryMs, this.#silenceDeadlineMs()));
   }
@@ -216,10 +237,15 @@ export class SpeechPolicy {
     }
 
     this.#refreshSilence(nowMs);
-    if (!active || this.#activeTurn?.mode !== "narration") return [];
-    const turnId = this.#activeTurn.turnId;
-    this.#activeTurn = null;
-    return [{ type: "cancel_narration", turnId }];
+    if (!active) return [];
+
+    const actions = [];
+    if (this.#activeTurn?.mode === "narration") {
+      actions.push({ type: "cancel_narration", turnId: this.#activeTurn.turnId });
+      this.#activeTurn = null;
+    }
+    this.#invalidateReservation(actions, "tab_speech");
+    return actions;
   }
 
   #cancelAndDrop(reason) {
@@ -233,18 +259,34 @@ export class SpeechPolicy {
   }
 
   #dropPending(actions, reason) {
-    if (!this.#pendingCandidate && !this.#startingCandidate) return;
-    this.#pendingCandidate = null;
-    this.#startingCandidate = null;
-    actions.push({ type: "drop_narration", reason });
+    if (this.#pendingCandidate) {
+      this.#pendingCandidate = null;
+      actions.push({ type: "drop_narration", reason });
+      return;
+    }
+    this.#invalidateReservation(actions, reason);
   }
 
   #discardExpired(nowMs) {
-    const candidate = this.#pendingCandidate ?? this.#startingCandidate;
-    if (!candidate || !this.#isExpired(candidate, nowMs)) return [];
-    this.#pendingCandidate = null;
-    this.#startingCandidate = null;
-    return [{ type: "drop_narration", reason: "expired" }];
+    if (this.#pendingCandidate && this.#isExpired(this.#pendingCandidate, nowMs)) {
+      this.#pendingCandidate = null;
+      return [{ type: "drop_narration", reason: "expired" }];
+    }
+    if (
+      this.#startReservation
+      && !this.#startReservation.invalidated
+      && this.#isExpired(this.#startReservation.candidate, nowMs)
+    ) {
+      this.#startReservation.invalidated = true;
+      return [{ type: "drop_narration", reason: "expired" }];
+    }
+    return [];
+  }
+
+  #invalidateReservation(actions, reason) {
+    if (!this.#startReservation || this.#startReservation.invalidated) return;
+    this.#startReservation.invalidated = true;
+    actions.push({ type: "drop_narration", reason });
   }
 
   #isExpired(candidate, nowMs) {
