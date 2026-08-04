@@ -202,16 +202,14 @@ class ReferenceRing {
 
   private write(startSampleIndex: number, pcm: Int16Array): void {
     if (this.firstSampleIndex === null) {
-      this.firstSampleIndex = startSampleIndex;
-      this.samples = pcm.slice();
+      this.installBoundedTail(startSampleIndex, pcm);
       return;
     }
 
     if (startSampleIndex < this.firstSampleIndex) return;
     const offset = startSampleIndex - this.firstSampleIndex;
     if (offset > this.samples.length) {
-      this.firstSampleIndex = startSampleIndex;
-      this.samples = pcm.slice();
+      this.installBoundedTail(startSampleIndex, pcm);
       return;
     } else if (offset + pcm.length > this.samples.length) {
       const extended = new Int16Array(offset + pcm.length);
@@ -225,6 +223,12 @@ class ReferenceRing {
       this.samples = this.samples.slice(discardCount);
       this.firstSampleIndex += discardCount;
     }
+  }
+
+  private installBoundedTail(startSampleIndex: number, pcm: Int16Array): void {
+    const discardCount = Math.max(0, pcm.length - MAX_REFERENCE_RING_SAMPLES);
+    this.firstSampleIndex = startSampleIndex + discardCount;
+    this.samples = pcm.slice(discardCount);
   }
 }
 

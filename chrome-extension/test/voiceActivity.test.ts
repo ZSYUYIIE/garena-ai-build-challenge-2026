@@ -213,6 +213,69 @@ test("keeps earlier reference history when a second sample rate initializes", ()
   assert.equal(events.some((event) => event.type === "speech_start"), false);
 });
 
+test("evicts stale samples from an oversized initial reference packet", () => {
+  const reference = pcm(2_000, 0.2, 310);
+  const staleLeakage = Int16Array.from(reference.slice(0, 4_800), (sample) =>
+    Math.round(sample * 0.45),
+  );
+  const gate = new EchoAwareUserVadGate();
+
+  gate.pushReference({
+    source: "tab",
+    pcm: reference,
+    sampleRate: SAMPLE_RATE,
+    firstSampleExtensionSessionMs: 0,
+  });
+
+  const events = pushMicrophoneFrames(gate, staleLeakage, 80);
+
+  assert.equal(events.filter((event) => event.type === "speech_start").length, 1);
+});
+
+test("keeps the timestamp-aligned tail of an oversized restarted reference packet", () => {
+  const restartedAtMs = 1_000_000_000;
+  const reference = pcm(2_000, 0.2, 470);
+  const staleLeakage = Int16Array.from(reference.slice(0, 4_800), (sample) =>
+    Math.round(sample * 0.45),
+  );
+  const retainedOffsetSamples = (1_520 * SAMPLE_RATE) / 1_000;
+  const recentLeakage = Int16Array.from(
+    reference.slice(retainedOffsetSamples, retainedOffsetSamples + 4_800),
+    (sample) => Math.round(sample * 0.45),
+  );
+  const createRestartedGate = (): EchoAwareUserVadGate => {
+    const gate = new EchoAwareUserVadGate();
+    gate.pushReference({
+      source: "tab",
+      pcm: pcm(100, 0.2, 220),
+      sampleRate: SAMPLE_RATE,
+      firstSampleExtensionSessionMs: 0,
+    });
+    gate.pushReference({
+      source: "tab",
+      pcm: reference,
+      sampleRate: SAMPLE_RATE,
+      firstSampleExtensionSessionMs: restartedAtMs,
+    });
+    return gate;
+  };
+
+  const staleEvents = pushMicrophoneFrames(
+    createRestartedGate(),
+    staleLeakage,
+    restartedAtMs + 80,
+  );
+  assert.equal(staleEvents.filter((event) => event.type === "speech_start").length, 1);
+
+  const events = pushMicrophoneFrames(
+    createRestartedGate(),
+    recentLeakage,
+    restartedAtMs + 1_600,
+  );
+
+  assert.equal(events.some((event) => event.type === "speech_start"), false);
+});
+
 test("marks tab speech-like packets active immediately and releases after hysteresis", () => {
   const gate = new TabActivityGate();
 
