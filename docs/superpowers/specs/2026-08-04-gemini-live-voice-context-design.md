@@ -96,7 +96,7 @@ When local VAD detects speech:
 4. After the end hangover, it sends `user_activity_end`.
 5. It keeps tab playback at 30 percent until the answer's Gemini audio queue is empty or the turn fails.
 
-Acoustic echo cancellation is the primary defense against tab or Gemini playback leaking back into the open microphone. Headphones remain the recommended test setup. A visible microphone state tells the user when the session is listening, detecting user speech, or recovering from a permission failure.
+Acoustic echo cancellation plus a playback-reference-aware local gate mitigates tab or Gemini playback leaking back into the open microphone. If Chrome does not confirm echo cancellation, automatic voice turns remain disarmed and typed questions stay available. This cannot prove speaker identity under every acoustic condition; headphones remain the reliable fallback. A visible microphone state tells the user when the session is listening, detecting user speech, or recovering from a permission failure.
 
 ## Binary Audio Contract
 
@@ -105,12 +105,12 @@ Each client-to-server binary message contains a 10-byte header followed by littl
 - Byte 0: protocol version `1`.
 - Byte 1: source kind, `1` for microphone and `2` for captured tab.
 - Bytes 2-5: unsigned little-endian sequence number.
-- Bytes 6-9: unsigned little-endian session-relative timestamp in milliseconds.
+- Bytes 6-9: unsigned little-endian extension-session-relative monotonic timestamp of the payload's first PCM sample, in milliseconds; the backend uses it for continuity checks, not TTL comparison.
 - Remaining bytes: non-empty, even-length PCM16 payload.
 
 Microphone packets contain at most 40 ms of 16 kHz mono PCM. Tab packets contain at most 100 ms. The backend rejects unknown versions, unknown source kinds, non-monotonic sequence numbers, odd payloads, and oversized audio packets without routing them to a provider.
 
-The extension checks `WebSocket.bufferedAmount`: noncritical tab audio and routine frames may be dropped under backpressure, but microphone overflow aborts the current user turn and surfaces a retryable error rather than silently truncating a question.
+The extension checks `WebSocket.bufferedAmount`: noncritical tab audio and routine frames may be dropped under latency-derived limits, but a tab drop declares an explicit discontinuity and disables narration until STT recovers. Microphone overflow invalidates the turn and closes the transport when its queued audio cannot be safely purged; it never silently truncates a question.
 
 ## Dedicated Captured-Tab Transcription
 
@@ -124,7 +124,7 @@ The recognizer path is `projects/{project}/locations/{location}/recognizers/_`. 
 
 The adapter emits:
 
-- tab speech active/inactive state from Speech-to-Text activity events;
+- tab speech active/inactive state from Speech-to-Text activity events, combined conservatively with a fast local tab speech-likeness gate to cover provider latency;
 - interim transcript text for diagnostics only;
 - final timestamped transcript segments for context.
 
@@ -132,7 +132,7 @@ Cloud STT streaming sessions rotate before the five-minute provider limit. The a
 
 ## Transcript Buffer and Gemini Tool
 
-Final tab transcript segments are stored only in memory and carry start/end timestamps, detected language, and text. The buffer evicts entries older than two minutes and caps stored text at 12,000 characters.
+Final tab transcript segments are stored only in memory and carry backend-session-relative monotonic start/end timestamps, detected language, and text. Client PCM arrival is mapped into that backend clock; frame candidate TTL and speech policy use the same domain. The buffer evicts entries older than two minutes and caps stored text at 12,000 characters.
 
 Gemini Live receives a synchronous `get_recent_tab_transcript` function declaration. The model may request 5-120 seconds of context; the backend defaults to 45 seconds and returns at most 4,000 characters. The tool response is explicitly labeled:
 
@@ -156,15 +156,16 @@ Each browser session opens `gemini-3.1-flash-live-preview` with:
 
 - audio response modality;
 - automatic activity detection disabled;
+- turn coverage explicitly including audio activity and all video;
 - input and output audio transcription enabled;
 - context-window compression with a sliding window;
 - session resumption enabled;
 - the recent-tab-transcript tool;
 - a system instruction that defines source ownership and the two allowed speech triggers.
 
-Accepted changed JPEG frames are sent to Live immediately, at no more than one frame per second, whether or not the user is speaking. The latest frame is also retained by the existing atomic analyzer. Starting a user question forces an immediate fresh frame when the capture pipeline is ready.
+Accepted changed JPEG frames are sampled to Live at no more than one frame per rolling second, whether or not the user is speaking. The latest frame is also retained by the existing atomic analyzer. Starting a user question captures and queues a fresh frame; it is delivered before activity when the one-FPS budget permits, otherwise the turn uses the latest already-delivered frame.
 
-The backend forwards microphone PCM only between `user_activity_start` and `user_activity_end`, translating those events to Live `activityStart`, audio inputs, and `activityEnd`. Input transcripts update the user chat entry. All audio parts in each Live server message are forwarded to the extension as 24 kHz PCM output tagged with the active turn ID and turn kind.
+The backend forwards microphone PCM only between `user_activity_start` and `user_activity_end`, translating those events to Live `activityStart`, audio inputs, and `activityEnd`. Typed questions and approved narration use Live realtime text surrounded by provider-level `activityStart`/`activityEnd` because automatic activity detection is disabled. Gemini events contain no application turn ID and input/output transcriptions are not ordered, so the adapter keeps separate input, response, and output-transcription ownership queues. Response ownership advances on provider `turnComplete`; transcript ownership advances on its own `finished` flag, with a bounded settling window for valid late chunks. Ambiguous chunks are dropped instead of guessed. All safely attributed audio parts are forwarded as 24 kHz PCM output tagged with the owning turn ID and kind.
 
 The backend retains the latest session-resumption handle in memory. It reconnects on `GoAway` or recoverable connection closure, passing the handle and latest frame into the replacement connection. A user turn lost during reconnect is ended with a retryable error instead of being replayed ambiguously.
 
@@ -199,7 +200,7 @@ No frame arrival, STT interim result, final transcript, or tool result can indep
 ### Automatic narration
 
 - Automatic narration never changes tab volume.
-- It may begin only after tab speech has been inactive for at least 750 ms.
+- It may begin only after both the fast local tab gate and Cloud STT speech state have been inactive for at least 750 ms.
 - If tab speech begins while automatic narration is playing, immediately clear that narration's local playback and discard later audio chunks for that turn.
 - If no silent window occurs before the five-second candidate expiry, drop the candidate.
 - Automatic narration is disabled while STT health is unavailable or unknown.
@@ -216,9 +217,9 @@ The extension displays the canonical atomic narration text and Live input/output
 
 ## Protocol Evolution
 
-The WebSocket handshake becomes protocol version 2. New client commands include user activity boundaries and binary PCM packets. New server messages include tagged model audio, playback cancellation, Live/STT health, and speech state. Backend and extension contract tests must enumerate every message type.
+The WebSocket handshake becomes protocol version 2. A strict `session_hello` carrying explicit tab-audio and microphone states is required before the backend starts providers or accepts media; later state updates distinguish physically absent tab audio from degraded capture. New client commands include user activity boundaries, tab activity/discontinuity, and binary PCM packets. New server messages include tagged model audio, playback cancellation, Live/STT health, and speech state. Backend and extension contract tests must enumerate every message type.
 
-The existing origin check, two-megabyte WebSocket payload cap, strict JSON validation, frame rate limit, immutable frame snapshots, and abortable atomic turns remain in force. Audio receives separate packet-size, sequence, rate, and backpressure controls.
+The backend requires the configured StreamSense extension ID in production; permissive local development is an explicit opt-in. The two-megabyte WebSocket payload cap, strict JSON validation, one-frame-per-second Live sampling, immutable frame snapshots, and abortable atomic turns remain in force. Audio receives separate packet-size, sequence, rate, continuity, and backpressure controls.
 
 ## Error Handling
 
