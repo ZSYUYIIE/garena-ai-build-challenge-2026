@@ -1,6 +1,4 @@
-import { useCallback, useEffect } from "react";
-
-import { ExtensionStatusService } from "@/services/extensionStatus";
+import { useCallback } from "react";
 
 import "./index.css";
 import { EventTimelineSection } from "./components/EventTimelineSection";
@@ -24,12 +22,6 @@ export default function App() {
 function StreamSensePanel() {
   const { options } = useConfigurationOptions();
   const session = useRealtimeSession(options.narrationLevel);
-
-  useEffect(() => {
-    void ExtensionStatusService.setRunning(session.isRunning).catch(() => {
-      // The side panel still functions if the optional badge update fails.
-    });
-  }, [session.isRunning]);
 
   const handleRunningChange = useCallback(
     (shouldRun: boolean) => {

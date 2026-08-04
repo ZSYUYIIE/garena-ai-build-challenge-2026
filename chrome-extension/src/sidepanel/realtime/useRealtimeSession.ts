@@ -337,6 +337,10 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           activeNarrationRef.current = "";
           activeAnswerRef.current = null;
           break;
+        case "turn_started":
+        case "telemetry":
+          // These messages are part of the protocol but do not change panel state.
+          break;
         case "error":
           setError(message.text ?? "The realtime session reported an error.");
           setStatus("error");
