@@ -43,8 +43,10 @@ class FakeStream extends EventEmitter {
   endCalls = 0;
   destroyCalls = 0;
   writeResults = [];
+  throwOnWrite = false;
 
   write(message) {
+    if (this.throwOnWrite) throw new Error("synchronous stream write failure");
     this.writes.push(message);
     return this.writeResults.shift() ?? true;
   }
@@ -61,6 +63,7 @@ class FakeStream extends EventEmitter {
 
 class FakeSpeechClient {
   static instances = [];
+  static streamSetup = null;
 
   constructor(options) {
     this.options = options;
@@ -72,6 +75,7 @@ class FakeSpeechClient {
   _streamingRecognize() {
     const stream = new FakeStream();
     this.streams.push(stream);
+    FakeSpeechClient.streamSetup?.(stream, this.streams.length - 1);
     return stream;
   }
 
@@ -86,7 +90,9 @@ function makeTranscriber(options = {}) {
   const interims = [];
   const speechStates = [];
   const health = [];
+  const healthMessages = [];
   const timers = options.timers ?? new FakeTimers();
+  FakeSpeechClient.streamSetup = options.streamSetup ?? null;
   const transcriber = new GoogleSpeechTranscriber({
     SpeechClient: FakeSpeechClient,
     projectId: "project-1",
@@ -95,10 +101,13 @@ function makeTranscriber(options = {}) {
     onFinal: (segment) => finals.push(segment),
     onInterim: (text) => interims.push(text),
     onSpeechState: (active) => speechStates.push(active),
-    onHealth: (state) => health.push(state),
+    onHealth: (state, message) => {
+      health.push(state);
+      healthMessages.push(message);
+    },
     ...options,
   });
-  return { transcriber, finals, interims, speechStates, health, timers };
+  return { transcriber, finals, interims, speechStates, health, healthMessages, timers };
 }
 
 function result({
@@ -225,6 +234,67 @@ test("replays the complete bounded bridge once in original PCM order", async () 
   await transcriber.close();
 });
 
+test("does not send bridge or live PCM until a config-backpressured stream drains", async () => {
+  const { transcriber } = makeTranscriber({
+    streamSetup: (stream) => { stream.writeResults = [false]; },
+  });
+  await transcriber.start();
+  const stream = FakeSpeechClient.instances[0].streams[0];
+  const pcm = Buffer.alloc(3_200, 6);
+
+  assert.equal(transcriber.write(pcm, 1_000), "backpressured");
+  assert.equal(stream.writes.length, 1);
+  stream.emit("drain");
+  assert.deepEqual(stream.writes.slice(1), [{ audio: pcm }]);
+  await transcriber.close();
+});
+
+test("preserves every pending bridge chunk across false-write drain boundaries before live audio", async () => {
+  const timers = new FakeTimers();
+  const { transcriber } = makeTranscriber({
+    timers,
+    rotateAfterMs: 100,
+    streamSetup: (stream, index) => {
+      if (index === 1) stream.writeResults = [true, false, false, true, true];
+    },
+  });
+  await transcriber.start();
+  const bridge = [1, 2, 3].map((fill) => Buffer.alloc(3_200, fill));
+  bridge.forEach((pcm, index) => transcriber.write(pcm, 1_000 + (index * 100)));
+  timers.advance(100);
+
+  const replacement = FakeSpeechClient.instances[0].streams[1];
+  const live = Buffer.alloc(3_200, 9);
+  assert.equal(transcriber.write(live, 2_000), "backpressured");
+  assert.deepEqual(replacement.writes.slice(1), [{ audio: bridge[0] }]);
+  replacement.emit("drain");
+  assert.deepEqual(replacement.writes.slice(1), [{ audio: bridge[0] }, { audio: bridge[1] }]);
+  replacement.emit("drain");
+  assert.deepEqual(
+    replacement.writes.slice(1),
+    [...bridge, live].map((audio) => ({ audio })),
+  );
+  await transcriber.close();
+});
+
+test("does not publish inactive while a replacement stream remains Cloud-speech active", async () => {
+  const timers = new FakeTimers();
+  const { transcriber, speechStates } = makeTranscriber({ timers, rotateAfterMs: 100 });
+  await transcriber.start();
+  const oldStream = FakeSpeechClient.instances[0].streams[0];
+  transcriber.write(Buffer.alloc(3_200), 1_000);
+  oldStream.emit("data", { speechEventType: "SPEECH_ACTIVITY_BEGIN" });
+  timers.advance(100);
+
+  const replacement = FakeSpeechClient.instances[0].streams[1];
+  replacement.emit("data", { speechEventType: "SPEECH_ACTIVITY_BEGIN" });
+  oldStream.emit("data", { speechEventType: "SPEECH_ACTIVITY_END" });
+  assert.deepEqual(speechStates, [true]);
+  replacement.emit("data", { speechEventType: "SPEECH_ACTIVITY_END" });
+  assert.deepEqual(speechStates, [true, false]);
+  await transcriber.close();
+});
+
 test("keeps transcript eviction on the backend clock despite an unrelated extension timestamp", async () => {
   let backendNow = 0;
   const buffer = new TabTranscriptBuffer({ nowBackendSessionMs: () => backendNow });
@@ -313,11 +383,31 @@ test("flushes timestamped tab PCM buffered during a reconnect and cancels recove
   assert.equal(FakeSpeechClient.instances[0].streams.length, 2);
 });
 
-test("is safely degraded without a project and never opens a provider client", async () => {
-  const { transcriber, health } = makeTranscriber({ projectId: "" });
+test("is safely degraded with a sanitized missing-project diagnostic and never opens a provider client", async () => {
+  const { transcriber, health, healthMessages } = makeTranscriber({ projectId: "" });
   await transcriber.start();
   assert.equal(FakeSpeechClient.instances.length, 0);
   assert.equal(transcriber.health, "degraded");
   assert.deepEqual(health, ["degraded"]);
+  assert.match(healthMessages[0], /missing GOOGLE_CLOUD_PROJECT/i);
+  assert.doesNotMatch(healthMessages[0], /pcm|transcript|credential|secret/i);
   await transcriber.close();
+});
+
+test("destroys a record when its first config write throws and retries without leaking it", async () => {
+  const timers = new FakeTimers();
+  const { transcriber } = makeTranscriber({
+    timers,
+    streamSetup: (stream, index) => { if (index === 0) stream.throwOnWrite = true; },
+  });
+  await transcriber.start();
+  const failed = FakeSpeechClient.instances[0].streams[0];
+
+  assert.equal(failed.destroyCalls, 1);
+  assert.equal(failed.endCalls, 0);
+  assert.equal(transcriber.health, "degraded");
+  timers.advance(250);
+  assert.equal(FakeSpeechClient.instances[0].streams.length, 2);
+  await transcriber.close();
+  assert.equal(failed.destroyCalls, 1);
 });
