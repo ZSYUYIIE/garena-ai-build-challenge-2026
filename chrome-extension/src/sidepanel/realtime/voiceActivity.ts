@@ -16,6 +16,8 @@ const ECHO_RESIDUAL_RMS_MAX = 0.1;
 const TAB_ACTIVITY_RMS_FLOOR = 0.02;
 const TAB_ACTIVITY_HANGOVER_MS = 500;
 const VAD_PRE_ROLL_SAMPLES = (VAD_PRE_ROLL_MS * VAD_SAMPLE_RATE) / 1_000;
+const MAX_REFERENCE_RING_SAMPLES =
+  ((MAX_REFERENCE_DELAY_MS + 1_000) * VAD_SAMPLE_RATE) / 1_000;
 
 export type VadEvent =
   | { type: "speech_start"; timestampMs: number; preRoll: Int16Array[] }
@@ -147,7 +149,6 @@ class ReferenceRing {
       stream.expectedNextInputTimestampMs === null ||
       Math.abs(reference.firstSampleExtensionSessionMs - stream.expectedNextInputTimestampMs) > 1
     ) {
-      this.clearSamples();
       stream.resampler.reset();
       stream.nextOutputSampleIndex = Math.round(
         (reference.firstSampleExtensionSessionMs * VAD_SAMPLE_RATE) / 1_000,
@@ -207,11 +208,11 @@ class ReferenceRing {
     }
 
     if (startSampleIndex < this.firstSampleIndex) return;
-    let offset = startSampleIndex - this.firstSampleIndex;
+    const offset = startSampleIndex - this.firstSampleIndex;
     if (offset > this.samples.length) {
-      const extended = new Int16Array(offset + pcm.length);
-      extended.set(this.samples);
-      this.samples = extended;
+      this.firstSampleIndex = startSampleIndex;
+      this.samples = pcm.slice();
+      return;
     } else if (offset + pcm.length > this.samples.length) {
       const extended = new Int16Array(offset + pcm.length);
       extended.set(this.samples);
@@ -219,10 +220,8 @@ class ReferenceRing {
     }
     this.samples.set(pcm, offset);
 
-    const maximumSamples =
-      ((MAX_REFERENCE_DELAY_MS + 1_000) * VAD_SAMPLE_RATE) / 1_000;
-    if (this.samples.length > maximumSamples) {
-      const discardCount = this.samples.length - maximumSamples;
+    if (this.samples.length > MAX_REFERENCE_RING_SAMPLES) {
+      const discardCount = this.samples.length - MAX_REFERENCE_RING_SAMPLES;
       this.samples = this.samples.slice(discardCount);
       this.firstSampleIndex += discardCount;
     }

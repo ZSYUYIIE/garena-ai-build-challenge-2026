@@ -189,6 +189,30 @@ test("rebases a large reference timestamp discontinuity without retaining a gap"
   assert.equal(events.some((event) => event.type === "speech_start"), false);
 });
 
+test("keeps earlier reference history when a second sample rate initializes", () => {
+  const originalReference = pcm(800, 0.2, 310);
+  const laterReference = pcmAtRate(20, 0.2, 470, 48_000);
+  const originalLeakage = pcm(300, 0.09, 310);
+  const gate = new EchoAwareUserVadGate();
+
+  gate.pushReference({
+    source: "tab",
+    pcm: originalReference,
+    sampleRate: SAMPLE_RATE,
+    firstSampleExtensionSessionMs: 0,
+  });
+  gate.pushReference({
+    source: "tab",
+    pcm: laterReference,
+    sampleRate: 48_000,
+    firstSampleExtensionSessionMs: 800,
+  });
+
+  const events = pushMicrophoneFrames(gate, originalLeakage, 80);
+
+  assert.equal(events.some((event) => event.type === "speech_start"), false);
+});
+
 test("marks tab speech-like packets active immediately and releases after hysteresis", () => {
   const gate = new TabActivityGate();
 
