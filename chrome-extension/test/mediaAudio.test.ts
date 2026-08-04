@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RealtimeMediaAudio } from "../src/sidepanel/realtime/mediaAudio.ts";
+import {
+  RealtimeMediaAudio,
+  createMediaSocketProtocol,
+} from "../src/sidepanel/realtime/mediaAudio.ts";
 
 type Listener = () => void;
 
@@ -77,8 +80,19 @@ class FakeAudioContext {
   resumeCalls = 0;
   closeCalls = 0;
   failModule = false;
+  pendingModule = false;
+  moduleCalls = 0;
+  private releaseModule: (() => void) | null = null;
   resumeResult: Promise<void> = Promise.resolve();
-  readonly audioWorklet = { addModule: async () => { if (this.failModule) throw new Error("worklet failed"); } };
+  readonly audioWorklet = {
+    addModule: async () => {
+      this.moduleCalls += 1;
+      if (this.failModule) throw new Error("worklet failed");
+      if (this.pendingModule) {
+        await new Promise<void>((resolve) => { this.releaseModule = resolve; });
+      }
+    },
+  };
   readonly sampleRate = 48_000;
   get currentTime() { return 1; }
   createGain() { const node = new FakeGain(); this.gains.push(node); return node; }
@@ -86,13 +100,17 @@ class FakeAudioContext {
   createWorklet() { const node = new FakeWorklet(); this.worklets.push(node); return node; }
   resume() { this.resumeCalls += 1; return this.resumeResult.then(() => { this.state = "running"; }); }
   close() { this.closeCalls += 1; this.state = "closed"; return Promise.resolve(); }
+  finishModuleLoad() { this.releaseModule?.(); }
 }
 
 function fixture(options: {
   tabAudio?: boolean;
   mic?: "allowed" | "denied" | "pending" | "no-echo";
+  pendingModule?: boolean;
+  now?: () => number;
 } = {}) {
   const context = new FakeAudioContext();
+  context.pendingModule = options.pendingModule ?? false;
   const tabAudio = new FakeTrack("audio");
   const tabVideo = new FakeTrack("video");
   const tabStream = new FakeStream(options.tabAudio === false ? [tabVideo] : [tabAudio, tabVideo]);
@@ -109,13 +127,16 @@ function fixture(options: {
   const activity: boolean[] = [];
   const userEvents: string[] = [];
   const states: string[] = [];
+  const discontinuities: number[] = [];
+  const tabPacketTimestamps: number[] = [];
+  const micPacketTimestamps: number[] = [];
   let videoEnded = false;
   const audio = new RealtimeMediaAudio({
     createAudioContext: () => context as unknown as AudioContext,
     createWorkletNode: () => context.createWorklet() as unknown as AudioWorkletNode,
     getUserMedia: microphone,
     getWorkletUrl: () => "chrome-extension://id/audio/pcm-capture-worklet.js",
-    now: () => 1_000,
+    now: options.now ?? (() => 1_000),
     onStateChange: (state) => states.push(`${state.tabAudioState}/${state.microphoneState}`),
   });
   return {
@@ -130,17 +151,29 @@ function fixture(options: {
     activity,
     userEvents,
     states,
+    discontinuities,
+    tabPacketTimestamps,
+    micPacketTimestamps,
     videoEnded: () => videoEnded,
     resolveMic: () => resolveMic?.(micStream as unknown as MediaStream),
     tabOptions: {
       tabStream: tabStream as unknown as MediaStream,
-      onTabPacket: (packet: Int16Array) => tabPackets.push(packet),
+      onTabPacket: (packet: Int16Array, timestampMs: number) => {
+        tabPackets.push(packet);
+        tabPacketTimestamps.push(timestampMs);
+      },
       onTabActivity: (active: boolean) => activity.push(active),
-      onTabDiscontinuity: () => states.push("tab-discontinuity"),
+      onTabDiscontinuity: (timestampMs: number) => {
+        discontinuities.push(timestampMs);
+        states.push("tab-discontinuity");
+      },
       onVideoEnded: () => { videoEnded = true; },
     },
     micOptions: {
-      onMicPacket: (packet: Int16Array) => micPackets.push(packet),
+      onMicPacket: (packet: Int16Array, timestampMs: number) => {
+        micPackets.push(packet);
+        micPacketTimestamps.push(timestampMs);
+      },
       onUserActivityStart: () => userEvents.push("start"),
       onUserActivityEnd: () => userEvents.push("end"),
       tabReference: null,
@@ -185,6 +218,18 @@ test("starts microphone permission without waiting for it to settle", async () =
   assert.equal(await pendingMic, "ready");
 });
 
+test("stops a late microphone grant without publishing replacement state", async () => {
+  const media = fixture({ mic: "pending" });
+  media.audio.prepareForUserGesture();
+  const pending = media.audio.startMicrophone(media.micOptions);
+  const stateCountBeforeStop = media.states.length;
+  await media.audio.stop();
+  media.resolveMic();
+  assert.equal(await pending, "degraded");
+  assert.equal(media.micTrack.stopCalls, 1);
+  assert.equal(media.states.length, stateCountBeforeStop);
+});
+
 test("keeps tab capture when microphone permission is denied", async () => {
   const media = fixture({ mic: "denied" });
   media.audio.prepareForUserGesture();
@@ -211,6 +256,43 @@ test("distinguishes initially absent tab audio from a failed present worklet", a
   failed.context.failModule = true;
   failed.audio.prepareForUserGesture();
   assert.equal(await failed.audio.startTab(failed.tabOptions), "degraded");
+});
+
+test("keeps tab playback audible when only its capture worklet fails", async () => {
+  const media = fixture();
+  media.context.failModule = true;
+  media.audio.prepareForUserGesture();
+  assert.equal(await media.audio.startTab(media.tabOptions), "degraded");
+  assert.equal(media.context.sources[0].destinations.includes(media.context.gains[0]), true);
+  assert.equal(media.context.gains[0].destinations.includes(media.context.destination), true);
+  await media.audio.stop();
+  assert.equal(media.context.sources[0].disconnectCalls, 1);
+  assert.equal(media.context.gains[0].disconnectCalls, 1);
+});
+
+test("does not create a tab capture branch after stop during worklet loading", async () => {
+  const media = fixture({ pendingModule: true });
+  media.audio.prepareForUserGesture();
+  const starting = media.audio.startTab(media.tabOptions);
+  while (media.context.moduleCalls === 0) await Promise.resolve();
+  await media.audio.stop();
+  media.context.finishModuleLoad();
+  assert.equal(await starting, "degraded");
+  assert.equal(media.context.worklets.length, 0);
+  assert.equal(media.tabAudio.stopCalls, 1);
+});
+
+test("does not create a microphone branch after stop during worklet loading", async () => {
+  const media = fixture({ pendingModule: true });
+  media.audio.prepareForUserGesture();
+  const starting = media.audio.startMicrophone(media.micOptions);
+  await Promise.resolve();
+  await Promise.resolve();
+  await media.audio.stop();
+  media.context.finishModuleLoad();
+  assert.equal(await starting, "degraded");
+  assert.equal(media.context.worklets.length, 0);
+  assert.equal(media.micTrack.stopCalls, 1);
 });
 
 test("disarms VAD when echo cancellation is not confirmed", async () => {
@@ -242,6 +324,28 @@ test("suppresses mic VAD while disabled and restarts it from a reset detector", 
   assert.ok(media.micPackets.length > 0);
 });
 
+test("reports first-sample timestamps from sample-duration cursors", async () => {
+  const { media } = await startBoth();
+  media.context.worklets[0].emit(new Float32Array(9_600).fill(0.2));
+  assert.deepEqual(media.tabPacketTimestamps, [1_000, 1_100]);
+  media.context.worklets[1].emit(
+    Float32Array.from({ length: 9_600 }, (_, index) => index % 2 === 0 ? 0.6 : -0.6),
+  );
+  assert.deepEqual(media.micPacketTimestamps.slice(0, 2), [800, 840]);
+});
+
+test("anchors a tab packet timestamp at the first worklet block before chunk buffering", async () => {
+  let now = 0;
+  const media = fixture({ now: () => now });
+  media.audio.prepareForUserGesture();
+  await media.audio.startTab(media.tabOptions);
+  for (let index = 0; index < 5; index += 1) {
+    now = index * 20;
+    media.context.worklets[0].emit(new Float32Array(960).fill(0.2));
+  }
+  assert.deepEqual(media.tabPacketTimestamps, [0]);
+});
+
 test("degrades only the branch whose track ends and reports tab discontinuity", async () => {
   const { media } = await startBoth();
   media.micTrack.end();
@@ -249,6 +353,7 @@ test("degrades only the branch whose track ends and reports tab discontinuity", 
   media.tabAudio.end();
   assert.ok(media.states.includes("degraded/degraded"));
   assert.ok(media.states.includes("tab-discontinuity"));
+  assert.deepEqual(media.discontinuities, [1_000]);
   assert.equal(media.tabVideo.stopCalls, 0);
 });
 
@@ -308,4 +413,58 @@ test("worklet downmixes all channels, preserves render-quantum continuity, and p
     globals.registerProcessor = previousRegister;
     globals.sampleRate = previousSampleRate;
   }
+});
+
+test("sends a complete protocol-v2 hello before all session media commands", () => {
+  const sent: (string | ArrayBuffer)[] = [];
+  const protocol = createMediaSocketProtocol((value) => sent.push(value), () => "123e4567-e89b-42d3-a456-426614174000");
+  protocol.open({ tabAudioState: "captured", microphoneState: "pending" });
+  protocol.sendMediaState({ tabAudioState: "captured", microphoneState: "ready" });
+  protocol.sendTabActivity(true);
+  assert.deepEqual(
+    sent.map((value) => typeof value === "string" ? JSON.parse(value) : value),
+    [
+      { type: "session_hello", protocolVersion: 2, tabAudioState: "captured", microphoneState: "pending" },
+      { type: "media_state", tabAudioState: "captured", microphoneState: "ready" },
+      { type: "tab_audio_activity", active: true },
+    ],
+  );
+});
+
+test("brackets only one microphone turn and retains sequence after a failed send", () => {
+  const sent: (string | ArrayBuffer)[] = [];
+  let failNext = true;
+  const protocol = createMediaSocketProtocol((value) => {
+    if (value instanceof ArrayBuffer && failNext) {
+      failNext = false;
+      throw new Error("socket closed");
+    }
+    sent.push(value);
+  }, () => "123e4567-e89b-42d3-a456-426614174000");
+  protocol.open({ tabAudioState: "captured", microphoneState: "ready" });
+  const turnId = protocol.startUserActivity();
+  assert.equal(turnId, "123e4567-e89b-42d3-a456-426614174000");
+  assert.throws(() => protocol.sendMicrophone(new Int16Array([1, 2]), 800), /socket closed/);
+  protocol.sendMicrophone(new Int16Array([3, 4]), 840);
+  protocol.endUserActivity();
+  assert.equal(protocol.sendMicrophone(new Int16Array([5, 6]), 880), false);
+  const start = JSON.parse(sent[1] as string);
+  const packet = sent[2] as ArrayBuffer;
+  const end = JSON.parse(sent[3] as string);
+  assert.deepEqual(start, { type: "user_activity_start", turnId });
+  assert.equal(new DataView(packet).getUint32(2, true), 0);
+  assert.equal(new DataView(packet).getUint32(6, true), 840);
+  assert.deepEqual(end, { type: "user_activity_end", turnId });
+});
+
+test("sends tab activity and track-ended discontinuity as distinct commands", () => {
+  const sent: string[] = [];
+  const protocol = createMediaSocketProtocol((value) => sent.push(value as string), crypto.randomUUID);
+  protocol.open({ tabAudioState: "captured", microphoneState: "ready" });
+  protocol.sendTabActivity(false);
+  protocol.sendTabDiscontinuity(1_234);
+  assert.deepEqual(sent.slice(1).map(JSON.parse), [
+    { type: "tab_audio_activity", active: false },
+    { type: "tab_audio_discontinuity", timestampMs: 1_234, reason: "track_ended" },
+  ]);
 });

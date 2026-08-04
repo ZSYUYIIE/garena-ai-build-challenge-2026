@@ -21,8 +21,11 @@ import {
   createSessionGenerationGuard,
   shouldSyncIdleGuidance,
 } from "./sessionLifecycle";
-import { encodeAudioPacket } from "./audioPacket";
-import { RealtimeMediaAudio, type RealtimeMediaState } from "./mediaAudio";
+import {
+  createMediaSocketProtocol,
+  RealtimeMediaAudio,
+  type RealtimeMediaState,
+} from "./mediaAudio";
 import { useCaptureTarget } from "./useCaptureTarget";
 import type {
   RealtimeChatMessage,
@@ -180,13 +183,6 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       const sampleRate = parsePcmRate(mimeType) ?? 24_000;
       const pcm = bytesToInt16(bytes);
       if (!pcm.length) return;
-
-      mediaAudioRef.current?.pushModelReference({
-        source: "model",
-        pcm,
-        sampleRate,
-        firstSampleExtensionSessionMs: Math.round(performance.now()),
-      });
 
       const buffer = audioContext.createBuffer(1, pcm.length, sampleRate);
       const channel = buffer.getChannelData(0);
@@ -495,35 +491,61 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       tabAudioState: "absent",
       microphoneState: "pending",
     };
+    let controller: RealtimeMediaAudio | null = null;
+    let sessionWebsocket: WebSocket | null = null;
+    const protocol = createMediaSocketProtocol(
+      (value) => {
+        if (
+          !controller ||
+          mediaAudioRef.current !== controller ||
+          !sessionGenerationRef.current.isCurrent(generation) ||
+          websocketRef.current !== sessionWebsocket ||
+          sessionWebsocket?.readyState !== WebSocket.OPEN
+        ) {
+          throw new Error("Session media transport is unavailable.");
+        }
+        sessionWebsocket.send(value);
+      },
+      () => crypto.randomUUID(),
+    );
+    const isCurrentController = () =>
+      controller !== null &&
+      mediaAudioRef.current === controller &&
+      sessionGenerationRef.current.isCurrent(generation);
+    const safelySend = <T,>(send: () => T): T | false => {
+      try {
+        return send();
+      } catch {
+        return false;
+      }
+    };
     const sendMediaState = () => {
-      const websocket = websocketRef.current;
-      if (websocket?.readyState !== WebSocket.OPEN) return;
-      websocket.send(JSON.stringify({ type: "media_state", ...mediaState }));
+      if (!isCurrentController()) return;
+      safelySend(() => protocol.sendMediaState(mediaState));
     };
     const mediaAudio = new RealtimeMediaAudio({
       onStateChange: (nextState) => {
+        if (!isCurrentController()) return;
         mediaState = nextState;
         sendMediaState();
       },
     });
+    controller = mediaAudio;
     mediaAudioRef.current = mediaAudio;
     const preparedAudio = mediaAudio.prepareForUserGesture();
     audioContextRef.current = preparedAudio.audioContext;
     nextPlaybackAtRef.current = preparedAudio.audioContext.currentTime;
-    let tabSequence = 0;
-    let microphoneSequence = 0;
+    mediaAudio.setUserActivityEnabled(false);
     const microphonePromise = mediaAudio.startMicrophone({
-      onMicPacket: (pcm) => {
-        const websocket = websocketRef.current;
-        if (websocket?.readyState !== WebSocket.OPEN) return;
-        websocket.send(
-          encodeAudioPacket("microphone", microphoneSequence++, Math.round(performance.now()), pcm),
-        );
+      onMicPacket: (pcm, firstSampleTimestampMs) => {
+        safelySend(() => protocol.sendMicrophone(pcm, firstSampleTimestampMs));
       },
       onUserActivityStart: () => {
-        mediaAudio.setTabGain(0.3, 100);
+        if (safelySend(() => protocol.startUserActivity())) mediaAudio.setTabGain(0.3, 100);
       },
-      onUserActivityEnd: () => undefined,
+      onUserActivityEnd: () => {
+        safelySend(() => protocol.endUserActivity());
+      },
       tabReference: null,
       modelReference: null,
     });
@@ -557,15 +579,15 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       mediaStreamRef.current = mediaStream;
       const tabAudioState = await mediaAudio.startTab({
         tabStream: mediaStream,
-        onTabPacket: (pcm) => {
-          const websocket = websocketRef.current;
-          if (websocket?.readyState !== WebSocket.OPEN) return;
-          websocket.send(
-            encodeAudioPacket("tab", tabSequence++, Math.round(performance.now()), pcm),
-          );
+        onTabPacket: (pcm, firstSampleTimestampMs) => {
+          safelySend(() => protocol.sendTab(pcm, firstSampleTimestampMs));
         },
-        onTabActivity: () => undefined,
-        onTabDiscontinuity: () => sendMediaState(),
+        onTabActivity: (active) => {
+          safelySend(() => protocol.sendTabActivity(active));
+        },
+        onTabDiscontinuity: (timestampMs) => {
+          safelySend(() => protocol.sendTabDiscontinuity(timestampMs));
+        },
         onVideoEnded: () => {
           if (sessionGenerationRef.current.isCurrent(generation)) stopRef.current();
         },
@@ -599,6 +621,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       const websocket = new WebSocket(
         import.meta.env.VITE_STREAMSENSE_WS_URL || DEFAULT_WEBSOCKET_URL,
       );
+      sessionWebsocket = websocket;
       websocketRef.current = websocket;
       startingRef.current = false;
       setStatus("connecting");
@@ -609,8 +632,9 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           websocket.close(1000, "Stale extension session");
           return;
         }
+        protocol.open(mediaState);
+        mediaAudio.setUserActivityEnabled(true);
         websocket.send(JSON.stringify({ type: "capture_source", source: "screen" }));
-        websocket.send(JSON.stringify({ type: "session_hello", ...mediaState }));
         websocket.send(
           JSON.stringify({
             type: "session_config",
@@ -620,7 +644,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         startFrameLoop(generation);
       });
       void microphonePromise.then(() => {
-        if (sessionGenerationRef.current.isCurrent(generation)) sendMediaState();
+        if (isCurrentController()) sendMediaState();
       });
       websocket.addEventListener("message", (event) => {
         if (!sessionGenerationRef.current.isCurrent(generation)) return;
@@ -641,6 +665,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         setStatus("error");
       });
       websocket.addEventListener("close", () => {
+        protocol.close();
         if (!sessionGenerationRef.current.isCurrent(generation)) return;
         releaseResources(false);
         setStatus("error");

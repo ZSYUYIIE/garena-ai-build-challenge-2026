@@ -1,4 +1,5 @@
 import { PcmChunker, StreamingPcm16Resampler } from "./audioPcm.ts";
+import { encodeAudioPacket } from "./audioPacket.ts";
 import {
   EchoAwareUserVadGate,
   TabActivityGate,
@@ -15,14 +16,14 @@ export type RealtimeMediaState = {
 
 type TabOptions = {
   tabStream: MediaStream;
-  onTabPacket: (packet: Int16Array) => void;
+  onTabPacket: (packet: Int16Array, firstSampleTimestampMs: number) => void;
   onTabActivity: (active: boolean) => void;
-  onTabDiscontinuity: () => void;
+  onTabDiscontinuity: (timestampMs: number) => void;
   onVideoEnded?: () => void;
 };
 
 type MicrophoneOptions = {
-  onMicPacket: (packet: Int16Array) => void;
+  onMicPacket: (packet: Int16Array, firstSampleTimestampMs: number) => void;
   onUserActivityStart: () => void;
   onUserActivityEnd: () => void;
   tabReference: PlaybackReference | null;
@@ -45,11 +46,88 @@ type Dependencies = {
 
 type Branch = {
   nodes: GraphNode[];
+  captureNodes?: GraphNode[];
   worklet?: WorkletNode;
 };
 
 const WORKLET_NAME = "streamsense-pcm-capture";
 const STARTUP_AUDIO_TIMEOUT_MS = 1_000;
+const PCM_SAMPLE_RATE = 16_000;
+
+type SocketSender = (value: string | ArrayBuffer) => void;
+
+export function createMediaSocketProtocol(
+  send: SocketSender,
+  createTurnId: () => string,
+) {
+  let opened = false;
+  let tabSequence = 0;
+  let microphoneSequence = 0;
+  let activeTurnId: string | null = null;
+
+  const sendJson = (value: object) => send(JSON.stringify(value));
+  const sendPacket = (
+    source: "tab" | "microphone",
+    pcm: Int16Array,
+    timestampMs: number,
+  ) => {
+    const sequence = source === "tab" ? tabSequence : microphoneSequence;
+    const packet = encodeAudioPacket(source === "tab" ? "tab" : "microphone", sequence, timestampMs, pcm);
+    send(packet);
+    if (source === "tab") tabSequence = (sequence + 1) >>> 0;
+    else microphoneSequence = (sequence + 1) >>> 0;
+    return true;
+  };
+
+  return {
+    open(state: RealtimeMediaState) {
+      if (opened) return;
+      sendJson({ type: "session_hello", protocolVersion: 2, ...state });
+      opened = true;
+    },
+    close() {
+      opened = false;
+      activeTurnId = null;
+    },
+    sendMediaState(state: RealtimeMediaState) {
+      if (!opened) return false;
+      sendJson({ type: "media_state", ...state });
+      return true;
+    },
+    sendTabActivity(active: boolean) {
+      if (!opened) return false;
+      sendJson({ type: "tab_audio_activity", active });
+      return true;
+    },
+    sendTabDiscontinuity(timestampMs: number) {
+      if (!opened) return false;
+      sendJson({ type: "tab_audio_discontinuity", timestampMs, reason: "track_ended" });
+      return true;
+    },
+    sendTab(pcm: Int16Array, timestampMs: number) {
+      if (!opened) return false;
+      return sendPacket("tab", pcm, timestampMs);
+    },
+    startUserActivity() {
+      if (!opened || activeTurnId) return null;
+      const turnId = createTurnId();
+      sendJson({ type: "user_activity_start", turnId });
+      activeTurnId = turnId;
+      return turnId;
+    },
+    sendMicrophone(pcm: Int16Array, timestampMs: number) {
+      if (!opened || !activeTurnId) return false;
+      return sendPacket("microphone", pcm, timestampMs);
+    },
+    endUserActivity() {
+      if (!opened || !activeTurnId) return false;
+      const turnId = activeTurnId;
+      sendJson({ type: "user_activity_end", turnId });
+      activeTurnId = null;
+      return true;
+    },
+  };
+}
 
 export class RealtimeMediaAudio {
   private readonly dependencies: Required<Dependencies>;
@@ -72,6 +150,8 @@ export class RealtimeMediaAudio {
   private micResampler: StreamingPcm16Resampler | null = null;
   private tabChunker: PcmChunker | null = null;
   private micChunker: PcmChunker | null = null;
+  private tabNextPacketTimestampMs: number | null = null;
+  private micNextPacketTimestampMs: number | null = null;
   private readonly tabActivity = new TabActivityGate();
   private readonly userVad = new EchoAwareUserVadGate();
 
@@ -129,20 +209,31 @@ export class RealtimeMediaAudio {
       return "degraded";
     }
 
+    let source: GraphNode;
+    let gain: GraphNode & { gain: AudioParam };
+    try {
+      source = context.createMediaStreamSource(options.tabStream) as unknown as GraphNode;
+      gain = context.createGain() as unknown as GraphNode & { gain: AudioParam };
+      gain.gain.setValueAtTime(1, context.currentTime);
+      source.connect(gain as unknown as AudioNode);
+      gain.connect(context.destination);
+      this.tabBranch = { nodes: [source, gain], captureNodes: [] };
+    } catch {
+      this.stopTracks(options.tabStream);
+      throw new Error("Local audio could not start.");
+    }
+
     try {
       await context.audioWorklet.addModule(this.dependencies.getWorkletUrl());
-      const source = context.createMediaStreamSource(options.tabStream) as unknown as GraphNode;
-      const gain = context.createGain() as unknown as GraphNode & { gain: AudioParam };
-      gain.gain.setValueAtTime(1, context.currentTime);
-      this.tabBranch = { nodes: [source, gain] };
+      if (this.stopped) return "degraded";
       const worklet = this.dependencies.createWorkletNode(context) as unknown as WorkletNode;
       this.tabBranch.nodes.push(worklet);
+      this.tabBranch.captureNodes?.push(worklet);
       this.tabBranch.worklet = worklet;
       const monitor = context.createGain() as unknown as GraphNode & { gain: AudioParam };
       monitor.gain.setValueAtTime(0, context.currentTime);
       this.tabBranch.nodes.push(monitor);
-      source.connect(gain as unknown as AudioNode);
-      gain.connect(context.destination);
+      this.tabBranch.captureNodes?.push(monitor);
       source.connect(worklet as unknown as AudioNode);
       worklet.connect(monitor as unknown as AudioNode);
       monitor.connect(context.destination);
@@ -160,8 +251,8 @@ export class RealtimeMediaAudio {
       this.setState({ tabAudioState: "captured" });
       return "captured";
     } catch {
-      this.closeBranch(this.tabBranch);
-      this.tabBranch = null;
+      if (this.stopped) return "degraded";
+      this.closeCaptureNodes(this.tabBranch);
       this.setState({ tabAudioState: "degraded" });
       return "degraded";
     }
@@ -196,6 +287,7 @@ export class RealtimeMediaAudio {
     this.userActivityEnabled = enabled;
     this.micActivityOpen = false;
     this.micChunker = this.audioContext ? new PcmChunker(640) : null;
+    this.micNextPacketTimestampMs = null;
     this.userVad.reset();
   }
 
@@ -205,10 +297,6 @@ export class RealtimeMediaAudio {
     if (!node?.gain || !context) return;
     node.gain.setValueAtTime(node.gain.value, context.currentTime);
     node.gain.linearRampToValueAtTime(gain, context.currentTime + Math.max(0, fadeMs) / 1_000);
-  }
-
-  pushModelReference(reference: PlaybackReference): void {
-    this.userVad.pushReference({ ...reference, source: "model" });
   }
 
   async stop(): Promise<void> {
@@ -244,6 +332,10 @@ export class RealtimeMediaAudio {
         return "degraded";
       }
       await context.audioWorklet.addModule(this.dependencies.getWorkletUrl());
+      if (this.stopped) {
+        this.stopTracks(stream);
+        return "degraded";
+      }
       const source = context.createMediaStreamSource(stream) as unknown as GraphNode;
       this.micBranch = { nodes: [source] };
       const worklet = this.dependencies.createWorkletNode(context) as unknown as WorkletNode;
@@ -265,6 +357,7 @@ export class RealtimeMediaAudio {
       this.stopTracks(stream);
       this.closeBranch(this.micBranch);
       this.micBranch = null;
+      if (this.stopped) return "degraded";
       this.setState({ microphoneState: "degraded" });
       return "degraded";
     }
@@ -275,12 +368,15 @@ export class RealtimeMediaAudio {
     const chunker = this.tabChunker;
     const options = this.tabOptions;
     if (!resampler || !chunker || !options || this.stopped || !(samples instanceof Float32Array)) return;
+    if (this.tabNextPacketTimestampMs === null) {
+      this.tabNextPacketTimestampMs = Math.max(0, Math.round(this.dependencies.now()));
+    }
     for (const packet of chunker.push(resampler.push(samples))) {
-      const timestampMs = Math.max(0, Math.round(this.dependencies.now()));
+      const timestampMs = this.takeTabPacketTimestamp(packet.length);
       const activity = this.tabActivity.push(packet, timestampMs);
       if (activity.changed) options.onTabActivity(activity.active);
       this.userVad.pushReference({ source: "tab", pcm: packet, sampleRate: 16_000, firstSampleExtensionSessionMs: timestampMs });
-      options.onTabPacket(packet);
+      options.onTabPacket(packet, timestampMs);
     }
   }
 
@@ -293,13 +389,17 @@ export class RealtimeMediaAudio {
     for (const event of this.userVad.pushMicrophone(resampler.push(samples), timestampMs)) {
       if (event.type === "speech_start") {
         this.micActivityOpen = true;
+        this.micNextPacketTimestampMs = Math.max(
+          0,
+          event.timestampMs - samplesToMilliseconds(event.preRoll.reduce((total, frame) => total + frame.length, 0)),
+        );
         options.onUserActivityStart();
         for (const preRoll of event.preRoll) this.emitMicChunks(chunker.push(preRoll));
       } else if (event.type === "speech_audio" && this.micActivityOpen) {
         this.emitMicChunks(chunker.push(event.pcm));
       } else if (event.type === "speech_end" && this.micActivityOpen) {
         const remaining = chunker.flush();
-        if (remaining) options.onMicPacket(remaining);
+        if (remaining) options.onMicPacket(remaining, this.takeMicPacketTimestamp(remaining.length));
         this.micActivityOpen = false;
         options.onUserActivityEnd();
       }
@@ -307,7 +407,9 @@ export class RealtimeMediaAudio {
   }
 
   private emitMicChunks(chunks: Int16Array[]): void {
-    for (const chunk of chunks) this.micOptions?.onMicPacket(chunk);
+    for (const chunk of chunks) {
+      this.micOptions?.onMicPacket(chunk, this.takeMicPacketTimestamp(chunk.length));
+    }
   }
 
   private degradeTab(): void {
@@ -315,7 +417,7 @@ export class RealtimeMediaAudio {
     this.closeBranch(this.tabBranch);
     this.tabBranch = null;
     this.setState({ tabAudioState: "degraded" });
-    this.tabOptions?.onTabDiscontinuity();
+    this.tabOptions?.onTabDiscontinuity(Math.max(0, Math.round(this.dependencies.now())));
   }
 
   private degradeMicrophone(): void {
@@ -324,6 +426,7 @@ export class RealtimeMediaAudio {
     this.micBranch = null;
     this.userVad.reset();
     this.micActivityOpen = false;
+    this.micNextPacketTimestampMs = null;
     this.setState({ microphoneState: "degraded" });
   }
 
@@ -341,6 +444,32 @@ export class RealtimeMediaAudio {
     }
   }
 
+  private closeCaptureNodes(branch: Branch | null): void {
+    if (!branch) return;
+    for (const node of branch.captureNodes ?? []) {
+      if (!this.disconnectedNodes.has(node)) {
+        this.disconnectedNodes.add(node);
+        node.disconnect();
+      }
+    }
+    if (branch.worklet && !this.closedPorts.has(branch.worklet)) {
+      this.closedPorts.add(branch.worklet);
+      branch.worklet.port.close?.();
+    }
+  }
+
+  private takeTabPacketTimestamp(sampleCount: number): number {
+    const timestampMs = this.tabNextPacketTimestampMs ?? Math.max(0, Math.round(this.dependencies.now()));
+    this.tabNextPacketTimestampMs = timestampMs + samplesToMilliseconds(sampleCount);
+    return Math.round(timestampMs);
+  }
+
+  private takeMicPacketTimestamp(sampleCount: number): number {
+    const timestampMs = this.micNextPacketTimestampMs ?? Math.max(0, Math.round(this.dependencies.now()));
+    this.micNextPacketTimestampMs = timestampMs + samplesToMilliseconds(sampleCount);
+    return Math.round(timestampMs);
+  }
+
   private stopTracks(stream: MediaStream | null): void {
     for (const track of stream?.getTracks() ?? []) {
       if (this.stoppedTracks.has(track)) continue;
@@ -350,6 +479,7 @@ export class RealtimeMediaAudio {
   }
 
   private setState(next: Partial<RealtimeMediaState>): void {
+    if (this.stopped) return;
     this.state = { ...this.state, ...next };
     this.publishState();
   }
@@ -357,6 +487,10 @@ export class RealtimeMediaAudio {
   private publishState(): void {
     this.dependencies.onStateChange({ ...this.state });
   }
+}
+
+function samplesToMilliseconds(sampleCount: number): number {
+  return (sampleCount * 1_000) / PCM_SAMPLE_RATE;
 }
 
 function isPermissionDenied(cause: unknown): boolean {
