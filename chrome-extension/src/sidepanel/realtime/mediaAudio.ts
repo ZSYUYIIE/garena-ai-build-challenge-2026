@@ -136,6 +136,13 @@ export function createMediaSocketProtocol(
       activeTurnId = null;
       return true;
     },
+    cancelUserActivity() {
+      if (!opened || !activeTurnId) return null;
+      const turnId = activeTurnId;
+      sendJson({ type: "user_activity_end", turnId });
+      activeTurnId = null;
+      return turnId;
+    },
   };
 }
 
@@ -162,6 +169,8 @@ export class RealtimeMediaAudio {
   private micChunker: PcmChunker | null = null;
   private tabNextPacketTimestampMs: number | null = null;
   private micNextPacketTimestampMs: number | null = null;
+  private tabVideoTrack: MediaStreamTrack | null = null;
+  private tabVideoEndedHandler: (() => void) | null = null;
   private readonly tabActivity = new TabActivityGate();
   private readonly userVad = new EchoAwareUserVadGate();
 
@@ -201,6 +210,7 @@ export class RealtimeMediaAudio {
   async startTab(options: TabOptions): Promise<TabAudioState> {
     this.tabOptions = options;
     this.tabStream = options.tabStream;
+    this.installVideoEndedListener(options);
     const audioTrack = options.tabStream.getAudioTracks()[0];
     if (!audioTrack) {
       this.setState({ tabAudioState: "absent" });
@@ -251,13 +261,6 @@ export class RealtimeMediaAudio {
       this.tabChunker = new PcmChunker(1_600);
       worklet.port.onmessage = (event) => this.handleTabSamples(event.data);
       audioTrack.addEventListener("ended", () => this.degradeTab(), { once: true });
-      options.tabStream.getVideoTracks()[0]?.addEventListener(
-        "ended",
-        () => {
-          if (!this.stopped) options.onVideoEnded?.();
-        },
-        { once: true },
-      );
       this.setState({ tabAudioState: "captured" });
       return "captured";
     } catch {
@@ -328,6 +331,7 @@ export class RealtimeMediaAudio {
     this.closeBranch(this.micBranch);
     this.stopTracks(this.tabStream);
     this.stopTracks(this.micStream);
+    this.removeVideoEndedListener();
     this.tabBranch = null;
     this.micBranch = null;
     this.tabStream = null;
@@ -464,6 +468,26 @@ export class RealtimeMediaAudio {
       this.closedPorts.add(branch.worklet);
       branch.worklet.port.close?.();
     }
+  }
+
+  private installVideoEndedListener(options: TabOptions): void {
+    this.removeVideoEndedListener();
+    const track = options.tabStream.getVideoTracks()[0];
+    if (!track) return;
+    const handler = () => {
+      if (!this.stopped) options.onVideoEnded?.();
+    };
+    this.tabVideoTrack = track;
+    this.tabVideoEndedHandler = handler;
+    track.addEventListener("ended", handler, { once: true });
+  }
+
+  private removeVideoEndedListener(): void {
+    if (this.tabVideoTrack && this.tabVideoEndedHandler) {
+      this.tabVideoTrack.removeEventListener("ended", this.tabVideoEndedHandler);
+    }
+    this.tabVideoTrack = null;
+    this.tabVideoEndedHandler = null;
   }
 
   private closeCaptureNodes(branch: Branch | null): void {

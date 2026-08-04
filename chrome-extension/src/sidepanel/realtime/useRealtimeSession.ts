@@ -251,17 +251,31 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     const contextTimeToExtensionSessionMs = createContextTimeToExtensionSessionMs(audioClockOrigin);
     publishVoiceStatus({ sessionActive: true, microphoneState: "pending" });
 
-    const closeUnsafeMicrophoneTurn = (turnId: string, reason: string) => {
+    const terminateMicrophoneTurn = (turnId: string, reason: string, failCoordinator: boolean) => {
+      const turn = voiceTurnRef.current;
+      if (!turn || turn.turnId !== turnId) return;
       const websocket = websocketRef.current;
-      speechCoordinatorRef.current?.failTurn(turnId, reason);
-      mediaAudio.setUserActivityEnabled(false);
+      turn.packets = [];
+      turn.bytes = 0;
       voiceTurnRef.current = null;
-      publishVoiceStatus({ userSpeaking: false, liveDegraded: true });
+      nextVoiceTurnIdRef.current = null;
+      mediaAudio.setUserActivityEnabled(false);
+      if (failCoordinator) speechCoordinatorRef.current?.failTurn(turnId, reason);
       if (websocket?.readyState === WebSocket.OPEN && websocket.bufferedAmount < 32 * 1024) {
-        safelySend(() => protocol.endUserActivity());
+        safelySend(() => protocol.cancelUserActivity());
       } else {
         websocket?.close(1008, "Microphone audio could not be delivered safely");
       }
+      mediaAudio.setUserActivityEnabled(
+        voiceStateRef.current.helloAccepted
+          && voiceStateRef.current.liveReady
+          && !voiceStateRef.current.liveDegraded
+          && mediaState.microphoneState === "ready",
+      );
+      publishVoiceStatus({ userSpeaking: false });
+    };
+    const closeUnsafeMicrophoneTurn = (turnId: string, reason: string) => {
+      terminateMicrophoneTurn(turnId, reason, true);
     };
     const sendMicrophonePacket = (turn: VoiceTurn, packet: PendingPcm): boolean => {
       const websocket = websocketRef.current;
@@ -290,8 +304,11 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     const coordinator = new SpeechCoordinator({
       playback,
       setTabGain: (gain, fadeMs) => mediaAudio.setTabGain(gain, fadeMs),
-      onFailTurn: (_turnId, reason) => {
-        callbackGate.run(() => setError(reason));
+      onFailTurn: (turnId, reason) => {
+        callbackGate.run(() => {
+          terminateMicrophoneTurn(turnId, reason, false);
+          setError(reason);
+        });
       },
       onPlaybackIdle: (turnId) => {
         callbackGate.run(() => {

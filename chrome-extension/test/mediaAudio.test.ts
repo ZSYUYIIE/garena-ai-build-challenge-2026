@@ -55,6 +55,10 @@ class FakeTrack {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
 
+  removeEventListener(type: string, listener: Listener) {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((candidate) => candidate !== listener));
+  }
+
   stop() {
     this.stopCalls += 1;
   }
@@ -336,6 +340,30 @@ test("distinguishes initially absent tab audio from a failed present worklet", a
   assert.equal(await failed.audio.startTab(failed.tabOptions), "degraded");
 });
 
+test("observes captured video ending when the tab has no audio", async () => {
+  const media = fixture({ tabAudio: false });
+  media.audio.prepareForUserGesture();
+  assert.equal(await media.audio.startTab(media.tabOptions), "absent");
+  await media.audio.waitUntilReady();
+  media.tabVideo.end();
+  assert.equal(media.videoEnded(), true);
+  await media.audio.stop();
+  media.tabVideo.end();
+  assert.equal(media.videoEnded(), true);
+});
+
+test("observes captured video ending after tab worklet setup degrades", async () => {
+  const media = fixture();
+  media.context.failModule = true;
+  media.audio.prepareForUserGesture();
+  assert.equal(await media.audio.startTab(media.tabOptions), "degraded");
+  media.tabVideo.end();
+  assert.equal(media.videoEnded(), true);
+  await media.audio.stop();
+  media.tabVideo.end();
+  assert.equal(media.videoEnded(), true);
+});
+
 test("keeps tab playback audible when only its capture worklet fails", async () => {
   const media = fixture();
   media.context.failModule = true;
@@ -560,6 +588,17 @@ test("brackets only one microphone turn and retains sequence after a failed send
   assert.equal(new DataView(packet).getUint32(2, true), 0);
   assert.equal(new DataView(packet).getUint32(6, true), 840);
   assert.deepEqual(end, { type: "user_activity_end", turnId });
+});
+
+test("terminally ends one microphone activity and permits a later fresh activity", () => {
+  const sent: (string | ArrayBuffer)[] = [];
+  const protocol = createMediaSocketProtocol((value) => sent.push(value), () => "123e4567-e89b-42d3-a456-426614174000");
+  protocol.open({ tabAudioState: "captured", microphoneState: "ready" });
+  assert.equal(protocol.startUserActivity(), "123e4567-e89b-42d3-a456-426614174000");
+  assert.equal(protocol.cancelUserActivity(), "123e4567-e89b-42d3-a456-426614174000");
+  assert.equal(protocol.sendMicrophone(new Int16Array([1, 2]), 0), false);
+  assert.equal(protocol.startUserActivity(), "123e4567-e89b-42d3-a456-426614174000");
+  assert.equal(JSON.parse(sent.filter((value): value is string => typeof value === "string").at(-2)!).type, "user_activity_end");
 });
 
 test("sends tab activity and track-ended discontinuity as distinct commands", () => {

@@ -100,6 +100,51 @@ test("routes admitted microphone and captured-tab PCM to their separate provider
   assert.deepEqual(transcriber.microphoneWrites, []);
 });
 
+test("runs atomic narration from an admitted browser video frame without a direct request", async (t) => {
+  let analyses = 0;
+  const fixture = createFixture({
+    analyzeFrame: async () => {
+      analyses += 1;
+      return approvedAnalysis();
+    },
+    liveSessionFactory: () => new FakeLiveSession(),
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "video_frame", timestampSeconds: 1, mimeType: "image/jpeg", data: Buffer.from("frame").toString("base64"),
+  })), false);
+  await flushAsyncWork();
+
+  assert.equal(analyses, 1);
+  assert.equal(fixture.browser.messages.some((message) => message.type === "event"), true);
+});
+
+test("keeps ready captured-tab narration eligibility through a microphone-only media update", async (t) => {
+  let now = 0;
+  const live = new FakeLiveSession();
+  const fixture = createFixture({
+    now: () => now,
+    liveSessionFactory: () => live,
+    transcriberFactory: () => new FakeTranscriber(),
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "captured");
+  await flushAsyncWork();
+
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "media_state", tabAudioState: "captured", microphoneState: "ready",
+  })), false);
+  now = 750;
+  fixture.session.handleNarrationCandidate({ description: "A score changed.", semanticKey: "score:1", importance: 1, createdAtMs: 0 });
+
+  assert.equal(live.narrations.length, 1);
+});
+
 test("retains ordinary STT backpressure through drain without a destructive discontinuity", async (t) => {
   DrainSpeechClient.instances = [];
   let transcriber;

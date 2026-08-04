@@ -142,7 +142,7 @@ export class ClientSession {
         this.narrationLevel = message.narrationLevel;
         return;
       case "video_frame":
-        this.sendVideo(Buffer.from(message.data, "base64"), message.mimeType, message.timestampSeconds);
+        this.sendVideo(Buffer.from(message.data, "base64"), message.mimeType, message.timestampSeconds, { scheduleNarration: true });
         return;
       case "typed_question":
         return this.beginAnswerTurn({ turnId: message.turnId, source: "typed", text: message.text });
@@ -319,9 +319,11 @@ export class ClientSession {
     const previousTabAudioState = this.tabAudioState;
     this.tabAudioState = message.tabAudioState;
     this.microphoneState = message.microphoneState;
-    this.applySpeechActions(this.speechPolicy.setTabAudioState?.(
-      message.tabAudioState === "captured" ? "degraded" : message.tabAudioState,
-    ) ?? []);
+    if (message.tabAudioState !== "captured" || previousTabAudioState !== "captured") {
+      this.applySpeechActions(this.speechPolicy.setTabAudioState?.(
+        message.tabAudioState === "captured" ? "degraded" : message.tabAudioState,
+      ) ?? []);
+    }
     if (message.tabAudioState !== "captured") {
       const oldTranscriber = this.transcriber;
       this.transcriber = null;
@@ -595,7 +597,7 @@ export class ClientSession {
     this.sendBrowser({ type: "telemetry", text: `event recorded: ${publicEvent.eventType} at ${publicEvent.timestamp}` });
   }
 
-  sendVideo(jpegBytes, mimeType, timestampSeconds = this.elapsedTimestampSeconds, { force = false } = {}) {
+  sendVideo(jpegBytes, mimeType, timestampSeconds = this.elapsedTimestampSeconds, { force = false, scheduleNarration = false } = {}) {
     if (!jpegBytes.length || mimeType !== "image/jpeg") return;
     const hash = createHash("sha256").update(jpegBytes).digest("hex");
     if (!force && this.latestFrame?.hash === hash) return;
@@ -605,6 +607,7 @@ export class ClientSession {
     this.firstVideoFrame = true;
     this.latestFrame = { data: Buffer.from(jpegBytes).toString("base64"), hash, mimeType, acceptedAtMs: this.lastFrameAcceptedAtMs, frameSequence: this.videoFrames };
     this.enqueueLiveFrame(this.latestFrame);
+    if (scheduleNarration) this.requestNarration(this.videoFrames === 1);
     if (this.videoFrames === 1 || this.videoFrames % 10 === 0) this.sendBrowser({ type: "telemetry", text: `video frames accepted: ${this.videoFrames} at ${formatTimestamp(this.latestTimestampSeconds)}` });
   }
 
