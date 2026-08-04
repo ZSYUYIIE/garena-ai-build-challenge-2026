@@ -8,6 +8,9 @@ import {
 } from "../../ai-voice-realtime/src/protocol/browserMessages.js";
 import {
   backpressureAction,
+  canAcceptTurnRoleUpdate,
+  createTurnRoleState,
+  finishTurnRole,
   parseServerMessage,
   SUPPORTED_SERVER_MESSAGE_TYPES,
   updateTurnChatMessages,
@@ -131,6 +134,25 @@ test("upserts ordered transcript chunks into one turn-bound chat entry", () => {
     { id: `${turnId}:user`, role: "user", text: "what is visible" },
     { id: `${turnId}:assistant`, role: "assistant", text: "A map is visible." },
   ]);
+});
+
+test("keeps local typed text once while settling its echoed user role", () => {
+  const turnId = "123e4567-e89b-42d3-a456-426614174000";
+  const messages = updateTurnChatMessages([], {
+    turnId,
+    role: "user",
+    text: "What changed?",
+    finished: true,
+  });
+  const active = createTurnRoleState(turnId, { userFinished: true });
+
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "user", active, null), false);
+  assert.deepEqual(messages, [
+    { id: `${turnId}:user`, role: "user", text: "What changed?" },
+  ]);
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "assistant", active, null), true);
+  const assistantFinished = finishTurnRole(active, "assistant");
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "assistant", assistantFinished, null), false);
 });
 
 test("strictly parses protocol-v2 turn-bound server messages", () => {

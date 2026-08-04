@@ -25,15 +25,20 @@ import { SpeechCoordinator } from "./speechCoordinator";
 import { useCaptureTarget } from "./useCaptureTarget";
 import {
   backpressureAction,
+  canAcceptTurnRoleUpdate,
+  createTurnRoleState,
   descriptionAfterTurnComplete,
+  finishTurnRole,
   parseServerMessage,
-  shouldAcceptTurnUpdate,
+  settlingTurnAfterComplete,
+  speakingTurnAfterPlaybackIdle,
   updateTurnChatMessages,
   voiceStatusForState,
   type RealtimeChatMessage,
   type RealtimeStatus,
   type ServerMessage,
   type StreamEvent,
+  type TurnRoleState,
   type VoiceStatus,
   type VoiceStatusState,
 } from "./types";
@@ -96,8 +101,9 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
 
   const mediaAudioRef = useRef<RealtimeMediaAudio | null>(null);
   const speechCoordinatorRef = useRef<SpeechCoordinator | null>(null);
-  const activeTurnIdRef = useRef<string | null>(null);
-  const settlingTurnIdRef = useRef<string | null>(null);
+  const activeTurnRef = useRef<TurnRoleState | null>(null);
+  const settlingTurnRef = useRef<TurnRoleState | null>(null);
+  const speakingTurnIdRef = useRef<string | null>(null);
   const voiceTurnRef = useRef<VoiceTurn | null>(null);
   const nextVoiceTurnIdRef = useRef<string | null>(null);
   const tabDiscontinuityPendingRef = useRef(false);
@@ -127,8 +133,9 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     latestFrameRef.current = null;
     lastFrameSignatureRef.current = null;
     voiceTurnRef.current = null;
-    activeTurnIdRef.current = null;
-    settlingTurnIdRef.current = null;
+    activeTurnRef.current = null;
+    settlingTurnRef.current = null;
+    speakingTurnIdRef.current = null;
     if (settlingTurnTimerRef.current !== null) {
       window.clearTimeout(settlingTurnTimerRef.current);
       settlingTurnTimerRef.current = null;
@@ -277,7 +284,9 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         if (isCurrent()) setError(reason);
       },
       onPlaybackIdle: (turnId) => {
-        if (activeTurnIdRef.current === turnId || settlingTurnIdRef.current === turnId) {
+        const speakingTurnId = speakingTurnIdRef.current;
+        speakingTurnIdRef.current = speakingTurnAfterPlaybackIdle(speakingTurnId, turnId);
+        if (speakingTurnId !== speakingTurnIdRef.current) {
           publishVoiceStatus({ geminiSpeaking: false });
         }
       },
@@ -345,9 +354,14 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         nextVoiceTurnIdRef.current = turnId;
         const turn: VoiceTurn = { turnId, pending: true, ended: false, packets: [], bytes: 0 };
         voiceTurnRef.current = turn;
-        activeTurnIdRef.current = turnId;
-        settlingTurnIdRef.current = null;
+        activeTurnRef.current = createTurnRoleState(turnId);
+        settlingTurnRef.current = null;
+        if (settlingTurnTimerRef.current !== null) {
+          window.clearTimeout(settlingTurnTimerRef.current);
+          settlingTurnTimerRef.current = null;
+        }
         coordinator.userStarted(turnId);
+        speakingTurnIdRef.current = null;
         publishVoiceStatus({ userSpeaking: true, geminiSpeaking: false });
         void (async () => {
           await Promise.race([captureFrame({ force: true }), delay(FORCED_FRAME_DEADLINE_MS)]);
@@ -478,48 +492,70 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             }
             break;
           case "user_transcript":
-          case "answer_update":
-            if (message.mode === "answer" && shouldAcceptTurnUpdate(message.turnId, activeTurnIdRef.current, settlingTurnIdRef.current)) {
+          case "answer_update": {
+            const role = message.type === "user_transcript" ? "user" : "assistant";
+            if (message.mode === "answer" && canAcceptTurnRoleUpdate(
+              message.turnId,
+              role,
+              activeTurnRef.current,
+              settlingTurnRef.current,
+            )) {
               setMessages((current) => updateTurnChatMessages(current, {
                 turnId: message.turnId,
-                role: message.type === "user_transcript" ? "user" : "assistant",
+                role,
                 text: message.text,
                 finished: message.finished,
               }));
-            if (message.type === "answer_update") coordinator.answerProgress(message.turnId);
-              if (message.finished && settlingTurnIdRef.current === message.turnId) {
-                settlingTurnIdRef.current = null;
-                if (settlingTurnTimerRef.current !== null) {
-                  window.clearTimeout(settlingTurnTimerRef.current);
-                  settlingTurnTimerRef.current = null;
+              if (message.type === "answer_update") coordinator.answerProgress(message.turnId);
+              if (message.finished) {
+                if (activeTurnRef.current?.turnId === message.turnId) {
+                  activeTurnRef.current = finishTurnRole(activeTurnRef.current, role);
+                } else if (settlingTurnRef.current?.turnId === message.turnId) {
+                  const finishedTurn = finishTurnRole(settlingTurnRef.current, role);
+                  settlingTurnRef.current = settlingTurnAfterComplete(finishedTurn, message.turnId);
+                  if (settlingTurnRef.current === null && settlingTurnTimerRef.current !== null) {
+                    window.clearTimeout(settlingTurnTimerRef.current);
+                    settlingTurnTimerRef.current = null;
+                  }
                 }
               }
             }
             break;
+          }
           case "model_audio": {
             const sampleRate = parsePcmRate(message.mimeType);
             if (!sampleRate) { websocket.close(1002, "Invalid audio metadata"); return; }
             try {
               const accepted = coordinator.modelAudio({ turnId: message.turnId, mode: message.mode, pcm: base64ToArrayBuffer(message.data), sampleRate, mimeType: message.mimeType });
-              if (accepted) publishVoiceStatus({ geminiSpeaking: true });
+              if (accepted) {
+                speakingTurnIdRef.current = message.turnId;
+                publishVoiceStatus({ geminiSpeaking: true });
+              }
             } catch { websocket.close(1002, "Invalid audio payload"); }
             break;
           }
-          case "playback_clear":
+          case "playback_clear": {
             coordinator.clearPlayback(message.turnId);
-            publishVoiceStatus({ geminiSpeaking: false });
+            const speakingTurnId = speakingTurnIdRef.current;
+            speakingTurnIdRef.current = speakingTurnAfterPlaybackIdle(speakingTurnId, message.turnId);
+            if (speakingTurnId !== speakingTurnIdRef.current) {
+              publishVoiceStatus({ geminiSpeaking: false });
+            }
             if (message.mode === "narration") setDescription("");
             break;
+          }
           case "turn_complete":
             coordinator.turnComplete(message);
-            if (activeTurnIdRef.current === message.turnId) {
-              settlingTurnIdRef.current = message.turnId;
-              activeTurnIdRef.current = null;
+            if (activeTurnRef.current?.turnId === message.turnId) {
+              settlingTurnRef.current = settlingTurnAfterComplete(activeTurnRef.current, message.turnId);
+              activeTurnRef.current = null;
               if (settlingTurnTimerRef.current !== null) window.clearTimeout(settlingTurnTimerRef.current);
-              settlingTurnTimerRef.current = window.setTimeout(() => {
-                if (settlingTurnIdRef.current === message.turnId) settlingTurnIdRef.current = null;
-                settlingTurnTimerRef.current = null;
-              }, LATE_TRANSCRIPT_SETTLEMENT_MS);
+              settlingTurnTimerRef.current = settlingTurnRef.current === null
+                ? null
+                : window.setTimeout(() => {
+                  if (settlingTurnRef.current?.turnId === message.turnId) settlingTurnRef.current = null;
+                  settlingTurnTimerRef.current = null;
+                }, LATE_TRANSCRIPT_SETTLEMENT_MS);
             }
             setDescription((current) => descriptionAfterTurnComplete(
               current,
@@ -566,13 +602,15 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     const coordinator = speechCoordinatorRef.current;
     if (!websocket || websocket.readyState !== WebSocket.OPEN || !coordinator) return false;
     const turnId = crypto.randomUUID();
-    activeTurnIdRef.current = turnId;
-    settlingTurnIdRef.current = null;
+    activeTurnRef.current = createTurnRoleState(turnId, { userFinished: true });
+    settlingTurnRef.current = null;
     if (settlingTurnTimerRef.current !== null) {
       window.clearTimeout(settlingTurnTimerRef.current);
       settlingTurnTimerRef.current = null;
     }
     coordinator.typedQuestionStarted(turnId);
+    speakingTurnIdRef.current = null;
+    publishVoiceStatus({ geminiSpeaking: false });
     setMessages((current) => updateTurnChatMessages(current, { turnId, role: "user", text: question, finished: true }));
     void (async () => {
       await Promise.race([captureFrameRef.current?.({ force: true }) ?? Promise.resolve(), delay(FORCED_FRAME_DEADLINE_MS)]);
@@ -581,7 +619,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       }
     })();
     return true;
-  }, []);
+  }, [publishVoiceStatus]);
 
   useEffect(() => {
     if (!targetChangeRequiresReset(capturedTabIdRef.current, captureTarget.target)) return;

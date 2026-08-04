@@ -6,8 +6,14 @@ import {
   createSessionGenerationGuard,
   shouldSyncIdleGuidance,
 } from "../src/sidepanel/realtime/sessionLifecycle.ts";
-import { shouldAcceptTurnUpdate } from "../src/sidepanel/realtime/types.ts";
-import { descriptionAfterTurnComplete } from "../src/sidepanel/realtime/types.ts";
+import {
+  canAcceptTurnRoleUpdate,
+  createTurnRoleState,
+  descriptionAfterTurnComplete,
+  finishTurnRole,
+  settlingTurnAfterComplete,
+  speakingTurnAfterPlaybackIdle,
+} from "../src/sidepanel/realtime/types.ts";
 
 test("invalidates an older startup when a replacement session begins", () => {
   const sessions = createSessionGenerationGuard();
@@ -70,14 +76,63 @@ test("syncs idle guidance only when the guidance itself changes", () => {
   );
 });
 
-test("keeps one bounded completed turn available for late transcript settlement", () => {
+test("settles user then assistant independently after turn completion", () => {
+  const turnId = "123e4567-e89b-42d3-a456-426614174000";
+  const active = createTurnRoleState(turnId);
+  let settling = settlingTurnAfterComplete(active, turnId);
+
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "user", null, settling), true);
+  settling = finishTurnRole(settling!, "user");
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "user", null, settling), false);
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "assistant", null, settling), true);
+  settling = finishTurnRole(settling, "assistant");
+  assert.equal(settlingTurnAfterComplete(settling, turnId), null);
+});
+
+test("settles assistant then user independently after turn completion", () => {
+  const turnId = "123e4567-e89b-42d3-a456-426614174000";
+  let settling = settlingTurnAfterComplete(createTurnRoleState(turnId), turnId)!;
+
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "assistant", null, settling), true);
+  settling = finishTurnRole(settling, "assistant");
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "assistant", null, settling), false);
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "user", null, settling), true);
+  settling = finishTurnRole(settling, "user");
+  assert.equal(settlingTurnAfterComplete(settling, turnId), null);
+});
+
+test("retains only unfinished roles on completion and rejects expired or displaced turns", () => {
   const turnId = "123e4567-e89b-42d3-a456-426614174000";
   const displaced = "123e4567-e89b-42d3-a456-426614174001";
+  let active = createTurnRoleState(turnId);
+  active = finishTurnRole(active, "user");
+  const settling = settlingTurnAfterComplete(active, turnId)!;
 
-  assert.equal(shouldAcceptTurnUpdate(turnId, turnId, null), true);
-  assert.equal(shouldAcceptTurnUpdate(turnId, null, turnId), true);
-  assert.equal(shouldAcceptTurnUpdate(turnId, null, displaced), false);
-  assert.equal(shouldAcceptTurnUpdate(turnId, null, null), false);
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "user", null, settling), false);
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "assistant", null, settling), true);
+  assert.equal(canAcceptTurnRoleUpdate(turnId, "assistant", null, null), false);
+  assert.equal(
+    canAcceptTurnRoleUpdate(turnId, "assistant", createTurnRoleState(displaced), null),
+    false,
+  );
+});
+
+test("clears speaking only for the matching playback turn after transcripts settle", () => {
+  const oldTurnId = "123e4567-e89b-42d3-a456-426614174000";
+  const currentTurnId = "123e4567-e89b-42d3-a456-426614174001";
+  let settled = createTurnRoleState(currentTurnId);
+  settled = finishTurnRole(settled, "user");
+  settled = finishTurnRole(settled, "assistant");
+
+  assert.equal(settlingTurnAfterComplete(settled, currentTurnId), null);
+  assert.equal(
+    speakingTurnAfterPlaybackIdle(currentTurnId, oldTurnId),
+    currentTurnId,
+  );
+  assert.equal(
+    speakingTurnAfterPlaybackIdle(currentTurnId, currentTurnId),
+    null,
+  );
 });
 
 test("keeps completed narration visible and clears only interrupted narration", () => {

@@ -80,12 +80,60 @@ export function voiceStatusForState(state: VoiceStatusState): VoiceStatus {
   return "listening";
 }
 
-export function shouldAcceptTurnUpdate(
+export type TurnRoleState = {
+  turnId: string;
+  userFinished: boolean;
+  assistantFinished: boolean;
+};
+
+export function createTurnRoleState(
   turnId: string,
-  activeTurnId: string | null,
-  settlingTurnId: string | null,
+  finished: Partial<Pick<TurnRoleState, "userFinished" | "assistantFinished">> = {},
+): TurnRoleState {
+  return {
+    turnId,
+    userFinished: finished.userFinished ?? false,
+    assistantFinished: finished.assistantFinished ?? false,
+  };
+}
+
+export function canAcceptTurnRoleUpdate(
+  turnId: string,
+  role: RealtimeChatMessage["role"],
+  activeTurn: TurnRoleState | null,
+  settlingTurn: TurnRoleState | null,
 ): boolean {
-  return turnId === activeTurnId || turnId === settlingTurnId;
+  const turn = activeTurn?.turnId === turnId
+    ? activeTurn
+    : settlingTurn?.turnId === turnId
+      ? settlingTurn
+      : null;
+  if (!turn) return false;
+  return role === "user" ? !turn.userFinished : !turn.assistantFinished;
+}
+
+export function finishTurnRole(
+  turn: TurnRoleState,
+  role: RealtimeChatMessage["role"],
+): TurnRoleState {
+  return role === "user"
+    ? { ...turn, userFinished: true }
+    : { ...turn, assistantFinished: true };
+}
+
+export function settlingTurnAfterComplete(
+  turn: TurnRoleState | null,
+  turnId: string,
+): TurnRoleState | null {
+  if (!turn || turn.turnId !== turnId) return null;
+  return turn.userFinished && turn.assistantFinished ? null : turn;
+}
+
+export function speakingTurnAfterPlaybackIdle(
+  speakingTurnId: string | null,
+  idleTurnId: string,
+): string | null {
+  return speakingTurnId === idleTurnId ? null : speakingTurnId;
 }
 
 export function descriptionAfterTurnComplete(
