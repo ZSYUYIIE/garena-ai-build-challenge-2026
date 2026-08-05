@@ -11,6 +11,12 @@ test("buildAnalysisPrompt binds narration to the exact frame", () => {
     initial: false,
     narrationLevel: "standard",
     previousDescription: "A document editor is visible.",
+    priorVisibleStates: [{
+      domain: "sports_score",
+      identity: "Team A vs Team B",
+      value: "1-1",
+      summary: "The score is 1-1.",
+    }],
     recentTabTranscript: "Commentator: Team A has taken a 2-1 lead.",
     timestampSeconds: 222,
   });
@@ -26,6 +32,14 @@ test("buildAnalysisPrompt binds narration to the exact frame", () => {
   assert.match(prompt, /cannot justify unseen visual claims/i);
   assert.match(prompt, /score:2-1/i);
   assert.match(prompt, /routine.*motion.*caption churn/i);
+  assert.match(prompt, /materially different.*section/i);
+  assert.match(prompt, /comments.*results.*product details/i);
+  assert.match(prompt, /goal.*score.*winner announcement/i);
+  assert.match(prompt, /do not claim.*user.*scrolled|do not say.*user.*scrolled/i);
+  assert.match(prompt, /domain.*identity/i);
+  assert.match(prompt, /static score.*score_visible/i);
+  assert.match(prompt, /Team A vs Team B/);
+  assert.match(prompt, /"value":"1-1"/);
   assert.match(prompt, /description must be empty when shouldNarrate is false/i);
   assert.match(prompt, /Team A has taken a 2-1 lead/);
 });
@@ -67,6 +81,8 @@ test("analyzeVisionFrame uses the Gemini Interactions contract", async (t) => {
                   isNew: false,
                   coveredByTabSpeech: false,
                   event: null,
+                  visibleState: null,
+                  eventEvidence: null,
                 }),
               },
             ],
@@ -112,7 +128,24 @@ test("analyzeVisionFrame uses the Gemini Interactions contract", async (t) => {
     "isNew",
     "coveredByTabSpeech",
     "event",
+    "visibleState",
+    "eventEvidence",
   ]);
+  assert.equal(
+    requestBody.response_format.schema.properties.visibleState.anyOf[0]
+      .properties.domain.pattern,
+    "^[a-z0-9]+(?:_[a-z0-9]+)*$",
+  );
+  assert.equal(
+    requestBody.response_format.schema.properties.visibleState.anyOf[0]
+      .properties.summary.maxLength,
+    300,
+  );
+  assert.deepEqual(
+    requestBody.response_format.schema.properties.eventEvidence.anyOf[0]
+      .properties.basis.enum,
+    ["current_frame", "state_transition"],
+  );
   assert.equal(requestBody.input[0].text.includes("x".repeat(2_000)), true);
   assert.equal(requestBody.input[0].text.includes("x".repeat(2_001)), false);
   assert.deepEqual(requestBody.generation_config, {
@@ -138,6 +171,8 @@ test("analyzeVisionFrame rejects invalid semantic narration approvals", async (t
       isNew: false,
       coveredByTabSpeech: false,
       event: null,
+      visibleState: null,
+      eventEvidence: null,
     },
     {
       shouldNarrate: true,
@@ -147,6 +182,8 @@ test("analyzeVisionFrame rejects invalid semantic narration approvals", async (t
       isNew: true,
       coveredByTabSpeech: false,
       event: null,
+      visibleState: null,
+      eventEvidence: null,
     },
     {
       shouldNarrate: true,
@@ -156,6 +193,8 @@ test("analyzeVisionFrame rejects invalid semantic narration approvals", async (t
       isNew: true,
       coveredByTabSpeech: true,
       event: null,
+      visibleState: null,
+      eventEvidence: null,
     },
   ]) {
     globalThis.fetch = async () => new Response(
@@ -180,6 +219,87 @@ test("analyzeVisionFrame rejects invalid semantic narration approvals", async (t
         timestampSeconds: 10,
       }),
       /semanticKey|importance|coveredByTabSpeech/i,
+    );
+  }
+});
+
+test("analyzeVisionFrame enforces visible state and event evidence relationships", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const currentState = {
+    domain: "sports_score",
+    identity: "Team A vs Team B",
+    value: "2-1",
+    summary: "Team A leads Team B 2-1.",
+  };
+  const previousState = {
+    ...currentState,
+    value: "1-1",
+    summary: "The score is 1-1.",
+  };
+  const event = {
+    eventType: "score_changed",
+    entities: ["Team A", "Team B"],
+    description: "The score changes to 2-1.",
+    importance: 0.9,
+    confidence: 0.95,
+  };
+  const base = {
+    shouldNarrate: false,
+    description: "",
+    semanticKey: null,
+    importance: 0.9,
+    isNew: true,
+    coveredByTabSpeech: false,
+    event,
+    visibleState: currentState,
+    eventEvidence: { basis: "state_transition", previousState },
+  };
+
+  for (const result of [
+    { ...base, eventEvidence: null },
+    {
+      ...base,
+      eventEvidence: { basis: "state_transition", previousState: null },
+    },
+    {
+      ...base,
+      eventEvidence: { basis: "current_frame", previousState },
+    },
+    {
+      ...base,
+      visibleState: { ...currentState, domain: "Sports Score" },
+    },
+    {
+      ...base,
+      visibleState: { ...currentState, identity: "x".repeat(161) },
+    },
+  ]) {
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({
+        steps: [{
+          type: "model_output",
+          content: [{ type: "text", text: JSON.stringify(result) }],
+        }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+    await assert.rejects(
+      analyzeVisionFrame({
+        apiKey: "test-key",
+        model: "gemini-3.6-flash",
+        frame: { mimeType: "image/jpeg", data: "sports-frame" },
+        initial: false,
+        narrationLevel: "standard",
+        priorVisibleStates: [previousState],
+        recentTabTranscript: "",
+        timestampSeconds: 10,
+      }),
+      /eventEvidence|previousState|domain|identity/i,
     );
   }
 });
