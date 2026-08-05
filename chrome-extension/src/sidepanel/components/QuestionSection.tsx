@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
 import { Input } from "@/components/ui/input";
+import {
+  draftAfterAdmission,
+  questionCopyFor,
+  voiceQuestionStatusFor,
+  type QuestionAvailability,
+} from "../realtime/typedQuestion";
+import type { VoiceStatus } from "../realtime/types";
 
 export type ChatMessage = {
   id: string;
@@ -10,26 +17,28 @@ export type ChatMessage = {
 
 type QuestionSectionProps = {
   messages: ChatMessage[];
-  onAsk: (question: string) => void;
-  disabled?: boolean;
-  voiceStatus?: "off" | "listening" | "user_speaking" | "gemini_speaking" | "degraded";
+  onAsk: (question: string) => boolean;
+  questionAvailability: QuestionAvailability;
+  voiceStatus?: VoiceStatus;
   tabContextStatus?: "absent" | "connecting" | "ready" | "degraded";
 };
 
 export function QuestionSection({
   messages,
   onAsk,
-  disabled = false,
+  questionAvailability,
   voiceStatus = "off",
   tabContextStatus = "absent",
 }: QuestionSectionProps) {
   const [draft, setDraft] = useState("");
+  const questionCopy = questionCopyFor(questionAvailability);
+  const disabled = questionAvailability !== "ready";
 
   function handleSubmit() {
     const question = draft.trim();
-    if (!question || disabled) return;
-    onAsk(question);
-    setDraft("");
+    if (!question || questionAvailability !== "ready") return;
+    const accepted = onAsk(question);
+    setDraft((current) => draftAfterAdmission(current, accepted));
   }
 
   return (
@@ -38,6 +47,7 @@ export function QuestionSection({
 
       <VoiceStatusLine
         voiceStatus={voiceStatus}
+        questionAvailability={questionAvailability}
         tabContextStatus={tabContextStatus}
       />
 
@@ -49,9 +59,7 @@ export function QuestionSection({
           onKeyDown={(event) => {
             if (event.key === "Enter") handleSubmit();
           }}
-          placeholder={
-            disabled ? "Start StreamSense to ask a question" : "Ask a question..."
-          }
+          placeholder={questionCopy.placeholder}
           disabled={disabled}
         />
         <button
@@ -71,15 +79,10 @@ export function QuestionSection({
 
 function VoiceStatusLine({
   voiceStatus,
+  questionAvailability,
   tabContextStatus,
-}: Pick<QuestionSectionProps, "voiceStatus" | "tabContextStatus">) {
-  const voiceText = {
-    off: null,
-    listening: "Mic open — ask a question",
-    user_speaking: "Listening to you…",
-    gemini_speaking: "Gemini is replying…",
-    degraded: "Voice unavailable — typed questions still work",
-  }[voiceStatus ?? "off"];
+}: Pick<QuestionSectionProps, "voiceStatus" | "questionAvailability" | "tabContextStatus">) {
+  const voiceText = voiceQuestionStatusFor(voiceStatus ?? "off", questionAvailability);
   const tabText = tabContextStatus === "connecting" || tabContextStatus === "degraded"
     ? "Tab speech context unavailable — automatic narration paused"
     : null;

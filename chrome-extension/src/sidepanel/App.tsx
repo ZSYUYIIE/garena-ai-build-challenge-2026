@@ -35,9 +35,7 @@ function StreamSensePanel() {
   );
 
   const handleAsk = useCallback(
-    (question: string) => {
-      session.ask(question);
-    },
+    (question: string) => session.ask(question),
     [session],
   );
 
@@ -66,7 +64,7 @@ function StreamSensePanel() {
         <QuestionSection
           messages={session.messages}
           onAsk={handleAsk}
-          disabled={!session.canAsk}
+          questionAvailability={session.questionAvailability}
           voiceStatus={session.voiceStatus}
           tabContextStatus={session.tabContextStatus}
         />

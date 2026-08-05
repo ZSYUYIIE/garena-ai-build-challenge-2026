@@ -27,6 +27,12 @@ import {
   type SessionResourceLifecycle,
 } from "./sessionLifecycle";
 import { SpeechCoordinator } from "./speechCoordinator";
+import {
+  canAskRealtime,
+  dispatchTypedQuestion,
+  questionAvailabilityFor,
+  retryableAnswerNotice,
+} from "./typedQuestion";
 import { useCaptureTarget } from "./useCaptureTarget";
 import {
   backpressureAction,
@@ -43,6 +49,7 @@ import {
   type RealtimeStatus,
   type ServerMessage,
   type StreamEvent,
+  type LiveProviderState,
   type TurnRoleState,
   type VoiceStatus,
   type VoiceStatusState,
@@ -81,6 +88,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const [messages, setMessages] = useState<RealtimeChatMessage[]>([]);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>("off");
   const [tabContextStatus, setTabContextStatus] = useState<"absent" | "connecting" | "ready" | "degraded">("absent");
+  const [liveProviderState, setLiveProviderState] = useState<LiveProviderState>("closed");
 
   const statusRef = useRef(status);
   statusRef.current = status;
@@ -104,6 +112,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const startingRef = useRef(false);
   const stopRef = useRef<() => void>(() => undefined);
   const observedGuidanceRef = useRef<string | null>(null);
+  const liveProviderStateRef = useRef<LiveProviderState>("closed");
 
   const mediaAudioRef = useRef<RealtimeMediaAudio | null>(null);
   const speechCoordinatorRef = useRef<SpeechCoordinator | null>(null);
@@ -129,6 +138,11 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     setVoiceStatus(voiceStatusForState(voiceStateRef.current));
   }, []);
 
+  const publishLiveProviderState = useCallback((state: LiveProviderState) => {
+    liveProviderStateRef.current = state;
+    setLiveProviderState(state);
+  }, []);
+
   const releaseResources = useCallback(() => {
     sessionGenerationRef.current.invalidate();
     const resourceLifecycle = resourceLifecycleRef.current;
@@ -143,6 +157,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     activeTurnRef.current = null;
     settlingTurnRef.current = null;
     speakingTurnIdRef.current = null;
+    publishLiveProviderState("closed");
     publishVoiceStatus({
       sessionActive: false,
       helloAccepted: false,
@@ -160,7 +175,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     captureCanvasRef.current = null;
     captureStartedAtRef.current = null;
     capturedTabIdRef.current = null;
-  }, [publishVoiceStatus]);
+  }, [publishLiveProviderState, publishVoiceStatus]);
 
   const stop = useCallback(() => {
     releaseResources();
@@ -170,6 +185,31 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     setDescription("StreamSense is stopped. Start it to describe the active tab.");
   }, [releaseResources]);
   stopRef.current = stop;
+
+  const settleTurnComplete = useCallback((
+    message: Extract<ServerMessage, { type: "turn_complete" }>,
+  ) => {
+    speechCoordinatorRef.current?.turnComplete(message);
+    const settledActiveTurn = activeTurnRef.current?.turnId === message.turnId;
+    if (settledActiveTurn) {
+      settlingTurnRef.current = settlingTurnAfterComplete(activeTurnRef.current, message.turnId);
+      activeTurnRef.current = null;
+      if (settlingTurnTimerRef.current !== null) window.clearTimeout(settlingTurnTimerRef.current);
+      settlingTurnTimerRef.current = settlingTurnRef.current === null
+        ? null
+        : window.setTimeout(() => {
+          if (settlingTurnRef.current?.turnId === message.turnId) settlingTurnRef.current = null;
+          settlingTurnTimerRef.current = null;
+        }, LATE_TRANSCRIPT_SETTLEMENT_MS);
+      setDescription((current) => descriptionAfterTurnComplete(
+        current,
+        message.mode,
+        message.interrupted === true,
+      ));
+    }
+    const notice = retryableAnswerNotice(message.mode, message.retryable, settledActiveTurn);
+    if (notice) setError(notice);
+  }, []);
 
   const start = useCallback(async () => {
     if (websocketRef.current || startingRef.current || statusRef.current === "requesting_capture") return;
@@ -527,10 +567,12 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         switch (message.type) {
           case "connected":
             setStatus("connected"); setStatusText(`Connected to ${message.model ?? "Gemini"}.`); setError(null);
+            publishLiveProviderState("connecting");
             publishVoiceStatus({ helloAccepted: true });
             break;
           case "provider_health":
             if (message.provider === "live") {
+              publishLiveProviderState(message.state);
               const ready = message.state === "ready";
               const degraded = message.state === "degraded" || message.state === "closed";
               publishVoiceStatus({ liveReady: ready, liveDegraded: degraded });
@@ -593,23 +635,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             break;
           }
           case "turn_complete":
-            coordinator.turnComplete(message);
-            if (activeTurnRef.current?.turnId === message.turnId) {
-              settlingTurnRef.current = settlingTurnAfterComplete(activeTurnRef.current, message.turnId);
-              activeTurnRef.current = null;
-              if (settlingTurnTimerRef.current !== null) window.clearTimeout(settlingTurnTimerRef.current);
-              settlingTurnTimerRef.current = settlingTurnRef.current === null
-                ? null
-                : window.setTimeout(() => {
-                  if (settlingTurnRef.current?.turnId === message.turnId) settlingTurnRef.current = null;
-                  settlingTurnTimerRef.current = null;
-                }, LATE_TRANSCRIPT_SETTLEMENT_MS);
-            }
-            setDescription((current) => descriptionAfterTurnComplete(
-              current,
-              message.mode,
-              message.interrupted === true,
-            ));
+            settleTurnComplete(message);
             break;
           case "status_text": if (message.text) setStatusText(message.text); break;
           case "narration":
@@ -643,12 +669,17 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       setError(captureErrorMessage(cause));
       setStatusText("StreamSense could not start.");
     }
-  }, [publishVoiceStatus, releaseResources]);
+  }, [publishLiveProviderState, publishVoiceStatus, releaseResources, settleTurnComplete]);
 
   const ask = useCallback((question: string) => {
     const websocket = websocketRef.current;
     const coordinator = speechCoordinatorRef.current;
     if (!websocket || websocket.readyState !== WebSocket.OPEN || !coordinator) return false;
+    if (!canAskRealtime(
+      statusRef.current,
+      voiceStateRef.current.helloAccepted,
+      liveProviderStateRef.current,
+    )) return false;
     const turnId = crypto.randomUUID();
     activeTurnRef.current = createTurnRoleState(turnId, { userFinished: true });
     settlingTurnRef.current = null;
@@ -657,17 +688,36 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       settlingTurnTimerRef.current = null;
     }
     coordinator.typedQuestionStarted(turnId);
+    setError(null);
     speakingTurnIdRef.current = null;
     publishVoiceStatus({ geminiSpeaking: false });
     setMessages((current) => updateTurnChatMessages(current, { turnId, role: "user", text: question, finished: true }));
-    void (async () => {
-      await Promise.race([captureFrameRef.current?.({ force: true }) ?? Promise.resolve(), delay(FORCED_FRAME_DEADLINE_MS)]);
-      if (websocketRef.current === websocket && websocket.readyState === WebSocket.OPEN) {
-        websocket.send(JSON.stringify({ type: "typed_question", turnId, text: question }));
-      }
-    })();
+    void dispatchTypedQuestion({
+      waitForFrame: () => Promise.race([
+        captureFrameRef.current?.({ force: true }) ?? Promise.resolve(),
+        delay(FORCED_FRAME_DEADLINE_MS),
+      ]),
+      isReady: () => (
+        websocketRef.current === websocket
+        && websocket.readyState === WebSocket.OPEN
+        && speechCoordinatorRef.current === coordinator
+        && canAskRealtime(
+          statusRef.current,
+          voiceStateRef.current.helloAccepted,
+          liveProviderStateRef.current,
+        )
+      ),
+      send: () => websocket.send(JSON.stringify({ type: "typed_question", turnId, text: question })),
+      onUnavailable: () => settleTurnComplete({
+        type: "turn_complete",
+        turnId,
+        mode: "answer",
+        interrupted: true,
+        retryable: true,
+      }),
+    });
     return true;
-  }, [publishVoiceStatus]);
+  }, [publishVoiceStatus, settleTurnComplete]);
 
   useEffect(() => {
     if (!targetChangeRequiresReset(capturedTabIdRef.current, captureTarget.target)) return;
@@ -696,12 +746,19 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     return () => { window.removeEventListener("pagehide", cleanup); cleanup(); };
   }, [releaseResources]);
 
+  const questionAvailability = questionAvailabilityFor(
+    status,
+    voiceStateRef.current.helloAccepted,
+    liveProviderState,
+  );
+
   return {
     status, statusText, error, description, events, messages, voiceStatus, tabContextStatus,
     isRunning: status === "connecting" || status === "connected",
     isBusy: status === "requesting_capture",
     canStart: captureTarget.canStart,
-    canAsk: status === "connected",
+    canAsk: questionAvailability === "ready",
+    questionAvailability,
     start, stop, ask,
   };
 }

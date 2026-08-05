@@ -187,6 +187,7 @@ export const SUPPORTED_SERVER_MESSAGE_TYPES = Object.freeze([
 ] as const);
 
 export type TurnMode = "answer" | "narration";
+export type LiveProviderState = "connecting" | "ready" | "degraded" | "closed";
 
 type TextServerMessage = {
   type:
@@ -234,7 +235,7 @@ export type ServerMessage =
   | {
       type: "provider_health";
       provider: "live" | "tab_stt";
-      state: "connecting" | "ready" | "degraded" | "closed";
+      state: LiveProviderState;
       message?: string;
     }
   | { type: "status"; mode?: string }
