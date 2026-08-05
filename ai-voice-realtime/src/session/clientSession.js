@@ -565,7 +565,7 @@ export class ClientSession {
         timestampSeconds: snapshot.timestampSeconds,
         signal: record.controller.signal,
       });
-      if (this.closed) return;
+      if (this.closed || record.controller.signal.aborted) return;
       const current = this.activeAtomicAnalysis === record;
       this.recordGroundedAnalysis(analysis, snapshot, {
         initial,
@@ -642,7 +642,8 @@ export class ClientSession {
       });
       return;
     }
-    if (analysis.visibleState) {
+    const cacheMayAdvance = this.visibleStateCache.observe(snapshot.frameSequence);
+    if (analysis.visibleState && cacheMayAdvance) {
       this.visibleStateCache.update(
         analysis.visibleState,
         snapshot.acceptedAtMs,

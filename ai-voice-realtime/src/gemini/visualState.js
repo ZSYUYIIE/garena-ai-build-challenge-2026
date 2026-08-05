@@ -58,6 +58,7 @@ export class GroundedVisibleStateCache {
     this.maxEntries = maxEntries;
     this.maxAgeMs = maxAgeMs;
     this.entries = new Map();
+    this.latestObservedFrameSequence = 0;
   }
 
   list(nowMs) {
@@ -74,6 +75,10 @@ export class GroundedVisibleStateCache {
   update(state, observedAtMs, frameSequence) {
     const validated = visibleStateSchema.parse(state);
     this.prune(observedAtMs);
+    if (frameSequence < this.latestObservedFrameSequence) return false;
+    if (frameSequence > this.latestObservedFrameSequence) {
+      this.latestObservedFrameSequence = frameSequence;
+    }
     const key = normalizeVisibleStateKey(validated);
     const existing = this.entries.get(key);
     if (existing && frameSequence <= existing.frameSequence) return false;
@@ -89,8 +94,18 @@ export class GroundedVisibleStateCache {
     return true;
   }
 
+  observe(frameSequence) {
+    if (!Number.isSafeInteger(frameSequence) || frameSequence < 0) {
+      throw new RangeError("frameSequence must be a non-negative safe integer");
+    }
+    if (frameSequence <= this.latestObservedFrameSequence) return false;
+    this.latestObservedFrameSequence = frameSequence;
+    return true;
+  }
+
   clear() {
     this.entries.clear();
+    this.latestObservedFrameSequence = 0;
   }
 
   prune(nowMs) {

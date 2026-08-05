@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 
 import { EventStore } from "../src/events/eventStore.js";
 import { GeminiLiveSession } from "../src/gemini/liveSession.js";
+import { GroundedVisibleStateCache } from "../src/gemini/visualState.js";
 import { parseServerOutput } from "../src/protocol/browserMessages.js";
 import { ClientSession } from "../src/session/clientSession.js";
 import { SpeechPolicy } from "../src/session/speechPolicy.js";
@@ -1528,6 +1529,42 @@ test("visible state cache expires, evicts oldest identities, and clears on close
   assert.deepEqual(cache.list(fixture.session.elapsedMilliseconds), []);
   fixture.session.close();
   assert.deepEqual(cache.list(fixture.session.elapsedMilliseconds), []);
+});
+
+test("visible state cache rejects an older identity after a newer observed frame", () => {
+  const cache = new GroundedVisibleStateCache();
+  assert.equal(cache.observe(2), true);
+  assert.equal(
+    cache.update(scoreState("1-0", { identity: "Older Match" }), 10, 1),
+    false,
+  );
+  assert.deepEqual(cache.list(10), []);
+});
+
+test("an aborted older visual result cannot re-enter cache after a newer null state", async (t) => {
+  const older = deferred();
+  const results = [older.promise, Promise.resolve(suppressedAnalysis())];
+  const fixture = createFixture({
+    analyzeFrame() {
+      return results.shift();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+
+  fixture.session.sendVideo(Buffer.from("older visible state"), "image/jpeg", 1);
+  fixture.session.requestNarration(false);
+  fixture.session.sendVideo(Buffer.from("newer null state"), "image/jpeg", 2);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  assert.deepEqual(fixture.session.visibleStateCache.list(0), []);
+
+  older.resolve(suppressedAnalysis({
+    visibleState: scoreState("1-0", { identity: "Older Match" }),
+  }));
+  await flushAsyncWork();
+
+  assert.deepEqual(fixture.session.visibleStateCache.list(0), []);
+  fixture.session.close();
 });
 
 test("uses a session-relative acceptance clock instead of an extension frame timestamp", async (t) => {
