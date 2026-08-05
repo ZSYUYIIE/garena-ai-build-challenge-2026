@@ -168,6 +168,19 @@ test("opens a natural rising speech onset at the production cadence", () => {
   assert.equal(events.filter((event) => event.type === "speech_start").length, 1);
 });
 
+test("keeps an unvoiced prefix as pre-roll without poisoning the following voiced onset", () => {
+  const detector = new AdaptiveVoiceActivityDetector();
+  const events = [
+    ...pushFrames(detector, pcm(500, 0.002), 0, 20),
+    ...pushFrames(detector, broadbandNoise(200, 0.05), 500, 20),
+    ...pushFrames(detector, pcm(300, 0.1), 700, 20),
+  ];
+  const start = events.find((event) => event.type === "speech_start");
+
+  assert.ok(start);
+  assert.equal(start.preRoll.reduce((total, frame) => total + frame.length, 0), 4_800);
+});
+
 test("does not open a user turn for a 40 ms spike", () => {
   const detector = new AdaptiveVoiceActivityDetector();
   const events = [

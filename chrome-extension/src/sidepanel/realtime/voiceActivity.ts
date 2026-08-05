@@ -75,8 +75,9 @@ export class AdaptiveVoiceActivityDetector {
     const frameEndMs = timestampMs + frameDurationMs;
     const frameRms = rms(pcm);
     const threshold = Math.max(VAD_ABSOLUTE_RMS_FLOOR, this.noiseRms * VAD_NOISE_MULTIPLIER);
+    const aboveEnergyThreshold = frameRms >= threshold;
     const speechLike = (
-      frameRms >= threshold
+      aboveEnergyThreshold
       && zeroCrossingRate(pcm) <= MAX_SPEECH_ZERO_CROSSING_RATE
     );
     this.appendPreRoll(pcm);
@@ -86,7 +87,9 @@ export class AdaptiveVoiceActivityDetector {
         this.candidateMs += frameDurationMs;
       } else {
         this.candidateMs = 0;
-        this.noiseRms += (frameRms - this.noiseRms) * NOISE_SMOOTHING;
+        if (!aboveEnergyThreshold) {
+          this.noiseRms += (frameRms - this.noiseRms) * NOISE_SMOOTHING;
+        }
       }
       if (this.candidateMs < VAD_MIN_SPEECH_MS) return [];
 

@@ -21,6 +21,21 @@ function sineFloats(durationMs: number, amplitude: number, frequency: number, sa
   );
 }
 
+function broadbandFloats(durationMs: number, targetRms: number, sampleRate: number): Float32Array {
+  const length = (durationMs * sampleRate) / 1_000;
+  let state = 1;
+  const raw = new Float64Array(length);
+  let energy = 0;
+  for (let index = 0; index < length; index += 1) {
+    state = ((state * 1_664_525) + 1_013_904_223) >>> 0;
+    const sample = (state / 0xffff_ffff) * 2 - 1;
+    raw[index] = sample;
+    energy += sample * sample;
+  }
+  const scale = targetRms / Math.sqrt(energy / length);
+  return Float32Array.from(raw, (sample) => sample * scale);
+}
+
 test("maps scheduled AudioContext time onto the performance session clock", () => {
   const map = createContextTimeToExtensionSessionMs({
     contextTime: 1.25,
@@ -445,6 +460,23 @@ test("opens and closes a microphone turn from production-sized worklet blocks", 
   }
 
   assert.deepEqual(media.userEvents, ["start", "end"]);
+  assert.ok(media.micPackets.length > 0);
+});
+
+test("opens from voiced speech after an unvoiced prefix at the production worklet cadence", async () => {
+  let nowMs = 1_000;
+  const media = fixture({ now: () => nowMs });
+  await startBoth(media);
+  const prefix = broadbandFloats(200, 0.05, 48_000);
+  const voiced = sineFloats(300, 0.1, 220, 48_000);
+  for (const samples of [prefix, voiced]) {
+    for (let offset = 0; offset < samples.length; offset += 960) {
+      media.context.worklets[1].emit(samples.slice(offset, offset + 960));
+      nowMs += 20;
+    }
+  }
+
+  assert.deepEqual(media.userEvents, ["start"]);
   assert.ok(media.micPackets.length > 0);
 });
 
