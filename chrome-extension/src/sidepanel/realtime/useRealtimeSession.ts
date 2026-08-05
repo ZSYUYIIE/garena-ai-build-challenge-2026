@@ -9,9 +9,13 @@ import {
 import type { NarrationMode } from "../context/ConfigurationContext";
 import {
   calculateFrameDimensions,
+  commitRetainedFrame,
+  createFrameSignature,
   createFrameCaptureScheduler,
   encodeJpegWithinBudget,
   FRAME_CAPTURE_MAX_BYTES,
+  hasMeaningfulVisualChange,
+  type FrameSignature,
 } from "./frameCapture";
 import { ModelAudioPlayback } from "./modelAudioPlayback";
 import {
@@ -111,7 +115,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const captureStartedAtRef = useRef<number | null>(null);
   const capturedTabIdRef = useRef<number | null>(null);
   const frameTimerRef = useRef<number | null>(null);
-  const lastFrameSignatureRef = useRef<Uint8Array | null>(null);
+  const lastFrameSignatureRef = useRef<FrameSignature | null>(null);
   const lastFrameSentAtRef = useRef(0);
   const latestFrameRef = useRef<LatestFrame | null>(null);
   const captureFrameRef = useRef<((options: { force: boolean }) => Promise<void>) | null>(null);
@@ -419,18 +423,30 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         canvas.width = width;
         canvas.height = height;
         context.drawImage(video, 0, 0, width, height);
-        const signature = createFrameSignature(context, width, height);
+        const signature = createFrameSignature(
+          context.getImageData(0, 0, width, height).data,
+          width,
+          height,
+        );
         if (!force && !hasMeaningfulVisualChange(lastFrameSignatureRef.current, signature)) return;
         const blob = await encodeJpegWithinBudget(canvas);
         if (!blob || blob.size > FRAME_CAPTURE_MAX_BYTES || !isCurrent() || websocket.readyState !== WebSocket.OPEN) return;
-        lastFrameSignatureRef.current = signature;
         const frame = { timestampSeconds: currentTimestampSeconds(video, captureStartedAtRef.current), data: await blobToBase64(blob) };
         if (!isCurrent() || websocket.readyState !== WebSocket.OPEN) return;
         if (performance.now() - lastFrameSentAtRef.current < VIDEO_FRAME_INTERVAL_MS || backpressureAction("frame", websocket.bufferedAmount) !== "send") {
-          latestFrameRef.current = frame;
+          const retained = commitRetainedFrame(signature, () => {
+            latestFrameRef.current = frame;
+          });
+          lastFrameSignatureRef.current = retained.signature;
           return;
         }
-        websocket.send(JSON.stringify({ type: "video_frame", timestampSeconds: frame.timestampSeconds, mimeType: "image/jpeg", data: frame.data }));
+        const retained = commitRetainedFrame(signature, () => websocket.send(JSON.stringify({
+          type: "video_frame",
+          timestampSeconds: frame.timestampSeconds,
+          mimeType: "image/jpeg",
+          data: frame.data,
+        })));
+        lastFrameSignatureRef.current = retained.signature;
         lastFrameSentAtRef.current = performance.now();
       })().catch((cause) => {
         if (isCurrent()) setError(`Could not capture a frame: ${toErrorMessage(cause)}`);
@@ -853,34 +869,6 @@ function parsePcmRate(mimeType: string): number | null {
 
 function toErrorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
-}
-
-function createFrameSignature(context: CanvasRenderingContext2D, width: number, height: number) {
-  const columns = 48;
-  const rows = Math.max(1, Math.round(columns * (height / width)));
-  const pixels = context.getImageData(0, 0, width, height).data;
-  const signature = new Uint8Array(columns * rows);
-  for (let row = 0; row < rows; row += 1) {
-    const y = Math.min(height - 1, Math.floor(((row + 0.5) / rows) * height));
-    for (let column = 0; column < columns; column += 1) {
-      const x = Math.min(width - 1, Math.floor(((column + 0.5) / columns) * width));
-      const index = (y * width + x) * 4;
-      signature[row * columns + column] = Math.round(pixels[index] * 0.2126 + pixels[index + 1] * 0.7152 + pixels[index + 2] * 0.0722);
-    }
-  }
-  return signature;
-}
-
-function hasMeaningfulVisualChange(previous: Uint8Array | null, current: Uint8Array): boolean {
-  if (!previous || previous.length !== current.length) return true;
-  let changedSamples = 0;
-  let totalDifference = 0;
-  for (let index = 0; index < current.length; index += 1) {
-    const difference = Math.abs(current[index] - previous[index]);
-    totalDifference += difference;
-    if (difference >= 18) changedSamples += 1;
-  }
-  return changedSamples / current.length >= 0.012 || totalDifference / current.length >= 5;
 }
 
 async function consumeTabStreamId(streamId: string): Promise<MediaStream> {
