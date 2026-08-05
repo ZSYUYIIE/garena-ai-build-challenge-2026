@@ -186,7 +186,6 @@ export class GoogleSpeechTranscriber {
         record.backpressured = true;
       }
       this.#active = record;
-      this.#setHealth("ready");
       this.#flushRecord(record);
       this.#scheduleRotation(record);
       return record;
@@ -201,6 +200,7 @@ export class GoogleSpeechTranscriber {
     this.#rotationTimer = this.#timers.setTimeout(() => {
       this.#rotationTimer = null;
       if (this.#closed || this.#active !== record) return;
+      this.#setHealth("connecting");
       try {
         this.#openStream();
         this.#endRecord(record);
@@ -335,6 +335,7 @@ export class GoogleSpeechTranscriber {
     ) return;
     record.stable = true;
     this.#retryAttempt = 0;
+    this.#setHealth("ready");
   }
 
   #handleFailure(record) {

@@ -131,6 +131,9 @@ test("sends V2 Chirp configuration before dedicated tab PCM and maps every usabl
   const [client] = FakeSpeechClient.instances;
   const [stream] = client.streams;
 
+  assert.equal(transcriber.health, "connecting");
+  assert.deepEqual(health, ["connecting"]);
+
   assert.deepEqual(client.options, { apiEndpoint: "us-speech.googleapis.com" });
   assert.deepEqual(stream.writes[0], {
     recognizer: "projects/project-1/locations/us/recognizers/_",
@@ -343,7 +346,7 @@ test("buffers at most one second of tab PCM while waiting for provider drain", a
   for (let index = 0; index < 10; index += 1) {
     assert.equal(transcriber.write(Buffer.alloc(3_200, index), index * 100), "backpressured");
   }
-  assert.equal(transcriber.health, "ready");
+  assert.equal(transcriber.health, "connecting");
   assert.equal(transcriber.write(Buffer.alloc(3_200, 10), 1_000), "degraded");
   assert.equal(transcriber.health, "degraded");
   assert.equal(stream.destroyCalls, 1);
@@ -463,11 +466,11 @@ test("retries provider failures at 250, 500, and 1000 milliseconds then remains 
   assert.equal(FakeSpeechClient.instances[0].streams.length, 4);
   assert.equal(transcriber.health, "degraded");
   assert.equal(timers.pending, 0);
-  assert.deepEqual(health.filter((state) => state === "ready"), ["ready", "ready", "ready", "ready"]);
+  assert.deepEqual(health.filter((state) => state === "ready"), []);
   await transcriber.close();
 });
 
-test("resets the retry budget after each provider-confirmed stable stream", async () => {
+test("resets the retry budget and publishes ready after each provider-confirmed stable stream", async () => {
   const timers = new FakeTimers();
   const { transcriber } = makeTranscriber({ timers });
   await transcriber.start();
@@ -483,7 +486,50 @@ test("resets the retry budget after each provider-confirmed stable stream", asyn
     assert.equal(client.streams.length, failure + 2);
   }
 
+  assert.equal(transcriber.health, "connecting");
+  client.streams.at(-1).emit("metadata", {});
   assert.equal(transcriber.health, "ready");
+  await transcriber.close();
+});
+
+test("keeps a recovered stream connecting until current-provider data arrives", async () => {
+  const timers = new FakeTimers();
+  const { transcriber, health } = makeTranscriber({ timers });
+  await transcriber.start();
+  const client = FakeSpeechClient.instances[0];
+  client.streams[0].emit("metadata", {});
+  client.streams[0].emit("error", new Error("transient"));
+
+  timers.advance(250);
+  const recovered = client.streams[1];
+  assert.equal(transcriber.health, "connecting");
+  assert.equal(health.at(-1), "connecting");
+
+  recovered.emit("data", { results: [] });
+  assert.equal(transcriber.health, "ready");
+  assert.equal(health.at(-1), "ready");
+  await transcriber.close();
+});
+
+test("keeps rotation connecting until replacement evidence and ignores retiring metadata", async () => {
+  const timers = new FakeTimers();
+  const { transcriber, health } = makeTranscriber({ timers, rotateAfterMs: 100 });
+  await transcriber.start();
+  const client = FakeSpeechClient.instances[0];
+  const retiring = client.streams[0];
+  retiring.emit("metadata", {});
+  assert.equal(transcriber.health, "ready");
+
+  timers.advance(100);
+  const replacement = client.streams[1];
+  assert.equal(transcriber.health, "connecting");
+  retiring.emit("metadata", {});
+  retiring.emit("data", { results: [] });
+  assert.equal(transcriber.health, "connecting");
+
+  replacement.emit("metadata", {});
+  assert.equal(transcriber.health, "ready");
+  assert.deepEqual(health.slice(-2), ["connecting", "ready"]);
   await transcriber.close();
 });
 

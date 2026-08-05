@@ -212,6 +212,10 @@ test("retains ordinary STT backpressure through drain without a destructive disc
   const first = Buffer.from([1, 0, 2, 0]);
   const second = Buffer.from([3, 0, 4, 0]);
 
+  assert.equal(transcriber.health, "connecting");
+  stream.emit("metadata", {});
+  assert.equal(transcriber.health, "ready");
+
   fixture.browser.emit("message", timedAudioPacket(2, 0, 0, first), true);
   fixture.browser.emit("message", timedAudioPacket(2, 1, 100, second), true);
   stream.emit("drain");
