@@ -15,6 +15,7 @@ import { TabTranscriptBuffer } from "../transcript/tabTranscriptBuffer.js";
 
 const OUTPUT_BUFFER_LIMIT_BYTES = 256 * 1024;
 const LIVE_FRAME_INTERVAL_MS = 1_000;
+const ANALYSIS_RETRY_DELAY_MS = 1_000;
 const MAX_TAB_PACKET_GAP_MS = 500;
 const MAX_COMPLETED_TURNS = 256;
 
@@ -83,6 +84,7 @@ export class ClientSession {
     this.liveHealth = "connecting";
     this.activeAtomicAnalysis = null;
     this.pendingAtomicNarration = null;
+    this.atomicRetryTimer = null;
     this.activeSpeechTurn = null;
     this.completedTurnIds = new Set();
     this.closed = false;
@@ -522,6 +524,7 @@ export class ClientSession {
   requestNarration(initial = false, { coalesce = false } = {}) {
     const snapshot = this.captureFrameSnapshot();
     if (!snapshot) return;
+    this.cancelAtomicRetry();
     if (this.activeAtomicAnalysis && !this.activeAtomicAnalysis.controller.signal.aborted) {
       if (coalesce) {
         this.pendingAtomicNarration = { initial, snapshot, userTurnEpoch: this.userTurnEpoch };
@@ -532,11 +535,17 @@ export class ClientSession {
     this.startAtomicNarration(initial, snapshot, this.userTurnEpoch);
   }
 
-  startAtomicNarration(initial, snapshot, userTurnEpoch) {
+  startAtomicNarration(
+    initial,
+    snapshot,
+    userTurnEpoch,
+    { retryAttempted = false } = {},
+  ) {
     const record = {
       id: randomUUID(),
       controller: new AbortController(),
       userTurnEpoch,
+      retryAttempted,
     };
     this.activeAtomicAnalysis = record;
     void this.runAtomicNarration(record, initial, snapshot);
@@ -565,7 +574,10 @@ export class ClientSession {
           && !this.activeSpeechTurn,
       });
     } catch (error) {
-      if (!record.controller.signal.aborted) this.sendBrowser({ type: "analysis_error", text: "Visual analysis is temporarily unavailable." });
+      if (!record.controller.signal.aborted) {
+        this.sendBrowser({ type: "analysis_error", text: "Visual analysis is temporarily unavailable." });
+        this.scheduleAtomicAnalysisRetry(record, initial, snapshot);
+      }
     } finally {
       if (this.activeAtomicAnalysis === record) {
         this.activeAtomicAnalysis = null;
@@ -577,6 +589,44 @@ export class ClientSession {
       }
       this.scheduleSpeechPolicyWake();
     }
+  }
+
+  scheduleAtomicAnalysisRetry(record, initial, snapshot) {
+    if (
+      record.retryAttempted
+      || this.closed
+      || this.pendingAtomicNarration
+      || !this.frameMatchesSnapshot(snapshot)
+    ) return;
+    this.cancelAtomicRetry();
+    this.atomicRetryTimer = this.timers.setTimeout(() => {
+      this.atomicRetryTimer = null;
+      if (
+        this.closed
+        || this.activeAtomicAnalysis
+        || this.pendingAtomicNarration
+        || !this.frameMatchesSnapshot(snapshot)
+      ) return;
+      this.startAtomicNarration(
+        initial,
+        snapshot,
+        record.userTurnEpoch,
+        { retryAttempted: true },
+      );
+    }, ANALYSIS_RETRY_DELAY_MS);
+  }
+
+  frameMatchesSnapshot(snapshot) {
+    return Boolean(
+      this.latestFrame
+      && this.latestFrame.frameSequence === snapshot.frameSequence
+      && this.latestFrame.hash === snapshot.frame.hash,
+    );
+  }
+
+  cancelAtomicRetry() {
+    if (this.atomicRetryTimer) this.timers.clearTimeout(this.atomicRetryTimer);
+    this.atomicRetryTimer = null;
   }
 
   recordGroundedAnalysis(analysis, snapshot, { initial = false, offerCandidate = true } = {}) {
@@ -642,6 +692,7 @@ export class ClientSession {
     if (!jpegBytes.length || mimeType !== "image/jpeg") return;
     const hash = createHash("sha256").update(jpegBytes).digest("hex");
     if (!force && this.latestFrame?.hash === hash) return;
+    this.cancelAtomicRetry();
     this.videoFrames += 1;
     this.lastFrameAcceptedAtMs = Math.max(this.lastFrameAcceptedAtMs, this.elapsedMilliseconds);
     this.latestTimestampSeconds = normalizeTimestampSeconds(timestampSeconds, this.elapsedTimestampSeconds);
@@ -731,6 +782,7 @@ export class ClientSession {
     this.transcriberGeneration += 1;
     if (this.speechPolicyTimer) this.timers.clearTimeout(this.speechPolicyTimer);
     if (this.liveFrameTimer) this.timers.clearTimeout(this.liveFrameTimer);
+    this.cancelAtomicRetry();
     this.speechPolicyTimer = null;
     this.liveFrameTimer = null;
     if (this.activeAtomicAnalysis && !this.activeAtomicAnalysis.controller.signal.aborted) this.activeAtomicAnalysis.controller.abort(new DOMException(reason, "AbortError"));

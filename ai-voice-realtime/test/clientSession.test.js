@@ -1024,7 +1024,9 @@ test("keeps atomic visual analysis independent from an unavailable text answer",
 
 test("does not report an atomic provider failure after an atomic cancellation", async (t) => {
   const signals = [];
+  const timers = createFakeTimers(() => 0);
   const fixture = createFixture({
+    timers,
     analyzeFrame({ signal }) {
       signals.push(signal);
       return rejectWhenAborted(signal);
@@ -1039,6 +1041,7 @@ test("does not report an atomic provider failure after an atomic cancellation", 
 
   assert.equal(signals[0]?.aborted, true);
   assert.equal(fixture.browser.messages.some((message) => message.type === "analysis_error"), false);
+  assert.equal(timers.pending, 0);
   fixture.session.close();
 });
 
@@ -1115,6 +1118,167 @@ test("reports a genuine provider error and accepts a later turn", async (t) => {
     ),
     true
   );
+  fixture.session.close();
+});
+
+test("analysis retry reuses one immutable stable-frame snapshot and records once", async (t) => {
+  let now = 0;
+  const timers = createFakeTimers(() => now);
+  const inputs = [];
+  const fixture = createFixture({
+    now: () => now,
+    timers,
+    async analyzeFrame(input) {
+      inputs.push(input);
+      if (inputs.length === 1) throw new Error("transient provider failure");
+      return visualEventAnalysis({
+        eventType: "section_visible",
+        currentState: {
+          domain: "page_section",
+          identity: "Video comments",
+          value: "comments",
+          summary: "The comments section is visible.",
+        },
+      });
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.sendVideo(Buffer.from("stable comments frame"), "image/jpeg", 14);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.equal(inputs.length, 1);
+  assert.equal(timers.pending, 1);
+  now = 999;
+  timers.runDue();
+  await flushAsyncWork();
+  assert.equal(inputs.length, 1);
+  now = 1_000;
+  timers.runDue();
+  await flushAsyncWork();
+
+  assert.equal(inputs.length, 2);
+  assert.equal(inputs[1].frame, inputs[0].frame);
+  assert.equal(inputs[1].timestampSeconds, 14);
+  assert.equal(fixture.session.latestFrame.frameSequence, 1);
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 1);
+  assert.equal(timers.pending, 0);
+  fixture.session.close();
+});
+
+test("analysis retry stops after the second failure", async (t) => {
+  let now = 0;
+  const timers = createFakeTimers(() => now);
+  let attempts = 0;
+  const fixture = createFixture({
+    now: () => now,
+    timers,
+    async analyzeFrame() {
+      attempts += 1;
+      throw new Error("provider unavailable");
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.sendVideo(Buffer.from("stable frame"), "image/jpeg", 1);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  now = 1_000;
+  timers.runDue();
+  await flushAsyncWork();
+  now = 10_000;
+  timers.runDue();
+  await flushAsyncWork();
+
+  assert.equal(attempts, 2);
+  assert.equal(timers.pending, 0);
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 0);
+  fixture.session.close();
+});
+
+test("a newer frame and session close cancel a pending analysis retry", async (t) => {
+  await t.test("newer frame", async () => {
+    let now = 0;
+    const timers = createFakeTimers(() => now);
+    let attempts = 0;
+    const fixture = createFixture({
+      now: () => now,
+      timers,
+      async analyzeFrame() {
+        attempts += 1;
+        throw new Error("provider unavailable");
+      },
+    });
+    fixture.session.sendVideo(Buffer.from("old frame"), "image/jpeg", 1);
+    fixture.session.requestNarration(false);
+    await flushAsyncWork();
+    assert.equal(timers.pending, 1);
+    fixture.session.sendVideo(Buffer.from("new frame"), "image/jpeg", 2);
+    assert.equal(timers.pending, 0);
+    now = 1_000;
+    timers.runDue();
+    await flushAsyncWork();
+    assert.equal(attempts, 1);
+    fixture.session.close();
+    fixture.eventStore.close();
+  });
+
+  await t.test("session close", async () => {
+    let now = 0;
+    const timers = createFakeTimers(() => now);
+    let attempts = 0;
+    const fixture = createFixture({
+      now: () => now,
+      timers,
+      async analyzeFrame() {
+        attempts += 1;
+        throw new Error("provider unavailable");
+      },
+    });
+    fixture.session.sendVideo(Buffer.from("closing frame"), "image/jpeg", 1);
+    fixture.session.requestNarration(false);
+    await flushAsyncWork();
+    assert.equal(timers.pending, 1);
+    fixture.session.close();
+    assert.equal(timers.pending, 0);
+    now = 1_000;
+    timers.runDue();
+    await flushAsyncWork();
+    assert.equal(attempts, 1);
+    fixture.eventStore.close();
+  });
+});
+
+test("the same image hash after a different frame gets a fresh retry budget", async (t) => {
+  let now = 0;
+  const timers = createFakeTimers(() => now);
+  let attempts = 0;
+  const fixture = createFixture({
+    now: () => now,
+    timers,
+    async analyzeFrame() {
+      attempts += 1;
+      throw new Error("provider unavailable");
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+
+  fixture.session.sendVideo(Buffer.from("frame A"), "image/jpeg", 1);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  assert.equal(timers.pending, 1);
+  fixture.session.sendVideo(Buffer.from("frame B"), "image/jpeg", 2);
+  assert.equal(timers.pending, 0);
+  fixture.session.sendVideo(Buffer.from("frame A"), "image/jpeg", 3);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  assert.equal(attempts, 2);
+  assert.equal(fixture.session.latestFrame.frameSequence, 3);
+  assert.equal(timers.pending, 1);
+  now = 1_000;
+  timers.runDue();
+  await flushAsyncWork();
+  assert.equal(attempts, 3);
+  assert.equal(timers.pending, 0);
   fixture.session.close();
 });
 
@@ -1885,6 +2049,7 @@ function createFakeTimers(now) {
         }
       }
     },
+    get pending() { return entries.size; },
   };
 }
 
