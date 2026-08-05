@@ -66,8 +66,12 @@ export class AdaptiveVoiceActivityDetector {
     this.appendPreRoll(pcm);
 
     if (!this.open) {
-      this.noiseRms += (frameRms - this.noiseRms) * NOISE_SMOOTHING;
-      this.candidateMs = speechLike ? this.candidateMs + frameDurationMs : 0;
+      if (speechLike) {
+        this.candidateMs += frameDurationMs;
+      } else {
+        this.candidateMs = 0;
+        this.noiseRms += (frameRms - this.noiseRms) * NOISE_SMOOTHING;
+      }
       if (this.candidateMs < VAD_MIN_SPEECH_MS) return [];
 
       this.open = true;

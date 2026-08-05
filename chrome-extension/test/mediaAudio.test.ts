@@ -430,10 +430,29 @@ test("suppresses mic VAD while disabled and restarts it from a reset detector", 
   assert.ok(media.micPackets.length > 0);
 });
 
+test("opens and closes a microphone turn from production-sized worklet blocks", async () => {
+  let nowMs = 1_000;
+  const media = fixture({ now: () => nowMs });
+  await startBoth(media);
+  const microphone = sineFloats(300, 0.32, 220, 48_000);
+  for (let offset = 0; offset < microphone.length; offset += 960) {
+    media.context.worklets[1].emit(microphone.slice(offset, offset + 960));
+    nowMs += 20;
+  }
+  for (let index = 0; index < 30; index += 1) {
+    media.context.worklets[1].emit(new Float32Array(960));
+    nowMs += 20;
+  }
+
+  assert.deepEqual(media.userEvents, ["start", "end"]);
+  assert.ok(media.micPackets.length > 0);
+});
+
 test("feeds scheduled model playback into live mic echo rejection without blocking independent speech", async () => {
   const referencePcm = sinePcm(800, 0.2, 310, 48_000);
   const leakage = sineFloats(300, 0.09, 310, 48_000);
-  const echo = fixture({ now: () => 1_080 });
+  let echoNowMs = 1_080;
+  const echo = fixture({ now: () => echoNowMs });
   await startBoth(echo);
   echo.audio.pushPlaybackReference({
     source: "model",
@@ -441,10 +460,14 @@ test("feeds scheduled model playback into live mic echo rejection without blocki
     sampleRate: 48_000,
     firstSampleExtensionSessionMs: 1_000,
   });
-  echo.context.worklets[1].emit(leakage);
+  for (let offset = 0; offset < leakage.length; offset += 960) {
+    echo.context.worklets[1].emit(leakage.slice(offset, offset + 960));
+    echoNowMs += 20;
+  }
   assert.deepEqual(echo.userEvents, []);
 
-  const speech = fixture({ now: () => 1_080 });
+  let speechNowMs = 1_080;
+  const speech = fixture({ now: () => speechNowMs });
   await startBoth(speech);
   speech.audio.pushPlaybackReference({
     source: "model",
@@ -453,7 +476,11 @@ test("feeds scheduled model playback into live mic echo rejection without blocki
     firstSampleExtensionSessionMs: 1_000,
   });
   const user = sineFloats(300, 0.42, 760, 48_000);
-  speech.context.worklets[1].emit(Float32Array.from(leakage, (sample, index) => sample + user[index]));
+  const mixed = Float32Array.from(leakage, (sample, index) => sample + user[index]);
+  for (let offset = 0; offset < mixed.length; offset += 960) {
+    speech.context.worklets[1].emit(mixed.slice(offset, offset + 960));
+    speechNowMs += 20;
+  }
   assert.deepEqual(speech.userEvents, ["start"]);
 });
 

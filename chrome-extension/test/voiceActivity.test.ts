@@ -47,8 +47,9 @@ function pushMicrophoneFrames(
   gate: EchoAwareUserVadGate,
   samples: Int16Array,
   startMs: number,
+  frameMs = 40,
 ): VadEvent[] {
-  const frameLength = 640;
+  const frameLength = (frameMs * SAMPLE_RATE) / 1_000;
   const events: VadEvent[] = [];
   for (let offset = 0; offset < samples.length; offset += frameLength) {
     events.push(
@@ -84,6 +85,49 @@ test("opens after sustained speech with one pre-roll and closes after the hangov
   assert.ok(audio.reduce((total, event) => total + event.pcm.length, 0) >= 2_880);
   assert.equal(ends.length, 1);
   assert.ok(ends[0].timestampMs >= 1_300);
+});
+
+test("opens sustained speech at the production 20 ms worklet cadence", () => {
+  const detector = new AdaptiveVoiceActivityDetector();
+  const events = [
+    ...pushFrames(detector, pcm(500, 0.002), 0, 20),
+    ...pushFrames(detector, pcm(300, 0.32), 500, 20),
+    ...pushFrames(detector, new Int16Array(9_600), 800, 20),
+  ];
+  const starts = events.filter((event) => event.type === "speech_start");
+  const ends = events.filter((event) => event.type === "speech_end");
+
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].preRoll.reduce((total, frame) => total + frame.length, 0), 4_800);
+  assert.deepEqual(ends.map((event) => event.timestampMs), [1_300]);
+});
+
+test("keeps production-cadence ambient noise and short spikes closed", () => {
+  assert.equal(
+    pushFrames(new AdaptiveVoiceActivityDetector(), pcm(2_000, 0.002), 0, 20)
+      .some((event) => event.type === "speech_start"),
+    false,
+  );
+
+  const spikeDetector = new AdaptiveVoiceActivityDetector();
+  const spikeEvents = [
+    ...pushFrames(spikeDetector, pcm(500, 0.002), 0, 20),
+    ...pushFrames(spikeDetector, pcm(40, 0.6), 500, 20),
+    ...pushFrames(spikeDetector, pcm(400, 0.002), 540, 20),
+  ];
+  assert.equal(spikeEvents.some((event) => event.type === "speech_start"), false);
+});
+
+test("opens a natural rising speech onset at the production cadence", () => {
+  const detector = new AdaptiveVoiceActivityDetector();
+  const events = pushFrames(detector, pcm(500, 0.002), 0, 20);
+  let timestampMs = 500;
+  for (const amplitude of [0.02, 0.04, 0.08, 0.16, 0.24, 0.32, 0.32, 0.32]) {
+    events.push(...pushFrames(detector, pcm(20, amplitude), timestampMs, 20));
+    timestampMs += 20;
+  }
+
+  assert.equal(events.filter((event) => event.type === "speech_start").length, 1);
 });
 
 test("does not open a user turn for a 40 ms spike", () => {
@@ -122,7 +166,7 @@ for (const source of ["tab", "model"] as const) {
       firstSampleExtensionSessionMs: 0,
     });
 
-    const leakageEvents = pushMicrophoneFrames(leakageGate, leakage.slice(0, 4_800), 80);
+    const leakageEvents = pushMicrophoneFrames(leakageGate, leakage.slice(0, 4_800), 80, 20);
     assert.equal(leakageEvents.some((event) => event.type === "speech_start"), false);
 
     const bargeInGate = new EchoAwareUserVadGate();
@@ -135,7 +179,7 @@ for (const source of ["tab", "model"] as const) {
     const nearEndSpeech = pcm(300, 0.42, 760);
     const mixed = add(leakage.slice(0, nearEndSpeech.length), nearEndSpeech);
 
-    const bargeInEvents = pushMicrophoneFrames(bargeInGate, mixed, 80);
+    const bargeInEvents = pushMicrophoneFrames(bargeInGate, mixed, 80, 20);
     assert.equal(bargeInEvents.filter((event) => event.type === "speech_start").length, 1);
   });
 }
