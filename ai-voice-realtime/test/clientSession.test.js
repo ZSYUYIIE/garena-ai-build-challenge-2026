@@ -971,27 +971,23 @@ test("allows a serialized model audio message exactly at the 256 KiB budget", as
   assert.deepEqual(live.discarded, []);
 });
 
-test("closes a connection that exceeds the per-session frame rate", async (t) => {
-  const fixture = createFixture();
+test("tolerates one boundary frame burst but closes sustained frame flooding", async (t) => {
+  let now = 0;
+  const fixture = createFixture({ now: () => now });
   t.after(() => fixture.eventStore.close());
   await fixture.session.start();
+  hello(fixture, "absent");
 
-  for (const data of ["AQID", "BAUG", "BwgJ"]) {
-    fixture.browser.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "video_frame",
-          timestampSeconds: 1,
-          mimeType: "image/jpeg",
-          data,
-        })
-      ),
-      false
-    );
-  }
+  emitVideoFrame(fixture, 0, "first");
+  now = 999;
+  emitVideoFrame(fixture, 0.999, "boundary-jitter");
+  assert.deepEqual(fixture.browser.closed, []);
 
-  assert.equal(fixture.browser.closed[0]?.code, 1008);
+  emitVideoFrame(fixture, 1, "sustained-flood");
+  assert.deepEqual(fixture.browser.closed, [{
+    code: 1008,
+    reason: "Rate limit exceeded.",
+  }]);
 });
 
 test("keeps atomic visual analysis independent from an unavailable text answer", async (t) => {

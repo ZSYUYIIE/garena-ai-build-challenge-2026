@@ -3,25 +3,15 @@ import test from "node:test";
 
 import { SessionRateLimiter } from "../src/protocol/sessionRateLimiter.js";
 
-test("allows one frame per rolling second and rejects another in the window", () => {
+test("admits one boundary-jitter frame burst while preserving one-frame-per-second refill", () => {
   const limiter = new SessionRateLimiter();
 
-  assert.deepEqual(limiter.accept("video_frame", 0), {
-    allowed: true,
-    retryAfterMs: 0,
-  });
-  assert.deepEqual(limiter.accept("video_frame", 499), {
-    allowed: false,
-    retryAfterMs: 501,
-  });
-  assert.deepEqual(limiter.accept("video_frame", 999), {
-    allowed: false,
-    retryAfterMs: 1,
-  });
-  assert.deepEqual(limiter.accept("video_frame", 1000), {
-    allowed: true,
-    retryAfterMs: 0,
-  });
+  assert.equal(limiter.accept("video_frame", 0).allowed, true);
+  assert.equal(limiter.accept("video_frame", 999).allowed, true);
+  const rejected = limiter.accept("video_frame", 999);
+  assert.equal(rejected.allowed, false);
+  assert.equal(rejected.retryAfterMs >= 1 && rejected.retryAfterMs <= 2, true);
+  assert.equal(limiter.accept("video_frame", 1_999).allowed, true);
 });
 
 test("allows one typed question every two seconds", () => {
