@@ -5,6 +5,21 @@ import {
   analyzeVisionFrame,
   buildAnalysisPrompt,
 } from "../src/gemini/vision.js";
+import { visibleStateSchema } from "../src/gemini/visualState.js";
+
+test("visible state parsing collapses internal whitespace without changing display case", () => {
+  assert.deepEqual(visibleStateSchema.parse({
+    domain: "sports_score",
+    identity: "  Team A\n  vs   Team B  ",
+    value: "  2 - 1  ",
+    summary: " Team A\n\n leads   2 - 1. ",
+  }), {
+    domain: "sports_score",
+    identity: "Team A vs Team B",
+    value: "2 - 1",
+    summary: "Team A leads 2 - 1.",
+  });
+});
 
 test("buildAnalysisPrompt binds narration to the exact frame", () => {
   const prompt = buildAnalysisPrompt({

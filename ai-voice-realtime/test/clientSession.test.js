@@ -1564,6 +1564,16 @@ test("an aborted older visual result cannot re-enter cache after a newer null st
   await flushAsyncWork();
 
   assert.deepEqual(fixture.session.visibleStateCache.list(0), []);
+  results.push(Promise.resolve(visualEventAnalysis({
+    eventType: "score_changed",
+    currentState: scoreState("2-0", { identity: "Older Match" }),
+    basis: "state_transition",
+    previousState: scoreState("1-0", { identity: "Older Match" }),
+  })));
+  fixture.session.sendVideo(Buffer.from("unsupported later transition"), "image/jpeg", 3);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 0);
   fixture.session.close();
 });
 

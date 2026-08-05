@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+const displayStateTextSchema = (maximumLength) => z
+  .string()
+  .transform(collapseVisibleStateText)
+  .pipe(z.string().min(1).max(maximumLength));
+
 const snakeCaseStateDomainSchema = z
   .string()
   .trim()
@@ -13,9 +18,9 @@ const snakeCaseStateDomainSchema = z
 export const visibleStateSchema = z
   .object({
     domain: snakeCaseStateDomainSchema,
-    identity: z.string().trim().min(1).max(160),
-    value: z.string().trim().min(1).max(160),
-    summary: z.string().trim().min(1).max(300),
+    identity: displayStateTextSchema(160),
+    value: displayStateTextSchema(160),
+    summary: displayStateTextSchema(300),
   })
   .strict();
 
@@ -47,10 +52,14 @@ export function normalizeVisibleStateKey(state) {
 }
 
 function normalizeVisibleStateText(value) {
+  return collapseVisibleStateText(value)
+    .toLocaleLowerCase("en-US");
+}
+
+function collapseVisibleStateText(value) {
   return String(value ?? "")
     .trim()
-    .replace(/\s+/gu, " ")
-    .toLocaleLowerCase("en-US");
+    .replace(/\s+/gu, " ");
 }
 
 export class GroundedVisibleStateCache {

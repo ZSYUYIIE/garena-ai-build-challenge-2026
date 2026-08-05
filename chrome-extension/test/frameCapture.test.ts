@@ -69,25 +69,23 @@ test("uses a 1280x720 fallback for unavailable dimensions", () => {
   });
 });
 
-test("area averaging detects a compact raster change between sparse sample points", () => {
+test("area averaging detects compact raster changes over and between old sample points", () => {
   const width = 192;
   const height = 108;
   const beforePixels = solidRgba(width, height, 0);
-  const afterPixels = beforePixels.slice();
-  paintRect(afterPixels, width, {
-    x: 25,
-    y: 9,
-    width: 8,
-    height: 8,
-    luminance: 255,
-  });
-
   const before = createFrameSignature(beforePixels, width, height);
-  const after = createFrameSignature(afterPixels, width, height);
 
   assert.equal(before.columns, 96);
   assert.equal(before.rows, 54);
-  assert.equal(hasMeaningfulVisualChange(before, after), true);
+  for (const rect of [
+    { x: 1, y: 1, width: 4, height: 4, luminance: 255 },
+    { x: 3, y: 3, width: 3, height: 2, luminance: 255 },
+  ]) {
+    const afterPixels = beforePixels.slice();
+    paintRect(afterPixels, width, rect);
+    const after = createFrameSignature(afterPixels, width, height);
+    assert.equal(hasMeaningfulVisualChange(before, after), true);
+  }
 });
 
 test("admits exact global ratio and mean-difference boundaries", () => {
@@ -142,17 +140,36 @@ test("rejects isolated and sub-threshold noise but admits incompatible signature
 test("commits a signature only after frame delivery is retained", () => {
   const candidate = signature(100, 100, [[10, 24], [11, 24]]);
   let committed = null;
+  let attempts = 0;
 
   assert.throws(() => {
     committed = commitRetainedFrame(candidate, () => {
-      throw new Error("delivery failed");
+      attempts += 1;
+      throw new Error("conversion failed");
     }).signature;
-  }, /delivery failed/);
+  }, /conversion failed/);
   assert.equal(committed, null);
 
-  const delivery = commitRetainedFrame(candidate, () => "sent");
-  assert.equal(delivery.signature, candidate);
-  assert.equal(delivery.result, "sent");
+  const sentPayloads: string[] = [];
+  const immediate = commitRetainedFrame(candidate, () => {
+    attempts += 1;
+    sentPayloads.push("encoded-frame");
+    return "sent";
+  });
+  let queuedFrame: string | null = null;
+  const queued = commitRetainedFrame(candidate, () => {
+    attempts += 1;
+    queuedFrame = "encoded-frame";
+    return "queued";
+  });
+
+  assert.equal(immediate.signature, candidate);
+  assert.equal(immediate.result, "sent");
+  assert.equal(queued.signature, candidate);
+  assert.equal(queued.result, "queued");
+  assert.deepEqual(sentPayloads, ["encoded-frame"]);
+  assert.equal(queuedFrame, "encoded-frame");
+  assert.equal(attempts, 3);
 });
 
 test("queues a forced capture behind an unchanged routine capture without overlap", async () => {
