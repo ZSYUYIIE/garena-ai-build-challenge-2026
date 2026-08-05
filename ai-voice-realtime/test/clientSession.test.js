@@ -12,7 +12,11 @@ import { SpeechPolicy } from "../src/session/speechPolicy.js";
 import { GoogleSpeechTranscriber } from "../src/stt/googleSpeechTranscriber.js";
 
 test("acknowledges protocol v2 only after hello and validates every emitted server message", async (t) => {
-  const fixture = createFixture({ liveSessionFactory: () => new FakeLiveSession() });
+  const fixture = createFixture({
+    model: "vision-model",
+    liveModel: "live-model",
+    liveSessionFactory: () => new FakeLiveSession(),
+  });
   t.after(() => fixture.eventStore.close());
   await fixture.session.start();
 
@@ -23,7 +27,7 @@ test("acknowledges protocol v2 only after hello and validates every emitted serv
   assert.deepEqual(fixture.browser.messages[0], {
     type: "connected",
     protocolVersion: 2,
-    model: "test-model",
+    model: "live-model",
   });
   for (const message of fixture.browser.messages) {
     assert.deepEqual(parseServerOutput(message), message);
@@ -1374,6 +1378,8 @@ test("records a late atomic result but never offers it after a newer user turn",
 function createFixture({
   analyzeFrame = async () => suppressedAnalysis(),
   answerQuestion = async () => "The frame is visible.",
+  model = "test-model",
+  liveModel = "test-live-model",
   modelTurnTimeoutMs = 15_000,
   now,
   recentTabTranscript,
@@ -1386,7 +1392,8 @@ function createFixture({
   const eventStore = new EventStore();
   const session = new ClientSession(browser, eventStore, {
     apiKey: "test-key",
-    model: "test-model",
+    model,
+    liveModel,
     analyzeFrame,
     answerQuestion,
     modelTurnTimeoutMs,

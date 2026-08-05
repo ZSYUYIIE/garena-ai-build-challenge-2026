@@ -172,7 +172,7 @@ export class ClientSession {
     this.initialTabAudioState = message.tabAudioState;
     this.tabAudioState = message.tabAudioState;
     this.microphoneState = message.microphoneState;
-    this.sendBrowser({ type: "connected", protocolVersion: PROTOCOL_VERSION, model: this.model });
+    this.sendBrowser({ type: "connected", protocolVersion: PROTOCOL_VERSION, model: this.liveModel });
     this.sendBrowser({ type: "status", mode: "narration" });
     // Captured audio is unknown until the cloud stream proves it is clean.
     this.applySpeechActions(this.speechPolicy.setTabAudioState?.(
