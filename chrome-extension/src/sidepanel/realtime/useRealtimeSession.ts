@@ -21,16 +21,19 @@ import {
   type RealtimeMediaState,
 } from "./mediaAudio";
 import {
+  createMicrophoneTurnOwnership,
   createSessionGenerationGuard,
   createSessionResourceLifecycle,
   shouldSyncIdleGuidance,
   type SessionResourceLifecycle,
+  type MicrophoneTurnOwnership,
 } from "./sessionLifecycle";
 import { SpeechCoordinator } from "./speechCoordinator";
 import {
   canAskRealtime,
   dispatchTypedQuestion,
   questionAvailabilityFor,
+  retireMicrophoneBeforeTypedAdmission,
   retryableAnswerNotice,
 } from "./typedQuestion";
 import { useCaptureTarget } from "./useCaptureTarget";
@@ -71,6 +74,10 @@ type VoiceTurn = {
   bytes: number;
 };
 type LatestFrame = { timestampSeconds: number; data: string };
+type RetireMicrophoneTurn = (
+  turnId: string | undefined,
+  options: { notifyBackend: boolean; failCoordinator?: boolean; reason?: string },
+) => "none" | "retired" | "transport_failed";
 
 export function delay(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -121,7 +128,8 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const settlingTurnRef = useRef<TurnRoleState | null>(null);
   const speakingTurnIdRef = useRef<string | null>(null);
   const descriptionTurnIdRef = useRef<string | null>(null);
-  const voiceTurnRef = useRef<VoiceTurn | null>(null);
+  const microphoneTurnOwnershipRef = useRef<MicrophoneTurnOwnership<VoiceTurn> | null>(null);
+  const retireMicrophoneTurnRef = useRef<RetireMicrophoneTurn | null>(null);
   const nextVoiceTurnIdRef = useRef<string | null>(null);
   const tabDiscontinuityPendingRef = useRef(false);
   const settlingTurnTimerRef = useRef<number | null>(null);
@@ -160,6 +168,9 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     settlingTurnRef.current = null;
     speakingTurnIdRef.current = null;
     descriptionTurnIdRef.current = null;
+    microphoneTurnOwnershipRef.current?.clear();
+    microphoneTurnOwnershipRef.current = null;
+    retireMicrophoneTurnRef.current = null;
     publishLiveProviderState("closed");
     publishVoiceStatus({
       sessionActive: false,
@@ -193,6 +204,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     message: Extract<ServerMessage, { type: "turn_complete" }>,
   ) => {
     speechCoordinatorRef.current?.turnComplete(message);
+    retireMicrophoneTurnRef.current?.(message.turnId, { notifyBackend: false });
     const settledActiveTurn = activeTurnRef.current?.turnId === message.turnId;
     const settledDescriptionTurn = descriptionTurnOwnsCompletion(
       descriptionTurnIdRef.current,
@@ -247,14 +259,6 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       frameTimerRef.current = null;
       settlingTurnTimerRef.current = null;
     });
-    resourceLifecycle.register(() => {
-      if (voiceTurnRef.current) {
-        voiceTurnRef.current.packets = [];
-        voiceTurnRef.current.bytes = 0;
-      }
-      voiceTurnRef.current = null;
-      nextVoiceTurnIdRef.current = null;
-    });
     const safelySend = <T,>(send: () => T): T | false => {
       try { return send(); } catch { return false; }
     };
@@ -271,6 +275,16 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         return id;
       },
     );
+    const microphoneTurns = createMicrophoneTurnOwnership<VoiceTurn>();
+    microphoneTurnOwnershipRef.current = microphoneTurns;
+    resourceLifecycle.register(() => {
+      microphoneTurns.clear();
+      if (microphoneTurnOwnershipRef.current === microphoneTurns) {
+        microphoneTurnOwnershipRef.current = null;
+        retireMicrophoneTurnRef.current = null;
+      }
+      nextVoiceTurnIdRef.current = null;
+    });
     const mediaAudio = new RealtimeMediaAudio({
       onStateChange: (nextState) => {
         callbackGate.run(() => {
@@ -302,21 +316,28 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     const contextTimeToExtensionSessionMs = createContextTimeToExtensionSessionMs(audioClockOrigin);
     publishVoiceStatus({ sessionActive: true, microphoneState: "pending" });
 
-    const terminateMicrophoneTurn = (turnId: string, reason: string, failCoordinator: boolean) => {
-      const turn = voiceTurnRef.current;
-      if (!turn || turn.turnId !== turnId) return;
+    const retireMicrophoneTurn: RetireMicrophoneTurn = (turnId, {
+      notifyBackend,
+      failCoordinator = false,
+      reason = "",
+    }) => {
+      const turn = microphoneTurns.retire(turnId);
+      if (!turn) return "none";
       const websocket = websocketRef.current;
-      turn.packets = [];
-      turn.bytes = 0;
-      voiceTurnRef.current = null;
       nextVoiceTurnIdRef.current = null;
       mediaAudio.setUserActivityEnabled(false);
-      if (failCoordinator) speechCoordinatorRef.current?.failTurn(turnId, reason);
-      if (websocket?.readyState === WebSocket.OPEN && websocket.bufferedAmount < 32 * 1024) {
-        safelySend(() => protocol.cancelUserActivity());
+      if (failCoordinator) speechCoordinatorRef.current?.failTurn(turn.turnId, reason);
+      let transportFailed = false;
+      if (notifyBackend) {
+        if (websocket?.readyState === WebSocket.OPEN && websocket.bufferedAmount < 32 * 1024) {
+          transportFailed = safelySend(() => protocol.cancelUserActivity()) === false;
+        } else {
+          transportFailed = true;
+        }
       } else {
-        websocket?.close(1008, "Microphone audio could not be delivered safely");
+        protocol.forgetUserActivity();
       }
+      if (transportFailed) websocket?.close(1008, "Microphone audio could not be delivered safely");
       mediaAudio.setUserActivityEnabled(
         voiceStateRef.current.helloAccepted
           && voiceStateRef.current.liveReady
@@ -324,9 +345,11 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           && mediaState.microphoneState === "ready",
       );
       publishVoiceStatus({ userSpeaking: false });
+      return transportFailed ? "transport_failed" : "retired";
     };
+    retireMicrophoneTurnRef.current = retireMicrophoneTurn;
     const closeUnsafeMicrophoneTurn = (turnId: string, reason: string) => {
-      terminateMicrophoneTurn(turnId, reason, true);
+      retireMicrophoneTurn(turnId, { notifyBackend: true, failCoordinator: true, reason });
     };
     const sendMicrophonePacket = (turn: VoiceTurn, packet: PendingPcm): boolean => {
       const websocket = websocketRef.current;
@@ -357,7 +380,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       setTabGain: (gain, fadeMs) => mediaAudio.setTabGain(gain, fadeMs),
       onFailTurn: (turnId, reason) => {
         callbackGate.run(() => {
-          terminateMicrophoneTurn(turnId, reason, false);
+          retireMicrophoneTurn(turnId, { notifyBackend: true, reason });
           setError(reason);
         });
       },
@@ -419,7 +442,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     const microphonePromise = mediaAudio.startMicrophone({
       onMicPacket: (pcm, timestampMs) => {
         callbackGate.run(() => {
-          const turn = voiceTurnRef.current;
+          const turn = microphoneTurns.current();
           if (!turn) return;
           const packet = { pcm, timestampMs };
           if (turn.pending) {
@@ -436,7 +459,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         const turnId = crypto.randomUUID();
         nextVoiceTurnIdRef.current = turnId;
         const turn: VoiceTurn = { turnId, pending: true, ended: false, packets: [], bytes: 0 };
-        voiceTurnRef.current = turn;
+        microphoneTurns.claim(turn);
         activeTurnRef.current = createTurnRoleState(turnId);
         settlingTurnRef.current = null;
         if (settlingTurnTimerRef.current !== null) {
@@ -448,7 +471,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         publishVoiceStatus({ userSpeaking: true, geminiSpeaking: false });
         void (async () => {
           await Promise.race([captureFrame({ force: true }), delay(FORCED_FRAME_DEADLINE_MS)]);
-          if (!isCurrent() || voiceTurnRef.current !== turn) return;
+          if (!isCurrent() || !microphoneTurns.isCurrent(turn)) return;
           const startedTurnId = safelySend(() => protocol.startUserActivity());
           if (startedTurnId !== turnId) {
             closeUnsafeMicrophoneTurn(turnId, "Could not start the microphone turn.");
@@ -469,7 +492,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       },
       onUserActivityEnd: () => {
         callbackGate.run(() => {
-          const turn = voiceTurnRef.current;
+          const turn = microphoneTurns.current();
           if (!turn) return;
           turn.ended = true;
           if (turn.pending) return;
@@ -583,6 +606,9 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             break;
           case "provider_health":
             if (message.provider === "live") {
+              if (message.state !== "ready") {
+                retireMicrophoneTurn(undefined, { notifyBackend: false });
+              }
               publishLiveProviderState(message.state);
               const ready = message.state === "ready";
               const degraded = message.state === "degraded" || message.state === "closed";
@@ -707,43 +733,50 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       voiceStateRef.current.helloAccepted,
       liveProviderStateRef.current,
     )) return false;
-    const turnId = crypto.randomUUID();
-    activeTurnRef.current = createTurnRoleState(turnId, { userFinished: true });
-    settlingTurnRef.current = null;
-    if (settlingTurnTimerRef.current !== null) {
-      window.clearTimeout(settlingTurnTimerRef.current);
-      settlingTurnTimerRef.current = null;
-    }
-    coordinator.typedQuestionStarted(turnId);
-    setError(null);
-    speakingTurnIdRef.current = null;
-    publishVoiceStatus({ geminiSpeaking: false });
-    setMessages((current) => updateTurnChatMessages(current, { turnId, role: "user", text: question, finished: true }));
-    void dispatchTypedQuestion({
-      waitForFrame: () => Promise.race([
-        captureFrameRef.current?.({ force: true }) ?? Promise.resolve(),
-        delay(FORCED_FRAME_DEADLINE_MS),
-      ]),
-      isReady: () => (
-        websocketRef.current === websocket
-        && websocket.readyState === WebSocket.OPEN
-        && speechCoordinatorRef.current === coordinator
-        && canAskRealtime(
-          statusRef.current,
-          voiceStateRef.current.helloAccepted,
-          liveProviderStateRef.current,
-        )
-      ),
-      send: () => websocket.send(JSON.stringify({ type: "typed_question", turnId, text: question })),
-      onUnavailable: () => settleTurnComplete({
-        type: "turn_complete",
-        turnId,
-        mode: "answer",
-        interrupted: true,
-        retryable: true,
-      }),
-    });
-    return true;
+    return retireMicrophoneBeforeTypedAdmission(
+      () => retireMicrophoneTurnRef.current?.(undefined, {
+        notifyBackend: true,
+        reason: "Typed question replaced the microphone turn.",
+      }) ?? "none",
+      () => {
+        const turnId = crypto.randomUUID();
+        activeTurnRef.current = createTurnRoleState(turnId, { userFinished: true });
+        settlingTurnRef.current = null;
+        if (settlingTurnTimerRef.current !== null) {
+          window.clearTimeout(settlingTurnTimerRef.current);
+          settlingTurnTimerRef.current = null;
+        }
+        coordinator.typedQuestionStarted(turnId);
+        setError(null);
+        speakingTurnIdRef.current = null;
+        publishVoiceStatus({ geminiSpeaking: false });
+        setMessages((current) => updateTurnChatMessages(current, { turnId, role: "user", text: question, finished: true }));
+        void dispatchTypedQuestion({
+          waitForFrame: () => Promise.race([
+            captureFrameRef.current?.({ force: true }) ?? Promise.resolve(),
+            delay(FORCED_FRAME_DEADLINE_MS),
+          ]),
+          isReady: () => (
+            websocketRef.current === websocket
+            && websocket.readyState === WebSocket.OPEN
+            && speechCoordinatorRef.current === coordinator
+            && canAskRealtime(
+              statusRef.current,
+              voiceStateRef.current.helloAccepted,
+              liveProviderStateRef.current,
+            )
+          ),
+          send: () => websocket.send(JSON.stringify({ type: "typed_question", turnId, text: question })),
+          onUnavailable: () => settleTurnComplete({
+            type: "turn_complete",
+            turnId,
+            mode: "answer",
+            interrupted: true,
+            retryable: true,
+          }),
+        });
+      },
+    );
   }, [publishVoiceStatus, settleTurnComplete]);
 
   useEffect(() => {

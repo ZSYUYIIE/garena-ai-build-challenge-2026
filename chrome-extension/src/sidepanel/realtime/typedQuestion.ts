@@ -1,6 +1,7 @@
 import type { LiveProviderState, RealtimeStatus, TurnMode, VoiceStatus } from "./types.ts";
 
 export type QuestionAvailability = "stopped" | "connecting" | "ready" | "degraded";
+export type MicrophoneRetirementResult = "none" | "retired" | "transport_failed";
 
 export function questionAvailabilityFor(
   status: RealtimeStatus,
@@ -61,6 +62,15 @@ export function retryableAnswerNotice(
   return settledActiveTurn && mode === "answer" && retryable
     ? "Gemini could not complete this answer. Ask again when Live is ready."
     : null;
+}
+
+export function retireMicrophoneBeforeTypedAdmission(
+  retireMicrophone: () => MicrophoneRetirementResult,
+  admitTypedTurn: () => void,
+): boolean {
+  if (retireMicrophone() === "transport_failed") return false;
+  admitTypedTurn();
+  return true;
 }
 
 export async function dispatchTypedQuestion(options: {

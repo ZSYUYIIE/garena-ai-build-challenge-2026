@@ -658,6 +658,32 @@ test("terminally ends one microphone activity and permits a later fresh activity
   assert.equal(JSON.parse(sent.filter((value): value is string => typeof value === "string").at(-2)!).type, "user_activity_end");
 });
 
+test("forgets a backend-completed microphone activity without sending a duplicate boundary", () => {
+  const sent: (string | ArrayBuffer)[] = [];
+  const turnIds = [
+    "123e4567-e89b-42d3-a456-426614174000",
+    "123e4567-e89b-42d3-a456-426614174001",
+  ];
+  const protocol = createMediaSocketProtocol(
+    (value) => sent.push(value),
+    () => turnIds.shift()!,
+  );
+  protocol.open({ tabAudioState: "captured", microphoneState: "ready" });
+  assert.equal(protocol.startUserActivity(), "123e4567-e89b-42d3-a456-426614174000");
+  assert.equal(protocol.forgetUserActivity(), "123e4567-e89b-42d3-a456-426614174000");
+  assert.equal(protocol.sendMicrophone(new Int16Array([1, 2]), 0), false);
+  assert.equal(protocol.startUserActivity(), "123e4567-e89b-42d3-a456-426614174001");
+
+  assert.deepEqual(
+    sent.filter((value): value is string => typeof value === "string").map(JSON.parse),
+    [
+      { type: "session_hello", protocolVersion: 2, tabAudioState: "captured", microphoneState: "ready" },
+      { type: "user_activity_start", turnId: "123e4567-e89b-42d3-a456-426614174000" },
+      { type: "user_activity_start", turnId: "123e4567-e89b-42d3-a456-426614174001" },
+    ],
+  );
+});
+
 test("sends tab activity and track-ended discontinuity as distinct commands", () => {
   const sent: string[] = [];
   const protocol = createMediaSocketProtocol((value) => sent.push(value as string), crypto.randomUUID);

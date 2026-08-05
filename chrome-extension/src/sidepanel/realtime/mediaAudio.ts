@@ -143,6 +143,12 @@ export function createMediaSocketProtocol(
       activeTurnId = null;
       return turnId;
     },
+    forgetUserActivity() {
+      if (!activeTurnId) return null;
+      const turnId = activeTurnId;
+      activeTurnId = null;
+      return turnId;
+    },
   };
 }
 

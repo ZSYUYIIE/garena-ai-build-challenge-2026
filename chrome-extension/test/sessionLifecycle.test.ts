@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createMicrophoneTurnOwnership,
   createSessionCallbackGate,
   createRevisionGuard,
   createSessionResourceLifecycle,
@@ -36,6 +37,71 @@ test("invalidates the current startup when the session stops", () => {
   sessions.invalidate();
 
   assert.equal(sessions.isCurrent(startup), false);
+});
+
+test("retires microphone ownership before typed admission and rejects every stale callback", () => {
+  const ownership = createMicrophoneTurnOwnership<{
+    turnId: string;
+    packets: Int16Array[];
+    bytes: number;
+  }>();
+  const first = {
+    turnId: "11111111-1111-4111-8111-111111111111",
+    packets: [new Int16Array([1, 2])],
+    bytes: 4,
+  };
+  const fresh = {
+    turnId: "22222222-2222-4222-8222-222222222222",
+    packets: [] as Int16Array[],
+    bytes: 0,
+  };
+  const transitions: string[] = [];
+
+  ownership.claim(first);
+  const retired = ownership.retire(first.turnId);
+  if (retired) transitions.push(`retire:${retired.turnId}`);
+  transitions.push("typed:admitted");
+
+  assert.strictEqual(retired, first);
+  assert.deepEqual(first.packets, []);
+  assert.equal(first.bytes, 0);
+  assert.equal(ownership.isCurrent(first), false);
+  assert.equal(ownership.current(), null);
+  assert.deepEqual(transitions, [
+    "retire:11111111-1111-4111-8111-111111111111",
+    "typed:admitted",
+  ]);
+
+  ownership.claim(fresh);
+  assert.equal(ownership.isCurrent(first), false);
+  assert.equal(ownership.isCurrent(fresh), true);
+});
+
+test("matching backend completion clears only the current microphone owner", () => {
+  const ownership = createMicrophoneTurnOwnership<{
+    turnId: string;
+    packets: Int16Array[];
+    bytes: number;
+  }>();
+  const first = {
+    turnId: "33333333-3333-4333-8333-333333333333",
+    packets: [new Int16Array([3, 4])],
+    bytes: 4,
+  };
+  const replacement = {
+    turnId: "44444444-4444-4444-8444-444444444444",
+    packets: [] as Int16Array[],
+    bytes: 0,
+  };
+
+  ownership.claim(first);
+  assert.equal(ownership.retire("stale-turn"), null);
+  assert.equal(ownership.isCurrent(first), true);
+  assert.strictEqual(ownership.retire(first.turnId), first);
+  ownership.claim(replacement);
+  assert.equal(ownership.isCurrent(replacement), true);
+  assert.equal(ownership.retire(first.turnId), null);
+  assert.equal(ownership.isCurrent(replacement), true);
 });
 
 test("rejects late media callbacks from a closed generation after replacement", () => {

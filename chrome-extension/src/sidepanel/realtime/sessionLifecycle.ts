@@ -4,6 +4,55 @@ export type SessionGenerationGuard = {
   isCurrent: (generation: number) => boolean;
 };
 
+export type MicrophoneTurnOwnership<T extends {
+  turnId: string;
+  packets: unknown[];
+  bytes: number;
+}> = {
+  claim: (turn: T) => void;
+  current: () => T | null;
+  isCurrent: (turn: T) => boolean;
+  retire: (turnId?: string) => T | null;
+  clear: () => void;
+};
+
+/** Owns one local microphone turn and invalidates queued callbacks atomically. */
+export function createMicrophoneTurnOwnership<T extends {
+  turnId: string;
+  packets: unknown[];
+  bytes: number;
+}>(): MicrophoneTurnOwnership<T> {
+  let current: T | null = null;
+  const clearBuffers = (turn: T) => {
+    turn.packets = [];
+    turn.bytes = 0;
+  };
+
+  return {
+    claim(turn) {
+      if (current && current !== turn) clearBuffers(current);
+      current = turn;
+    },
+    current() {
+      return current;
+    },
+    isCurrent(turn) {
+      return current === turn;
+    },
+    retire(turnId) {
+      if (!current || (turnId !== undefined && current.turnId !== turnId)) return null;
+      const retired = current;
+      current = null;
+      clearBuffers(retired);
+      return retired;
+    },
+    clear() {
+      if (current) clearBuffers(current);
+      current = null;
+    },
+  };
+}
+
 export function createSessionGenerationGuard(): SessionGenerationGuard {
   let currentGeneration = 0;
 

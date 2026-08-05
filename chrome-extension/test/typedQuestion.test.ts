@@ -8,6 +8,7 @@ import {
   draftAfterAdmission,
   questionAvailabilityFor,
   questionCopyFor,
+  retireMicrophoneBeforeTypedAdmission,
   retryableAnswerNotice,
   voiceQuestionStatusFor,
 } from "../src/sidepanel/realtime/typedQuestion.ts";
@@ -84,4 +85,21 @@ test("does not send after readiness disappears during frame capture", async () =
   assert.equal(await dispatch, false);
   assert.equal(sendCalls, 0);
   assert.equal(unavailableCalls, 1);
+});
+
+test("retires microphone transport before admitting a typed turn", () => {
+  const order: string[] = [];
+
+  assert.equal(retireMicrophoneBeforeTypedAdmission(
+    () => { order.push("microphone:end"); return "retired"; },
+    () => { order.push("typed:admit"); },
+  ), true);
+  assert.deepEqual(order, ["microphone:end", "typed:admit"]);
+
+  order.length = 0;
+  assert.equal(retireMicrophoneBeforeTypedAdmission(
+    () => { order.push("microphone:failed"); return "transport_failed"; },
+    () => { order.push("typed:admit"); },
+  ), false);
+  assert.deepEqual(order, ["microphone:failed"]);
 });
