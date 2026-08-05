@@ -1,7 +1,11 @@
-import type { ModelAudioChunk, PlaybackMode } from "./modelAudioPlayback.ts";
+import type {
+  ModelAudioChunk,
+  ModelAudioEnqueueResult,
+  PlaybackMode,
+} from "./modelAudioPlayback.ts";
 
 export type PlaybackController = {
-  enqueue(chunk: ModelAudioChunk): "accepted" | "overflow";
+  enqueue(chunk: ModelAudioChunk): ModelAudioEnqueueResult;
   complete(turnId: string): void;
   clear(turnId?: string): void;
   stop(): void;
@@ -100,6 +104,10 @@ export class SpeechCoordinator {
       const result = this.options.playback.enqueue(chunk);
       if (result === "overflow") {
         this.failTurn(chunk.turnId, "Model audio queue overflow.");
+        return false;
+      }
+      if (result === "unavailable") {
+        this.failTurn(chunk.turnId, "Model audio playback unavailable.");
         return false;
       }
     } catch {

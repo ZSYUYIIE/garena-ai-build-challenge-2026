@@ -159,15 +159,96 @@ test("opens an audio-only manual Live session and sends only realtime microphone
     { activityStart: {} },
     { audio: { data: "AQI=", mimeType: "audio/pcm;rate=16000" } },
     { activityEnd: {} },
-    { activityStart: {} },
     { text: "What happened?" },
-    { activityEnd: {} },
-    { activityStart: {} },
     { text: "APP_NARRATION\nGoal scored." },
-    { activityEnd: {} },
   ]);
   assert.equal(typeof h.live.sendTabPcm, "undefined");
   assert.deepEqual(connection.clientContent, []);
+});
+
+test("sends typed text without microphone activity boundaries", async () => {
+  const connection = new FakeLiveConnection();
+  const h = makeHarness({ connections: [connection] });
+  await h.live.start();
+
+  h.live.askTyped("typed-direct", "What happened?");
+  await flush();
+
+  assert.deepEqual(connection.realtimeInputs, [
+    { text: "What happened?" },
+  ]);
+});
+
+test("moves output transcript ownership forward when Live completes without a finished transcript flag", async () => {
+  const connection = new FakeLiveConnection();
+  const h = makeHarness({ connections: [connection] });
+  await h.live.start();
+
+  h.live.askTyped("turn-one", "First?");
+  h.callbacks[0].onmessage({ serverContent: {
+    modelTurn: { parts: [{ inlineData: { data: "one", mimeType: "audio/pcm;rate=24000" } }] },
+    outputTranscription: { text: "first answer", finished: false },
+    turnComplete: true,
+  } });
+  h.live.askTyped("turn-two", "Second?");
+  h.callbacks[0].onmessage({ serverContent: {
+    modelTurn: { parts: [{ inlineData: { data: "two", mimeType: "audio/pcm;rate=24000" } }] },
+    outputTranscription: { text: "second answer", finished: false },
+    turnComplete: true,
+  } });
+
+  assert.deepEqual(h.outputs.map(({ turnId, text }) => ({ turnId, text })), [
+    { turnId: "turn-one", text: "first answer" },
+    { turnId: "turn-two", text: "second answer" },
+  ]);
+});
+
+test("drops ambiguous late transcript-only output but accepts current output paired with model audio", async () => {
+  const connection = new FakeLiveConnection();
+  const h = makeHarness({ connections: [connection] });
+  await h.live.start();
+
+  h.live.askTyped("old-turn", "Old?");
+  h.callbacks[0].onmessage({ serverContent: {
+    modelTurn: { parts: [{ inlineData: { data: "old", mimeType: "audio/pcm;rate=24000" } }] },
+    outputTranscription: { text: "old answer", finished: false },
+    turnComplete: true,
+  } });
+  h.live.askTyped("new-turn", "New?");
+  h.callbacks[0].onmessage({ serverContent: {
+    outputTranscription: { text: "ambiguous late text", finished: false },
+  } });
+  h.callbacks[0].onmessage({ serverContent: {
+    modelTurn: { parts: [{ inlineData: { data: "new", mimeType: "audio/pcm;rate=24000" } }] },
+    outputTranscription: { text: "new answer", finished: false },
+    turnComplete: true,
+  } });
+
+  assert.deepEqual(h.outputs.map(({ turnId, text }) => ({ turnId, text })), [
+    { turnId: "old-turn", text: "old answer" },
+    { turnId: "new-turn", text: "new answer" },
+  ]);
+  assert.equal(h.health.some((event) => event.state === "telemetry" && /ambiguous output/i.test(event.message)), true);
+});
+
+test("accepts a late output transcript when only one settling turn can own it", async () => {
+  const connection = new FakeLiveConnection();
+  const h = makeHarness({ connections: [connection] });
+  await h.live.start();
+
+  h.live.askTyped("settling-output", "Question?");
+  h.callbacks[0].onmessage({ serverContent: { turnComplete: true } });
+  h.callbacks[0].onmessage({ serverContent: {
+    outputTranscription: { text: "late answer", finished: true },
+  } });
+
+  assert.deepEqual(h.outputs, [{
+    turnId: "settling-output",
+    mode: "answer",
+    text: "late answer",
+    finished: true,
+    languageCode: undefined,
+  }]);
 });
 
 test("tags every multipart response with its authorized owner and keeps old output ahead of a barge-in", async () => {
@@ -195,7 +276,7 @@ test("tags every multipart response with its authorized owner and keeps old outp
 
   h.callbacks[0].onmessage({ serverContent: { outputTranscription: { text: "old final", finished: true } } });
   h.callbacks[0].onmessage({ serverContent: { modelTurn: { parts: [{ inlineData: { data: "new-a", mimeType: "audio/pcm;rate=24000" } }] } } });
-  assert.deepEqual(h.outputs.at(-1), { turnId: "old", mode: "answer", text: "old final", finished: true, languageCode: undefined });
+  assert.deepEqual(h.outputs.at(-1), { turnId: "old", mode: "answer", text: "old answer", finished: false, languageCode: "en" });
   assert.deepEqual(h.audio.at(-1), { turnId: "new", mode: "answer", data: "new-a", mimeType: "audio/pcm;rate=24000" });
 });
 
@@ -423,9 +504,7 @@ test("completes a typed answer once on GoAway and never replays or transfers its
   } });
 
   assert.deepEqual(replacement.realtimeInputs, [
-    { activityStart: {} },
     { text: "What changed?" },
-    { activityEnd: {} },
   ]);
   assert.deepEqual(h.audio, [{ turnId: "typed-fresh", mode: "answer", data: "fresh", mimeType: "audio/pcm;rate=24000" }]);
   assert.deepEqual(h.completions, [
@@ -434,7 +513,7 @@ test("completes a typed answer once on GoAway and never replays or transfers its
   ]);
 });
 
-for (const rejectAt of [1, 2, 3]) {
+for (const rejectAt of [1]) {
   test(`retires a typed turn when outbound write ${rejectAt} rejects`, async () => {
     const rejecting = new RejectingLiveConnection(rejectAt);
     const replacement = new FakeLiveConnection();
@@ -468,9 +547,7 @@ for (const rejectAt of [1, 2, 3]) {
       turnComplete: true,
     } });
     assert.deepEqual(replacement.realtimeInputs, [
-      { activityStart: {} },
       { text: "What changed?" },
-      { activityEnd: {} },
     ]);
     assert.deepEqual(h.audio, [{
       turnId: "fresh", mode: "answer", data: "fresh", mimeType: "audio/pcm;rate=24000",
@@ -478,7 +555,7 @@ for (const rejectAt of [1, 2, 3]) {
   });
 }
 
-for (const rejectAt of [1, 2, 3]) {
+for (const rejectAt of [1]) {
   test(`retires narration when outbound write ${rejectAt} rejects`, async () => {
     const rejecting = new RejectingLiveConnection(rejectAt);
     const replacement = new FakeLiveConnection();
@@ -574,9 +651,7 @@ for (const [label, admit] of [
     h.live.askTyped("fresh-after-reconnect", "Ready?");
     await flush();
     assert.deepEqual(replacement.realtimeInputs, [
-      { activityStart: {} },
       { text: "Ready?" },
-      { activityEnd: {} },
     ]);
   });
 }
@@ -781,9 +856,7 @@ test("hard reconnects once after a rejected video write and sends only the safe 
   h.live.askTyped("fresh-after-video-recovery", "Ready now?");
   await flush();
   assert.deepEqual(replacement.realtimeInputs.slice(1), [
-    { activityStart: {} },
     { text: "Ready now?" },
-    { activityEnd: {} },
   ]);
 });
 

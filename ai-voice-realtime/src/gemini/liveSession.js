@@ -272,11 +272,9 @@ export class GeminiLiveSession {
   }
 
   #sendRealtimeTurn(turn, text) {
-    this.#enqueueOwnedTurn(turn, async (generation) => {
-      await this.#sendRealtime({ activityStart: {} }, generation);
-      await this.#sendRealtime({ text }, generation);
-      await this.#sendRealtime({ activityEnd: {} }, generation);
-    });
+    this.#enqueueOwnedTurn(turn, (generation) => (
+      this.#sendRealtime({ text }, generation)
+    ));
   }
 
   #enqueueOwnedTurn(turn, operation) {
@@ -428,11 +426,14 @@ export class GeminiLiveSession {
   }
 
   #handleServerContent(content) {
+    const responseTurn = this.responseOwners[0] ?? null;
     const parts = content.modelTurn?.parts ?? content.model_turn?.parts ?? [];
+    let hasModelAudio = false;
     for (const part of parts) {
       const inlineData = part?.inlineData ?? part?.inline_data;
       if (!inlineData) continue;
-      const turn = this.responseOwners[0];
+      hasModelAudio = true;
+      const turn = responseTurn;
       if (!turn) {
         this.#telemetry("Dropped unowned Live model audio.");
         continue;
@@ -444,18 +445,23 @@ export class GeminiLiveSession {
     }
 
     this.#forwardTranscript("input", content.inputTranscription ?? content.input_transcription);
-    this.#forwardTranscript("output", content.outputTranscription ?? content.output_transcription);
+    const responseComplete = content.turnComplete === true || content.turn_complete === true;
+    this.#forwardTranscript(
+      "output",
+      content.outputTranscription ?? content.output_transcription,
+      responseTurn && (hasModelAudio || responseComplete) ? responseTurn : null,
+    );
 
-    if (content.turnComplete === true || content.turn_complete === true) {
+    if (responseComplete) {
       this.#completeResponse(content.interrupted === true);
     }
   }
 
-  #forwardTranscript(kind, raw) {
+  #forwardTranscript(kind, raw, preferredTurn = null) {
     const chunk = readTranscription(raw);
     if (!chunk) return;
     const queue = kind === "input" ? this.inputOwners : this.outputOwners;
-    const turn = this.#transcriptOwner(queue, kind, chunk.finished);
+    const turn = this.#transcriptOwner(queue, kind, chunk.finished, preferredTurn);
     if (!turn) return;
     if (!turn.discarded && !turn.failed) {
       const event = kind === "input"
@@ -466,21 +472,29 @@ export class GeminiLiveSession {
     }
     if (chunk.finished) {
       if (kind === "input") turn.inputTranscriptPending = false;
-      if (queue[0] === turn) queue.shift();
+      const index = queue.indexOf(turn);
+      if (index >= 0) queue.splice(index, 1);
     }
   }
 
-  #transcriptOwner(queue, kind, finished) {
+  #transcriptOwner(queue, kind, finished, preferredTurn = null) {
     this.#pruneSettling();
     const candidates = [...this.settling.values()].filter((turn) => (
       !turn.discarded
       && !turn.failed
       && (kind !== "input" || turn.inputTranscriptPending)
     ));
+    if (preferredTurn && !preferredTurn.discarded && !preferredTurn.failed) {
+      return preferredTurn;
+    }
     if (queue.length > 0) {
       if (kind === "input" && candidates.length > 0) {
         if (finished) candidates[0].inputTranscriptPending = false;
         this.#telemetry("Dropped ambiguous input transcript.");
+        return null;
+      }
+      if (kind === "output" && candidates.length > 0) {
+        this.#telemetry("Dropped ambiguous output transcript.");
         return null;
       }
       return queue[0];
@@ -500,6 +514,7 @@ export class GeminiLiveSession {
       return;
     }
     this.inputOwners = this.inputOwners.filter((owner) => owner !== turn);
+    this.outputOwners = this.outputOwners.filter((owner) => owner !== turn);
     turn.completed = true;
     turn.completedAt = this.now();
     this.#addSettling(turn);

@@ -8,6 +8,8 @@ export type ModelAudioChunk = {
   mimeType: string;
 };
 
+export type ModelAudioEnqueueResult = "accepted" | "overflow" | "unavailable";
+
 export type ModelAudioPlaybackOptions = {
   audioContext: AudioContext;
   contextTimeToExtensionSessionMs: (contextTime: number) => number;
@@ -31,7 +33,7 @@ type TurnQueue = {
   sources: Set<ScheduledSource>;
 };
 
-const MAX_QUEUED_MS = 5_000;
+const MAX_QUEUED_MS = 60_000;
 const MAX_RETIRED_TURNS = 128;
 const PCM_MIME = /^audio\/pcm;rate=([1-9][0-9]*)$/;
 
@@ -69,7 +71,7 @@ export class ModelAudioPlayback {
     };
   }
 
-  enqueue(chunk: ModelAudioChunk): "accepted" | "overflow" {
+  enqueue(chunk: ModelAudioChunk): ModelAudioEnqueueResult {
     this.validateChunk(chunk);
     if (this.retiredTurns.has(chunk.turnId)) {
       throw new Error(`Stale model audio turn: ${chunk.turnId}`);
@@ -77,6 +79,7 @@ export class ModelAudioPlayback {
     if (this.activeTurnId !== null && this.activeTurnId !== chunk.turnId) {
       throw new Error(`Stale model audio turn: ${chunk.turnId}`);
     }
+    if (this.options.audioContext.state !== "running") return "unavailable";
 
     const durationSeconds = chunk.pcm.byteLength / 2 / chunk.sampleRate;
     const now = this.options.audioContext.currentTime;

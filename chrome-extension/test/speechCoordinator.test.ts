@@ -44,9 +44,12 @@ function fixture() {
   const completions: string[] = [];
   const enqueued: string[] = [];
   let idle: ((turnId: string) => void) | undefined;
-  let enqueueResult: "accepted" | "overflow" = "accepted";
+  let enqueueResult: "accepted" | "overflow" | "unavailable" = "accepted";
   const playback: PlaybackController = {
-    enqueue: (value) => { enqueued.push(value.turnId); return enqueueResult; },
+    enqueue: (value) => {
+      enqueued.push(value.turnId);
+      return enqueueResult;
+    },
     complete: (turnId) => completions.push(turnId),
     clear: (turnId) => clears.push(turnId),
     stop: () => clears.push("stop"),
@@ -69,6 +72,7 @@ function fixture() {
     enqueued,
     emitPlaybackIdle: (turnId: string) => idle?.(turnId),
     makeOverflow: () => { enqueueResult = "overflow"; },
+    makeUnavailable: () => { enqueueResult = "unavailable"; },
   };
 }
 
@@ -180,6 +184,16 @@ test("fails overflow rather than truncating the answer queue", () => {
   f.makeOverflow();
   assert.equal(f.coordinator.modelAudio(modelChunk("answer-1")), false);
   assert.deepEqual(f.failures, [{ turnId: "answer-1", reason: "Model audio queue overflow." }]);
+  assert.equal(f.clears.includes("answer-1"), true);
+});
+
+test("reports an unavailable playback context separately from queue overflow", () => {
+  const f = fixture();
+  f.coordinator.typedQuestionStarted("answer-1");
+  f.makeUnavailable();
+
+  assert.equal(f.coordinator.modelAudio(modelChunk("answer-1")), false);
+  assert.deepEqual(f.failures, [{ turnId: "answer-1", reason: "Model audio playback unavailable." }]);
   assert.equal(f.clears.includes("answer-1"), true);
 });
 

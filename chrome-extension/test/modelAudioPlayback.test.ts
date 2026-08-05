@@ -19,6 +19,7 @@ class FakeSource {
 
 class FakeAudioContext {
   currentTime = 0;
+  state: AudioContextState = "running";
   readonly destination = {} as AudioDestinationNode;
   readonly sources: FakeSource[] = [];
   createBuffer(_channels: number, length: number, sampleRate: number) {
@@ -94,11 +95,19 @@ test("rejects stale turns and malformed PCM atomically without scheduling a part
   assert.throws(() => f.playback.enqueue(chunk("answer-1")), /stale/i);
 });
 
-test("returns overflow for valid audio beyond five seconds without truncating it", () => {
+test("accepts up to one minute of queued audio and rejects anything beyond it", () => {
   const f = fixture();
-  assert.equal(f.playback.enqueue(chunk("answer-1", 5_000)), "accepted");
+  assert.equal(f.playback.enqueue(chunk("answer-1", 60_000)), "accepted");
   assert.equal(f.playback.enqueue(chunk("answer-1", 2)), "overflow");
   assert.equal(f.context.sources.length, 1);
+});
+
+test("reports unavailable without scheduling when the audio context is not running", () => {
+  const f = fixture();
+  f.context.state = "suspended";
+
+  assert.equal(f.playback.enqueue(chunk("answer-1")), "unavailable");
+  assert.equal(f.context.sources.length, 0);
 });
 
 test("does not report a turn idle until generation and local PCM playback finish", () => {
