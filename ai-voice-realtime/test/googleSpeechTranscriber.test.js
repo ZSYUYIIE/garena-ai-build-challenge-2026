@@ -467,6 +467,49 @@ test("retries provider failures at 250, 500, and 1000 milliseconds then remains 
   await transcriber.close();
 });
 
+test("resets the retry budget after each provider-confirmed stable stream", async () => {
+  const timers = new FakeTimers();
+  const { transcriber } = makeTranscriber({ timers });
+  await transcriber.start();
+  const client = FakeSpeechClient.instances[0];
+
+  for (let failure = 0; failure < 4; failure += 1) {
+    const stream = client.streams.at(-1);
+    stream.emit("metadata", {});
+    stream.emit("error", new Error("isolated transient"));
+    timers.advance(249);
+    assert.equal(client.streams.length, failure + 1);
+    timers.advance(1);
+    assert.equal(client.streams.length, failure + 2);
+  }
+
+  assert.equal(transcriber.health, "ready");
+  await transcriber.close();
+});
+
+test("ignores stability signals from a retiring stream when preserving the active retry budget", async () => {
+  const timers = new FakeTimers();
+  const { transcriber } = makeTranscriber({ timers, rotateAfterMs: 100 });
+  await transcriber.start();
+  const client = FakeSpeechClient.instances[0];
+
+  client.streams[0].emit("error", new Error("consume first retry"));
+  timers.advance(250);
+  const retiring = client.streams[1];
+  timers.advance(100);
+  const active = client.streams[2];
+
+  retiring.emit("metadata", {});
+  retiring.emit("data", { results: [] });
+  active.emit("error", new Error("active stream failed before stability"));
+  timers.advance(499);
+  assert.equal(client.streams.length, 3);
+  timers.advance(1);
+  assert.equal(client.streams.length, 4);
+
+  await transcriber.close();
+});
+
 test("flushes timestamped tab PCM buffered during a reconnect and cancels recovery on close", async () => {
   const timers = new FakeTimers();
   const { transcriber } = makeTranscriber({ timers });

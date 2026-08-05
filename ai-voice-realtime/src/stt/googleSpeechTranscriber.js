@@ -170,9 +170,14 @@ export class GoogleSpeechTranscriber {
         ended: false,
         destroyed: false,
         retiring: false,
+        stable: false,
       };
       this.#records.add(record);
-      stream.on("data", (response) => this.#handleResponse(record, response));
+      stream.once("metadata", () => this.#markStable(record));
+      stream.on("data", (response) => {
+        this.#markStable(record);
+        this.#handleResponse(record, response);
+      });
       stream.on("error", () => this.#handleFailure(record));
       stream.on("drain", () => this.#handleDrain(record));
       stream.on("close", () => this.#handleTerminal(record));
@@ -317,6 +322,19 @@ export class GoogleSpeechTranscriber {
       while (this.#recentFinals.length > FINAL_DEDUPLICATION_LIMIT) this.#recentFinals.shift();
       this.#onFinal(segment);
     }
+  }
+
+  #markStable(record) {
+    if (
+      this.#closed
+      || this.#active !== record
+      || record.stable
+      || record.retiring
+      || record.ended
+      || record.destroyed
+    ) return;
+    record.stable = true;
+    this.#retryAttempt = 0;
   }
 
   #handleFailure(record) {
