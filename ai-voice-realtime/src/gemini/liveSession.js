@@ -143,7 +143,7 @@ export class GeminiLiveSession {
     this.latestFrame = { data, mimeType };
     if (this.videoQueued || this.closing) return;
     this.videoQueued = true;
-    this.#enqueue(async () => {
+    this.#enqueueProviderWrite(async () => {
       this.videoQueued = false;
       const frame = this.latestFrame;
       if (frame && this.session && !this.closing) {
@@ -172,7 +172,7 @@ export class GeminiLiveSession {
     }
     this.microphoneQueuedBytes += bytes.byteLength;
     const generation = this.generation;
-    this.#enqueue(async () => {
+    this.#enqueueTask(async () => {
       try {
         if (!turn.failed && !this.closing && generation === this.generation) {
           await this.#sendRealtime({
@@ -293,11 +293,30 @@ export class GeminiLiveSession {
     return this.outbound;
   }
 
-  #enqueue(operation) {
+  #enqueueTask(operation) {
     this.outbound = this.outbound
       .then(operation)
-      .catch((error) => {
+      .catch(() => {
         if (!this.closing) this.#health("degraded", "Live outbound operation failed.");
+        return undefined;
+      });
+    return this.outbound;
+  }
+
+  #enqueueProviderWrite(operation) {
+    const generation = this.generation;
+    const session = this.session;
+    this.outbound = this.outbound
+      .then(operation)
+      .catch(() => {
+        if (
+          !this.closing
+          && session
+          && session === this.session
+          && generation === this.generation
+        ) {
+          void this.#reconnect({ allowResumption: false });
+        }
         return undefined;
       });
     return this.outbound;
@@ -350,7 +369,7 @@ export class GeminiLiveSession {
   #queueLatestFrame() {
     if (this.videoQueued) return;
     this.videoQueued = true;
-    this.#enqueue(async () => {
+    this.#enqueueProviderWrite(async () => {
       this.videoQueued = false;
       if (this.latestFrame && this.session && !this.closing) {
         await this.session.sendRealtimeInput({ video: this.latestFrame });
@@ -474,7 +493,7 @@ export class GeminiLiveSession {
       batch.responses.push(response);
       if (typeof response.id === "string") this.pendingToolBatches.set(response.id, batch);
     }
-    this.#enqueue(async () => {
+    this.#enqueueProviderWrite(async () => {
       batch.sent = true;
       const functionResponses = batch.responses.filter((response) => !batch.cancelled.has(response.id));
       for (const response of batch.responses) {

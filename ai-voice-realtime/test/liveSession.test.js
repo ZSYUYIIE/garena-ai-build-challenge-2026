@@ -687,6 +687,79 @@ test("clears output before failing a later rejected microphone write once and ne
   assert.equal(replacement.realtimeInputs.some((input) => input.audio || input.activityEnd), false);
 });
 
+test("hard reconnects once after a rejected video write and sends only the safe latest frame", async () => {
+  const rejecting = new RejectingLiveConnection(1);
+  const replacement = new FakeLiveConnection();
+  const delays = [];
+  const h = makeHarness({
+    connections: [rejecting, replacement],
+    sleep: async (delay) => { delays.push(delay); },
+  });
+  await h.live.start();
+  h.callbacks[0].onmessage({
+    sessionResumptionUpdate: { resumable: true, newHandle: "ambiguous-video-generation" },
+  });
+
+  h.live.sendVideo({ data: "latest-safe-frame", mimeType: "image/jpeg" });
+  await flushMany();
+
+  assert.equal(rejecting.closed, 1);
+  assert.equal(h.configs.length, 2);
+  assert.deepEqual(delays, [250]);
+  assert.deepEqual(h.configs[1].config.sessionResumption, {});
+  assert.deepEqual(replacement.realtimeInputs, [{
+    video: { data: "latest-safe-frame", mimeType: "image/jpeg" },
+  }]);
+
+  h.live.askTyped("fresh-after-video-recovery", "Ready now?");
+  await flush();
+  assert.deepEqual(replacement.realtimeInputs.slice(1), [
+    { activityStart: {} },
+    { text: "Ready now?" },
+    { activityEnd: {} },
+  ]);
+});
+
+test("hard reconnects once after a rejected tool response without replaying it", async () => {
+  const rejecting = new FakeLiveConnection();
+  rejecting.sendToolResponse = (payload) => {
+    rejecting.toolResponses.push(payload);
+    return Promise.reject(new Error("tool response rejected"));
+  };
+  const replacement = new FakeLiveConnection();
+  const delays = [];
+  const h = makeHarness({
+    connections: [rejecting, replacement],
+    sleep: async (delay) => { delays.push(delay); },
+  });
+  await h.live.start();
+  h.callbacks[0].onmessage({
+    sessionResumptionUpdate: { resumable: true, newHandle: "ambiguous-tool-generation" },
+  });
+
+  h.callbacks[0].onmessage({ toolCall: { functionCalls: [{
+    id: "failed-tool-response",
+    name: "get_recent_tab_transcript",
+    args: {},
+  }] } });
+  await flushMany();
+
+  assert.equal(rejecting.closed, 1);
+  assert.equal(h.configs.length, 2);
+  assert.deepEqual(delays, [250]);
+  assert.deepEqual(h.configs[1].config.sessionResumption, {});
+  assert.equal(rejecting.toolResponses.length, 1);
+  assert.deepEqual(replacement.toolResponses, []);
+
+  h.live.startUserActivity("fresh-mic-after-tool-recovery");
+  h.live.endUserActivity("fresh-mic-after-tool-recovery");
+  await flush();
+  assert.deepEqual(replacement.realtimeInputs, [
+    { activityStart: {} },
+    { activityEnd: {} },
+  ]);
+});
+
 test("never transfers a tool batch queued behind blocked old-session output to a replacement session", async () => {
   const first = new FakeLiveConnection();
   const replacement = new FakeLiveConnection();
