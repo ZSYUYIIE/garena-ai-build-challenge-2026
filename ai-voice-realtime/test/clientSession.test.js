@@ -1144,12 +1144,226 @@ test("records an event at the timestamp of the analyzed frame snapshot", async (
       importance: 0.7,
       confidence: 0.9,
     },
+    visibleState: scoreState("2-1"),
+    eventEvidence: { basis: "current_frame", previousState: null },
   });
   await flushAsyncWork();
 
   const [event] = fixture.eventStore.listBySession(fixture.session.sessionId);
   assert.equal(event.timestampSeconds, 12.5);
   fixture.session.close();
+});
+
+test("visible state survives a routine frame and grounds a later score transition", async (t) => {
+  let now = 0;
+  const previousState = scoreState("1-1");
+  const currentState = scoreState("2-1");
+  const inputs = [];
+  const analyses = [
+    suppressedAnalysis({ visibleState: previousState }),
+    suppressedAnalysis(),
+    visualEventAnalysis({
+      eventType: "score_changed",
+      currentState,
+      basis: "state_transition",
+      previousState,
+    }),
+  ];
+  const fixture = createFixture({
+    now: () => now,
+    async analyzeFrame(input) {
+      inputs.push(input);
+      return analyses.shift();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+
+  for (const [timestampSeconds, data] of [[1, "score 1-1"], [2, "routine play"], [3, "score 2-1"]]) {
+    now = timestampSeconds * 1_000;
+    emitVideoFrame(fixture, timestampSeconds, data);
+    await flushAsyncWork();
+  }
+
+  assert.deepEqual(inputs[2].priorVisibleStates, [previousState]);
+  const events = fixture.eventStore.listBySession(fixture.session.sessionId);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].eventType, "score_changed");
+  assert.equal(
+    fixture.browser.messages.some(
+      (message) => message.type === "event" && message.event.eventType === "score_changed",
+    ),
+    true,
+  );
+  fixture.session.close();
+});
+
+test("transition evidence rejects unsupported or internally inconsistent claims", async (t) => {
+  const previousState = scoreState("1-1");
+  const currentState = scoreState("2-1");
+  const otherMatch = scoreState("1-1", { identity: "Team C vs Team D" });
+  const cases = [
+    {
+      name: "event without evidence",
+      analysis: {
+        ...visualEventAnalysis({ eventType: "score_visible", currentState }),
+        eventEvidence: null,
+      },
+    },
+    {
+      name: "evidence without event",
+      analysis: {
+        ...suppressedAnalysis({ visibleState: currentState }),
+        eventEvidence: { basis: "current_frame", previousState: null },
+      },
+    },
+    {
+      name: "score change from a static frame",
+      analysis: visualEventAnalysis({
+        eventType: "score_changed",
+        currentState,
+        basis: "current_frame",
+      }),
+    },
+    {
+      name: "current-frame evidence with previous state",
+      analysis: visualEventAnalysis({
+        eventType: "score_visible",
+        currentState,
+        basis: "current_frame",
+        previousState,
+      }),
+    },
+    {
+      name: "equal transition values",
+      seed: previousState,
+      analysis: visualEventAnalysis({
+        eventType: "score_changed",
+        currentState: previousState,
+        basis: "state_transition",
+        previousState,
+      }),
+    },
+    {
+      name: "different match identity",
+      seed: previousState,
+      analysis: visualEventAnalysis({
+        eventType: "score_changed",
+        currentState: scoreState("2-1", { identity: otherMatch.identity }),
+        basis: "state_transition",
+        previousState: otherMatch,
+      }),
+    },
+    {
+      name: "expired previous state",
+      seed: previousState,
+      candidateNow: 121_001,
+      analysis: visualEventAnalysis({
+        eventType: "score_changed",
+        currentState,
+        basis: "state_transition",
+        previousState,
+      }),
+    },
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      let now = 0;
+      const analyses = testCase.seed
+        ? [suppressedAnalysis({ visibleState: testCase.seed }), testCase.analysis]
+        : [testCase.analysis];
+      const fixture = createFixture({
+        now: () => now,
+        async analyzeFrame() {
+          return analyses.shift();
+        },
+      });
+      await fixture.session.start();
+      hello(fixture, "absent");
+      await flushAsyncWork();
+      if (testCase.seed) {
+        now = 1_000;
+        emitVideoFrame(fixture, 1, `${testCase.name} seed`);
+        await flushAsyncWork();
+      }
+      now = testCase.candidateNow ?? 2_000;
+      emitVideoFrame(fixture, 2, `${testCase.name} candidate`);
+      await flushAsyncWork();
+
+      assert.equal(
+        fixture.eventStore.listBySession(fixture.session.sessionId).length,
+        0,
+      );
+      assert.equal(
+        fixture.browser.messages.some(
+          (message) => message.type === "telemetry" && /event evidence rejected/i.test(message.text),
+        ),
+        true,
+      );
+      fixture.session.close();
+      fixture.eventStore.close();
+    });
+  }
+});
+
+test("a current-frame event records even when narration is disabled", async (t) => {
+  const fixture = createFixture({
+    async analyzeFrame() {
+      return visualEventAnalysis({
+        eventType: "score_visible",
+        currentState: scoreState("2-1"),
+      });
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+  emitVideoFrame(fixture, 1, "static score");
+  await flushAsyncWork();
+
+  const events = fixture.eventStore.listBySession(fixture.session.sessionId);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].eventType, "score_visible");
+  fixture.session.close();
+});
+
+test("visible state cache expires, evicts oldest identities, and clears on close", async (t) => {
+  let now = 0;
+  const analyses = [];
+  for (let index = 0; index < 9; index += 1) {
+    analyses.push(suppressedAnalysis({
+      visibleState: scoreState("0-0", { identity: `Match ${index}` }),
+    }));
+  }
+  const fixture = createFixture({
+    now: () => now,
+    async analyzeFrame() {
+      return analyses.shift();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+
+  for (let index = 0; index < 9; index += 1) {
+    now = index;
+    fixture.session.sendVideo(Buffer.from(`match ${index}`), "image/jpeg", index);
+    fixture.session.requestNarration(false);
+    await flushAsyncWork();
+  }
+
+  const cache = fixture.session.visibleStateCache;
+  assert.equal(cache.list(fixture.session.elapsedMilliseconds).length, 8);
+  assert.equal(
+    cache.list(fixture.session.elapsedMilliseconds).some((state) => state.identity === "Match 0"),
+    false,
+  );
+  now = 120_009;
+  assert.deepEqual(cache.list(fixture.session.elapsedMilliseconds), []);
+  fixture.session.close();
+  assert.deepEqual(cache.list(fixture.session.elapsedMilliseconds), []);
 });
 
 test("uses a session-relative acceptance clock instead of an extension frame timestamp", async (t) => {
@@ -1645,6 +1859,15 @@ function hello(fixture, tabAudioState) {
   })), false);
 }
 
+function emitVideoFrame(fixture, timestampSeconds, data) {
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "video_frame",
+    timestampSeconds,
+    mimeType: "image/jpeg",
+    data: Buffer.from(data).toString("base64"),
+  })), false);
+}
+
 function createFakeTimers(now) {
   const entries = new Set();
   return {
@@ -1674,12 +1897,14 @@ function suppressedAnalysis(overrides = {}) {
     isNew: false,
     coveredByTabSpeech: false,
     event: null,
+    visibleState: null,
+    eventEvidence: null,
     ...overrides,
   };
 }
 
 function approvedAnalysis(overrides = {}) {
-  return {
+  const result = {
     shouldNarrate: true,
     description: "The scoreboard now shows Team A leading 2-1.",
     semanticKey: "score:team_a:2-1",
@@ -1687,14 +1912,20 @@ function approvedAnalysis(overrides = {}) {
     isNew: true,
     coveredByTabSpeech: false,
     event: {
-      eventType: "score_changed",
+      eventType: "score_visible",
       entities: ["Team A"],
       description: "The scoreboard now shows Team A leading 2-1.",
       importance: 0.9,
       confidence: 0.95,
     },
+    visibleState: scoreState("2-1"),
+    eventEvidence: { basis: "current_frame", previousState: null },
     ...overrides,
   };
+  if (overrides.event === null && !("eventEvidence" in overrides)) {
+    result.eventEvidence = null;
+  }
+  return result;
 }
 
 function semanticAnalysis(semanticKey, description) {
@@ -1702,6 +1933,37 @@ function semanticAnalysis(semanticKey, description) {
     description,
     semanticKey,
     event: null,
+  });
+}
+
+function scoreState(value, overrides = {}) {
+  return {
+    domain: "sports_score",
+    identity: "Team A vs Team B",
+    value,
+    summary: `The score is ${value}.`,
+    ...overrides,
+  };
+}
+
+function visualEventAnalysis({
+  eventType,
+  currentState,
+  basis = "current_frame",
+  previousState = null,
+}) {
+  return suppressedAnalysis({
+    importance: 0.9,
+    isNew: true,
+    event: {
+      eventType,
+      entities: [currentState.identity],
+      description: currentState.summary,
+      importance: 0.9,
+      confidence: 0.95,
+    },
+    visibleState: currentState,
+    eventEvidence: { basis, previousState },
   });
 }
 

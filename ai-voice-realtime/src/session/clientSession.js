@@ -3,6 +3,7 @@ import { WebSocket } from "ws";
 
 import { eventCandidateSchema, formatTimestamp, normalizeTimestampSeconds, summarizeValidationError } from "../events/eventSchema.js";
 import { analyzeVisionFrame } from "../gemini/vision.js";
+import { GroundedVisibleStateCache, validateEventEvidence } from "../gemini/visualState.js";
 import { GeminiLiveSession } from "../gemini/liveSession.js";
 import { buildNarrationEventCandidate, shouldSuppressVisualDescription } from "../gemini/transcript.js";
 import { parseAudioPacket, AudioSequenceGuard } from "../protocol/audioPackets.js";
@@ -94,6 +95,7 @@ export class ClientSession {
     this.firstVideoFrame = false;
     this.lastFrameAcceptedAtMs = 0;
     this.lastGroundedDescription = "";
+    this.visibleStateCache = new GroundedVisibleStateCache();
     this.groundedSemanticState = { semanticKey: null, originAcceptedAtMs: null, observedFrameSequence: 0 };
     this.lastTabPacketTimestampMs = null;
     this.speechPolicyTimer = null;
@@ -549,6 +551,7 @@ export class ClientSession {
         initial,
         narrationLevel: this.narrationLevel,
         previousDescription: this.lastGroundedDescription,
+        priorVisibleStates: this.visibleStateCache.list(this.elapsedMilliseconds),
         recentTabTranscript: this.getRecentTabTranscript(),
         timestampSeconds: snapshot.timestampSeconds,
         signal: record.controller.signal,
@@ -577,6 +580,25 @@ export class ClientSession {
   }
 
   recordGroundedAnalysis(analysis, snapshot, { initial = false, offerCandidate = true } = {}) {
+    const evidence = validateEventEvidence(
+      analysis,
+      this.visibleStateCache,
+      this.elapsedMilliseconds,
+    );
+    if (!evidence.valid) {
+      this.sendBrowser({
+        type: "telemetry",
+        text: `event evidence rejected: ${evidence.reason}`.slice(0, 240),
+      });
+      return;
+    }
+    if (analysis.visibleState) {
+      this.visibleStateCache.update(
+        analysis.visibleState,
+        snapshot.acceptedAtMs,
+        snapshot.frameSequence,
+      );
+    }
     if (analysis.event) this.recordVisionEvent(analysis.event, snapshot.timestampSeconds);
     else if (analysis.shouldNarrate && analysis.description && !shouldSuppressVisualDescription(analysis.description)) {
       this.recordNarrationEvent(analysis.description, initial, snapshot.timestampSeconds);
@@ -723,6 +745,7 @@ export class ClientSession {
     this.activeAtomicAnalysis = null;
     this.lastTabPacketTimestampMs = null;
     this.completedTurnIds.clear();
+    this.visibleStateCache.clear();
     this.tabTranscriptBuffer.clear?.();
     this.audioSequenceGuard.reset?.();
     this.closePromise = this.closeProviders(live, transcriber).finally(() => {
