@@ -143,11 +143,11 @@ export class GeminiLiveSession {
     this.latestFrame = { data, mimeType };
     if (this.videoQueued || this.closing) return;
     this.videoQueued = true;
-    this.#enqueueProviderWrite(async () => {
+    this.#enqueueProviderWrite(async (session) => {
       this.videoQueued = false;
       const frame = this.latestFrame;
-      if (frame && this.session && !this.closing) {
-        await this.session.sendRealtimeInput({ video: frame });
+      if (frame && !this.closing) {
+        await session.sendRealtimeInput({ video: frame });
       }
     });
   }
@@ -256,6 +256,7 @@ export class GeminiLiveSession {
       discarded: false,
       failed: false,
       ownsInputAudio,
+      inputTranscriptPending: ownsInputAudio,
       completed: false,
       completedAt: null,
     };
@@ -303,11 +304,19 @@ export class GeminiLiveSession {
     return this.outbound;
   }
 
-  #enqueueProviderWrite(operation) {
+  #enqueueProviderWrite(operation, { recoverOnReject = true } = {}) {
     const generation = this.generation;
     const session = this.session;
     this.outbound = this.outbound
-      .then(operation)
+      .then(() => {
+        if (
+          this.closing
+          || !session
+          || session !== this.session
+          || generation !== this.generation
+        ) return undefined;
+        return operation(session, generation);
+      })
       .catch(() => {
         if (
           !this.closing
@@ -315,11 +324,33 @@ export class GeminiLiveSession {
           && session === this.session
           && generation === this.generation
         ) {
-          void this.#reconnect({ allowResumption: false });
+          if (recoverOnReject) {
+            void this.#reconnect({ allowResumption: false });
+          } else {
+            this.#degradeRejectedRecoveryGeneration(session, generation);
+          }
         }
         return undefined;
       });
     return this.outbound;
+  }
+
+  #degradeRejectedRecoveryGeneration(session, generation) {
+    if (
+      this.closing
+      || session !== this.session
+      || generation !== this.generation
+    ) return;
+    this.generation += 1;
+    this.session = null;
+    this.latestFrame = null;
+    this.videoQueued = false;
+    this.#completeOwnedTurnsForReconnect();
+    this.#clearOwnership();
+    this.#health("degraded", "Gemini Live rejected the recovery frame.");
+    Promise.resolve()
+      .then(() => session.close?.())
+      .catch(() => {});
   }
 
   async #sendRealtime(payload, expectedGeneration = this.generation) {
@@ -363,18 +394,19 @@ export class GeminiLiveSession {
     }
     this.session = session;
     this.reconnectAttempts = 0;
+    this.videoQueued = false;
     if (this.latestFrame) this.#queueLatestFrame();
   }
 
   #queueLatestFrame() {
     if (this.videoQueued) return;
     this.videoQueued = true;
-    this.#enqueueProviderWrite(async () => {
+    this.#enqueueProviderWrite(async (session) => {
       this.videoQueued = false;
-      if (this.latestFrame && this.session && !this.closing) {
-        await this.session.sendRealtimeInput({ video: this.latestFrame });
+      if (this.latestFrame && !this.closing) {
+        await session.sendRealtimeInput({ video: this.latestFrame });
       }
-    });
+    }, { recoverOnReject: false });
   }
 
   #handleMessage(message) {
@@ -423,7 +455,7 @@ export class GeminiLiveSession {
     const chunk = readTranscription(raw);
     if (!chunk) return;
     const queue = kind === "input" ? this.inputOwners : this.outputOwners;
-    const turn = this.#transcriptOwner(queue, kind);
+    const turn = this.#transcriptOwner(queue, kind, chunk.finished);
     if (!turn) return;
     if (!turn.discarded && !turn.failed) {
       const event = kind === "input"
@@ -432,20 +464,31 @@ export class GeminiLiveSession {
       if (kind === "input") this.onInputTranscript(event);
       else this.onOutputTranscript(event);
     }
-    if (chunk.finished && queue[0] === turn) queue.shift();
+    if (chunk.finished) {
+      if (kind === "input") turn.inputTranscriptPending = false;
+      if (queue[0] === turn) queue.shift();
+    }
   }
 
-  #transcriptOwner(queue, kind) {
+  #transcriptOwner(queue, kind, finished) {
     this.#pruneSettling();
-    if (queue.length > 0) {
-      return queue[0];
-    }
     const candidates = [...this.settling.values()].filter((turn) => (
       !turn.discarded
       && !turn.failed
-      && (kind !== "input" || turn.ownsInputAudio)
+      && (kind !== "input" || turn.inputTranscriptPending)
     ));
+    if (queue.length > 0) {
+      if (kind === "input" && candidates.length > 0) {
+        if (finished) candidates[0].inputTranscriptPending = false;
+        this.#telemetry("Dropped ambiguous input transcript.");
+        return null;
+      }
+      return queue[0];
+    }
     if (candidates.length === 1) return candidates[0];
+    if (kind === "input" && finished && candidates.length > 0) {
+      candidates[0].inputTranscriptPending = false;
+    }
     this.#telemetry(`Dropped ambiguous ${kind} transcript.`);
     return null;
   }
@@ -456,6 +499,7 @@ export class GeminiLiveSession {
       this.#telemetry("Dropped unowned Live turn completion.");
       return;
     }
+    this.inputOwners = this.inputOwners.filter((owner) => owner !== turn);
     turn.completed = true;
     turn.completedAt = this.now();
     this.#addSettling(turn);
@@ -588,6 +632,8 @@ export class GeminiLiveSession {
     const oldSession = this.session;
     this.generation += 1;
     this.session = null;
+    this.videoQueued = false;
+    this.outbound = Promise.resolve();
     this.#completeOwnedTurnsForReconnect();
     this.#clearOwnership();
     this.#health("connecting");

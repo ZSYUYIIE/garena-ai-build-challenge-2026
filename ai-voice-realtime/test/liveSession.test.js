@@ -260,6 +260,73 @@ test("attributes the first input-audio transcription to a microphone turn after 
   }]);
 });
 
+test("never attributes a new microphone transcript to a completed input owner", async () => {
+  const connection = new FakeLiveConnection();
+  const h = makeHarness({ connections: [connection] });
+  await h.live.start();
+  h.live.startUserActivity("mic-without-final-transcript");
+  h.live.endUserActivity("mic-without-final-transcript");
+  h.callbacks[0].onmessage({ serverContent: { turnComplete: true } });
+
+  h.live.startUserActivity("next-mic");
+  h.live.endUserActivity("next-mic");
+  h.callbacks[0].onmessage({ serverContent: {
+    inputTranscription: { text: "second turn", finished: true },
+  } });
+
+  assert.deepEqual(h.inputs, []);
+  assert.equal(h.health.some((event) => (
+    event.state === "telemetry" && /ambiguous input transcript/i.test(event.message)
+  )), true);
+});
+
+test("keeps bounded late input-transcript settlement when no newer microphone owner exists", async () => {
+  const connection = new FakeLiveConnection();
+  const h = makeHarness({ connections: [connection] });
+  await h.live.start();
+  h.live.startUserActivity("late-input-owner");
+  h.live.endUserActivity("late-input-owner");
+  h.callbacks[0].onmessage({ serverContent: { turnComplete: true } });
+  h.callbacks[0].onmessage({ serverContent: {
+    inputTranscription: { text: "late final", finished: true },
+  } });
+
+  assert.deepEqual(h.inputs, [{
+    turnId: "late-input-owner",
+    text: "late final",
+    finished: true,
+    languageCode: undefined,
+  }]);
+});
+
+test("drops a late-old versus active-new input transcript instead of guessing the turn", async () => {
+  const connection = new FakeLiveConnection();
+  const h = makeHarness({ connections: [connection] });
+  await h.live.start();
+  h.live.startUserActivity("settling-mic");
+  h.live.endUserActivity("settling-mic");
+  h.callbacks[0].onmessage({ serverContent: { turnComplete: true } });
+  h.live.startUserActivity("active-mic");
+  h.live.endUserActivity("active-mic");
+
+  h.callbacks[0].onmessage({ serverContent: {
+    inputTranscription: { text: "ambiguous words", finished: true },
+  } });
+  h.callbacks[0].onmessage({ serverContent: {
+    inputTranscription: { text: "active words", finished: true },
+  } });
+
+  assert.deepEqual(h.inputs, [{
+    turnId: "active-mic",
+    text: "active words",
+    finished: true,
+    languageCode: undefined,
+  }]);
+  assert.equal(h.health.some((event) => (
+    event.state === "telemetry" && /ambiguous input transcript/i.test(event.message)
+  )), true);
+});
+
 test("returns every transcript tool response in one raw Live batch and cancels queued calls", async () => {
   const connection = new FakeLiveConnection();
   const h = makeHarness({ connections: [connection] });
@@ -718,6 +785,60 @@ test("hard reconnects once after a rejected video write and sends only the safe 
     { text: "Ready now?" },
     { activityEnd: {} },
   ]);
+});
+
+test("bounds recovery when the preserved latest frame is rejected by the replacement generation", async () => {
+  const rejecting = new RejectingLiveConnection(1);
+  const rejectingReplacement = new RejectingLiveConnection(1);
+  const unexpectedSecondReplacement = new FakeLiveConnection();
+  const delays = [];
+  const h = makeHarness({
+    connections: [rejecting, rejectingReplacement, unexpectedSecondReplacement],
+    sleep: async (delay) => { delays.push(delay); },
+  });
+  await h.live.start();
+
+  h.live.sendVideo({ data: "latest-safe-frame", mimeType: "image/jpeg" });
+  await flushMany(12);
+
+  assert.equal(rejecting.closed, 1);
+  assert.equal(rejectingReplacement.closed, 1);
+  assert.equal(h.configs.length, 2);
+  assert.deepEqual(delays, [250]);
+  assert.deepEqual(rejectingReplacement.realtimeInputs, [{
+    video: { data: "latest-safe-frame", mimeType: "image/jpeg" },
+  }]);
+  assert.equal(h.health.at(-1).state, "degraded");
+});
+
+test("never lets a queued old-generation frame write through the replacement rejection fence", async () => {
+  const blockedWrite = deferred();
+  const first = new FakeLiveConnection();
+  first.sendRealtimeInput = (payload) => {
+    first.realtimeInputs.push(payload);
+    return blockedWrite.promise;
+  };
+  const rejectingReplacement = new RejectingLiveConnection(1);
+  const unexpectedSecondReplacement = new FakeLiveConnection();
+  const h = makeHarness({
+    connections: [first, rejectingReplacement, unexpectedSecondReplacement],
+  });
+  await h.live.start();
+
+  h.live.sendVideo({ data: "blocked-old-frame", mimeType: "image/jpeg" });
+  await flush();
+  h.live.sendVideo({ data: "latest-safe-frame", mimeType: "image/jpeg" });
+  h.callbacks[0].onmessage({ goAway: {} });
+  await flushMany();
+  blockedWrite.resolve();
+  await flushMany();
+
+  assert.equal(h.configs.length, 2);
+  assert.deepEqual(rejectingReplacement.realtimeInputs, [{
+    video: { data: "latest-safe-frame", mimeType: "image/jpeg" },
+  }]);
+  assert.equal(rejectingReplacement.closed, 1);
+  assert.equal(h.health.at(-1).state, "degraded");
 });
 
 test("hard reconnects once after a rejected tool response without replaying it", async () => {

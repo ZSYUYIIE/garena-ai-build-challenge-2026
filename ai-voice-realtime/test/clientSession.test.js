@@ -186,6 +186,50 @@ test("keeps ready captured-tab narration eligibility through a microphone-only m
   assert.equal(live.narrations.length, 1);
 });
 
+test("blocks captured-tab narration while STT is connecting without forcing another discontinuity", async (t) => {
+  let now = 0;
+  const policy = new SpeechPolicy({ nowBackendSessionMs: () => now });
+  const live = new FakeLiveSession();
+  const transcriber = new FakeTranscriber();
+  const fixture = createFixture({
+    now: () => now,
+    speechPolicy: policy,
+    liveSessionFactory: () => live,
+    transcriberFactory: () => transcriber,
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "captured");
+  await flushAsyncWork();
+
+  fixture.session.handleNarrationCandidate({
+    description: "A score changed.",
+    semanticKey: "score:1",
+    importance: 1,
+    createdAtMs: 0,
+  });
+  transcriber.callbacks.onHealth("connecting");
+  now = 750;
+  fixture.session.applySpeechActions(policy.poll());
+
+  assert.equal(live.narrations.length, 0);
+  assert.equal(transcriber.discontinuities, 0);
+
+  transcriber.callbacks.onHealth("ready");
+  fixture.session.handleNarrationCandidate({
+    description: "A different score changed.",
+    semanticKey: "score:2",
+    importance: 1,
+    createdAtMs: 750,
+  });
+  now = 1_499;
+  fixture.session.applySpeechActions(policy.poll());
+  assert.equal(live.narrations.length, 0);
+  now = 1_500;
+  fixture.session.applySpeechActions(policy.poll());
+  assert.equal(live.narrations.length, 1);
+});
+
 test("retains ordinary STT backpressure through drain without a destructive discontinuity", async (t) => {
   DrainSpeechClient.instances = [];
   let transcriber;
@@ -341,6 +385,41 @@ test("rejects a repeated user activity end marker", async (t) => {
   fixture.browser.emit("message", Buffer.from(JSON.stringify({ type: "user_activity_end", turnId })), false);
 
   assert.equal(fixture.browser.closed[0]?.code, 1008);
+});
+
+test("accepts mic end then typed admission and a fresh mic turn without policy close", async (t) => {
+  const live = new FakeLiveSession();
+  const fixture = createFixture({ liveSessionFactory: () => live });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  const firstMic = "23232323-2323-4323-8323-232323232323";
+  const typed = "24242424-2424-4424-8424-242424242424";
+  const freshMic = "25252525-2525-4525-8525-252525252525";
+
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "user_activity_start", turnId: firstMic,
+  })), false);
+  fixture.browser.emit("message", audioPacket(1, 0, Buffer.from([1, 0])), true);
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "user_activity_end", turnId: firstMic,
+  })), false);
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "typed_question", turnId: typed, text: "What changed?",
+  })), false);
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "user_activity_start", turnId: freshMic,
+  })), false);
+  fixture.browser.emit("message", audioPacket(1, 1, Buffer.from([2, 0])), true);
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "user_activity_end", turnId: freshMic,
+  })), false);
+
+  assert.deepEqual(fixture.browser.closed, []);
+  assert.deepEqual(live.typedQuestions, [{ turnId: typed, text: "What changed?" }]);
+  assert.deepEqual(live.microphoneWrites, [Buffer.from([1, 0]), Buffer.from([2, 0])]);
+  assert.equal(fixture.session.activeSpeechTurn?.turnId, freshMic);
+  assert.equal(fixture.session.activeSpeechTurn?.openActivity, false);
 });
 
 test("degrades captured tab context after a timestamp gap", async (t) => {

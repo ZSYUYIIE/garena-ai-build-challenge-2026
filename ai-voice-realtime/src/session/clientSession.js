@@ -358,12 +358,15 @@ export class ClientSession {
   }
 
   handleSttHealth(state) {
-    if (state === "ready" && this.tabAudioState === "captured") {
+    const providerState = safeProviderState(state);
+    if (providerState === "ready" && this.tabAudioState === "captured") {
       this.applySpeechActions(this.speechPolicy.setTabAudioState?.("healthy") ?? []);
-    } else if (state === "degraded" || state === "closed") {
+    } else if (providerState === "connecting" && this.tabAudioState === "captured") {
+      this.applySpeechActions(this.speechPolicy.setTabAudioState?.("degraded") ?? []);
+    } else if (providerState === "degraded" || providerState === "closed") {
       void this.degradeTabContext();
     }
-    this.sendBrowser({ type: "provider_health", provider: "tab_stt", state: safeProviderState(state) });
+    this.sendBrowser({ type: "provider_health", provider: "tab_stt", state: providerState });
     this.applySpeechActions(this.speechPolicy.poll?.() ?? []);
     this.scheduleSpeechPolicyWake();
   }

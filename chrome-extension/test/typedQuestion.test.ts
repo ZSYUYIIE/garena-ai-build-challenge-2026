@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { LiveProviderState } from "../src/sidepanel/realtime/types.ts";
+import { createMediaSocketProtocol } from "../src/sidepanel/realtime/mediaAudio.ts";
+import { createMicrophoneTurnOwnership } from "../src/sidepanel/realtime/sessionLifecycle.ts";
 import {
   canAskRealtime,
   dispatchTypedQuestion,
@@ -102,4 +104,53 @@ test("retires microphone transport before admitting a typed turn", () => {
     () => { order.push("typed:admit"); },
   ), false);
   assert.deepEqual(order, ["microphone:failed"]);
+});
+
+test("sends mic end before typed admission, drops stale PCM, and opens a fresh mic turn", () => {
+  const firstTurnId = "11111111-1111-4111-8111-111111111111";
+  const typedTurnId = "22222222-2222-4222-8222-222222222222";
+  const freshTurnId = "33333333-3333-4333-8333-333333333333";
+  const turnIds = [firstTurnId, freshTurnId];
+  const sent: Array<string | ArrayBuffer> = [];
+  const protocol = createMediaSocketProtocol(
+    (value) => sent.push(value),
+    () => turnIds.shift()!,
+  );
+  const ownership = createMicrophoneTurnOwnership<{
+    turnId: string;
+    packets: Array<{ pcm: Int16Array; timestampMs: number }>;
+    bytes: number;
+  }>();
+  const first = { turnId: firstTurnId, packets: [], bytes: 0 };
+  const fresh = { turnId: freshTurnId, packets: [], bytes: 0 };
+  protocol.open({ tabAudioState: "absent", microphoneState: "ready" });
+  ownership.claim(first);
+  assert.equal(protocol.startUserActivity(), firstTurnId);
+  assert.equal(protocol.sendMicrophone(new Int16Array([1, 2]), 10), true);
+
+  assert.equal(retireMicrophoneBeforeTypedAdmission(
+    () => {
+      const retired = ownership.retire();
+      if (!retired) return "none";
+      return protocol.cancelUserActivity() === false ? "transport_failed" : "retired";
+    },
+    () => sent.push(JSON.stringify({ type: "typed_question", turnId: typedTurnId, text: "What changed?" })),
+  ), true);
+  if (ownership.isCurrent(first)) protocol.sendMicrophone(new Int16Array([9, 9]), 20);
+
+  ownership.claim(fresh);
+  assert.equal(protocol.startUserActivity(), freshTurnId);
+  assert.equal(protocol.sendMicrophone(new Int16Array([3, 4]), 30), true);
+  assert.equal(protocol.endUserActivity(), true);
+
+  const commands = sent.filter((value): value is string => typeof value === "string").map(JSON.parse);
+  assert.deepEqual(commands, [
+    { type: "session_hello", protocolVersion: 2, tabAudioState: "absent", microphoneState: "ready" },
+    { type: "user_activity_start", turnId: firstTurnId },
+    { type: "user_activity_end", turnId: firstTurnId },
+    { type: "typed_question", turnId: typedTurnId, text: "What changed?" },
+    { type: "user_activity_start", turnId: freshTurnId },
+    { type: "user_activity_end", turnId: freshTurnId },
+  ]);
+  assert.equal(sent.filter((value) => value instanceof ArrayBuffer).length, 2);
 });
