@@ -154,10 +154,12 @@ export class GeminiLiveSession {
 
   startUserActivity(turnId) {
     this.#assertAvailableTurnId(turnId);
-    this.#createTurn(turnId, "answer");
-    this.activeMicrophoneTurn = this.#findTurn(turnId);
-    const generation = this.generation;
-    this.#enqueue(() => this.#sendRealtime({ activityStart: {} }, generation));
+    this.#assertReadyForTurn();
+    const turn = this.#createTurn(turnId, "answer");
+    this.activeMicrophoneTurn = turn;
+    this.#enqueueOwnedTurn(turn, (generation) => (
+      this.#sendRealtime({ activityStart: {} }, generation)
+    ));
   }
 
   sendMicrophonePcm(pcm) {
@@ -180,7 +182,7 @@ export class GeminiLiveSession {
       } catch {
         if (!turn.failed && !this.closing && generation === this.generation) {
           this.#failMicrophoneTurn(turn, "Gemini Live microphone write failed.");
-          void this.#reconnect();
+          void this.#reconnect({ allowResumption: false });
         }
       } finally {
         this.microphoneQueuedBytes = Math.max(0, this.microphoneQueuedBytes - bytes.byteLength);
@@ -192,25 +194,25 @@ export class GeminiLiveSession {
     const turn = this.activeMicrophoneTurn;
     if (!turn || turn.turnId !== turnId) return;
     this.activeMicrophoneTurn = null;
-    const generation = this.generation;
-    this.#enqueue(() => {
-      if (turn.failed || this.closing || generation !== this.generation) return;
-      return this.#sendRealtime({ activityEnd: {} }, generation);
-    });
+    this.#enqueueOwnedTurn(turn, (generation) => (
+      this.#sendRealtime({ activityEnd: {} }, generation)
+    ));
   }
 
   askTyped(turnId, text) {
     this.#assertAvailableTurnId(turnId);
     if (typeof text !== "string" || text.trim().length === 0) throw new TypeError("typed text is required");
-    this.#createTurn(turnId, "answer");
-    this.#sendRealtimeTurn(text);
+    this.#assertReadyForTurn();
+    const turn = this.#createTurn(turnId, "answer");
+    this.#sendRealtimeTurn(turn, text);
   }
 
   speakNarration(turnId, text) {
     this.#assertAvailableTurnId(turnId);
     if (typeof text !== "string" || text.trim().length === 0) throw new TypeError("narration text is required");
-    this.#createTurn(turnId, "narration");
-    this.#sendRealtimeTurn(`APP_NARRATION\n${text}`);
+    this.#assertReadyForTurn();
+    const turn = this.#createTurn(turnId, "narration");
+    this.#sendRealtimeTurn(turn, `APP_NARRATION\n${text}`);
   }
 
   discardOutput(turnId) {
@@ -241,6 +243,12 @@ export class GeminiLiveSession {
     if (this.#findTurn(turnId)) throw new Error("turnId is already active");
   }
 
+  #assertReadyForTurn() {
+    if (!this.session || this.reconnectPromise || this.closing) {
+      throw new Error("Gemini Live is not ready for a new turn");
+    }
+  }
+
   #createTurn(turnId, mode) {
     const turn = {
       turnId,
@@ -262,13 +270,27 @@ export class GeminiLiveSession {
       .find((turn) => turn.turnId === turnId) || this.settling.get(turnId) || null;
   }
 
-  #sendRealtimeTurn(text) {
-    const generation = this.generation;
-    this.#enqueue(async () => {
+  #sendRealtimeTurn(turn, text) {
+    this.#enqueueOwnedTurn(turn, async (generation) => {
       await this.#sendRealtime({ activityStart: {} }, generation);
       await this.#sendRealtime({ text }, generation);
       await this.#sendRealtime({ activityEnd: {} }, generation);
     });
+  }
+
+  #enqueueOwnedTurn(turn, operation) {
+    const generation = this.generation;
+    this.outbound = this.outbound.then(async () => {
+      if (turn.failed || turn.completed || this.closing || generation !== this.generation) return;
+      try {
+        await operation(generation);
+      } catch {
+        if (!turn.failed && !turn.completed && !this.closing && generation === this.generation) {
+          void this.#reconnect({ allowResumption: false });
+        }
+      }
+    });
+    return this.outbound;
   }
 
   #enqueue(operation) {
@@ -524,7 +546,8 @@ export class GeminiLiveSession {
     }
   }
 
-  async #reconnect() {
+  async #reconnect({ allowResumption = true } = {}) {
+    if (!allowResumption) this.resumptionHandle = null;
     if (this.reconnectPromise || this.closing) return this.reconnectPromise;
     let settleReconnect;
     const reconnectPromise = new Promise((resolve) => {
