@@ -4,7 +4,10 @@ import { randomUUID } from "node:crypto";
 
 import Database from "better-sqlite3";
 
-import { findDuplicateEvent } from "./deduplicate.js";
+import {
+  DEFAULT_DUPLICATE_WINDOW_SECONDS,
+  findDuplicateEvent,
+} from "./deduplicate.js";
 import { eventRecordInputSchema, formatTimestamp } from "./eventSchema.js";
 
 export class EventStore {
@@ -67,7 +70,10 @@ export class EventStore {
     `);
   }
 
-  record(input, { duplicateWindowSeconds = 12 } = {}) {
+  record(
+    input,
+    { duplicateWindowSeconds = DEFAULT_DUPLICATE_WINDOW_SECONDS } = {},
+  ) {
     const candidate = eventRecordInputSchema.parse(input);
     const recentEvents = this.recentStatement
       .all(

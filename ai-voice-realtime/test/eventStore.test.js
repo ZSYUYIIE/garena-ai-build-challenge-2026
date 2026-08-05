@@ -47,7 +47,7 @@ test("EventStore suppresses similar events inside the duplicate window", () => {
     const duplicate = store.record(
       sampleEvent({
         sessionId,
-        timestampSeconds: 228,
+        timestampSeconds: 227,
         description: "Goalkeeper saves the close range shot.",
       })
     );
@@ -68,7 +68,7 @@ test("EventStore keeps meaningful events outside the duplicate window", () => {
   try {
     store.record(sampleEvent({ sessionId }));
     const later = store.record(
-      sampleEvent({ sessionId, timestampSeconds: 240 })
+      sampleEvent({ sessionId, timestampSeconds: 227.001 })
     );
 
     assert.equal(later.status, "recorded");

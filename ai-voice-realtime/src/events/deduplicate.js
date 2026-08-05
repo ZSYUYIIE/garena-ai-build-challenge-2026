@@ -1,11 +1,11 @@
-const DEFAULT_WINDOW_SECONDS = 12;
+export const DEFAULT_DUPLICATE_WINDOW_SECONDS = 5;
 const DEFAULT_SIMILARITY_THRESHOLD = 0.78;
 
 export function findDuplicateEvent(
   candidate,
   recentEvents,
   {
-    windowSeconds = DEFAULT_WINDOW_SECONDS,
+    windowSeconds = DEFAULT_DUPLICATE_WINDOW_SECONDS,
     similarityThreshold = DEFAULT_SIMILARITY_THRESHOLD,
   } = {}
 ) {
