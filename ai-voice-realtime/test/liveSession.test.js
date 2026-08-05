@@ -220,25 +220,44 @@ test("drops ambiguous or spontaneous output but never guessed, and discard keeps
   assert.deepEqual(h.audio.at(-1), { turnId: "answer-2", mode: "answer", data: "answer-2", mimeType: "audio/pcm;rate=24000" });
 });
 
-test("keeps input and output transcript owners after completion, then drops an ambiguous late transcript", async () => {
+test("attributes input-audio transcription to a microphone turn after a typed turn", async () => {
   const connection = new FakeLiveConnection();
   const h = makeHarness({ connections: [connection] });
   await h.live.start();
-  h.live.askTyped("first", "one");
+  h.live.askTyped("typed-first", "one");
   h.callbacks[0].onmessage({ serverContent: { turnComplete: true } });
-  h.callbacks[0].onmessage({ serverContent: { inputTranscription: { text: "late input", finished: true } } });
-  h.callbacks[0].onmessage({ serverContent: { outputTranscription: { text: "late output", finished: true } } });
-  assert.deepEqual(h.inputs.at(-1), { turnId: "first", text: "late input", finished: true, languageCode: undefined });
-  assert.deepEqual(h.outputs.at(-1), { turnId: "first", mode: "answer", text: "late output", finished: true, languageCode: undefined });
+  h.live.startUserActivity("mic-after-typed");
+  h.live.endUserActivity("mic-after-typed");
+  h.callbacks[0].onmessage({ serverContent: {
+    inputTranscription: { text: "microphone words", finished: true },
+  } });
 
-  h.live.askTyped("second", "two");
+  assert.deepEqual(h.inputs, [{
+    turnId: "mic-after-typed",
+    text: "microphone words",
+    finished: true,
+    languageCode: undefined,
+  }]);
+});
+
+test("attributes the first input-audio transcription to a microphone turn after narration", async () => {
+  const connection = new FakeLiveConnection();
+  const h = makeHarness({ connections: [connection] });
+  await h.live.start();
+  h.live.speakNarration("narration-first", "A score changed.");
   h.callbacks[0].onmessage({ serverContent: { turnComplete: true } });
-  h.callbacks[0].onmessage({ serverContent: { inputTranscription: { text: "second input", finished: true } } });
-  h.callbacks[0].onmessage({ serverContent: { outputTranscription: { text: "second output", finished: true } } });
-  const countBeforeAmbiguous = h.inputs.length;
-  h.callbacks[0].onmessage({ serverContent: { inputTranscription: { text: "cannot correlate", finished: false } } });
-  assert.equal(h.inputs.length, countBeforeAmbiguous);
-  assert.match(h.health.at(-1).message, /ambiguous input transcript/i);
+  h.live.startUserActivity("mic-after-narration");
+  h.live.endUserActivity("mic-after-narration");
+  h.callbacks[0].onmessage({ serverContent: {
+    inputTranscription: { text: "what changed", finished: true },
+  } });
+
+  assert.deepEqual(h.inputs, [{
+    turnId: "mic-after-narration",
+    text: "what changed",
+    finished: true,
+    languageCode: undefined,
+  }]);
 });
 
 test("returns every transcript tool response in one raw Live batch and cancels queued calls", async () => {

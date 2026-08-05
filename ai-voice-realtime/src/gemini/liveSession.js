@@ -155,7 +155,7 @@ export class GeminiLiveSession {
   startUserActivity(turnId) {
     this.#assertAvailableTurnId(turnId);
     this.#assertReadyForTurn();
-    const turn = this.#createTurn(turnId, "answer");
+    const turn = this.#createTurn(turnId, "answer", { ownsInputAudio: true });
     this.activeMicrophoneTurn = turn;
     this.#enqueueOwnedTurn(turn, (generation) => (
       this.#sendRealtime({ activityStart: {} }, generation)
@@ -249,17 +249,17 @@ export class GeminiLiveSession {
     }
   }
 
-  #createTurn(turnId, mode) {
+  #createTurn(turnId, mode, { ownsInputAudio = false } = {}) {
     const turn = {
       turnId,
       mode,
       discarded: false,
       failed: false,
-      allowsInputTranscript: mode === "answer",
+      ownsInputAudio,
       completed: false,
       completedAt: null,
     };
-    this.inputOwners.push(turn);
+    if (turn.ownsInputAudio) this.inputOwners.push(turn);
     this.responseOwners.push(turn);
     this.outputOwners.push(turn);
     return turn;
@@ -406,7 +406,7 @@ export class GeminiLiveSession {
     const queue = kind === "input" ? this.inputOwners : this.outputOwners;
     const turn = this.#transcriptOwner(queue, kind);
     if (!turn) return;
-    if (!turn.discarded && !turn.failed && (kind !== "input" || turn.allowsInputTranscript)) {
+    if (!turn.discarded && !turn.failed) {
       const event = kind === "input"
         ? { turnId: turn.turnId, text: chunk.text, finished: chunk.finished, languageCode: chunk.languageCode }
         : { turnId: turn.turnId, mode: turn.mode, text: chunk.text, finished: chunk.finished, languageCode: chunk.languageCode };
@@ -421,7 +421,11 @@ export class GeminiLiveSession {
     if (queue.length > 0) {
       return queue[0];
     }
-    const candidates = [...this.settling.values()].filter((turn) => !turn.discarded && !turn.failed);
+    const candidates = [...this.settling.values()].filter((turn) => (
+      !turn.discarded
+      && !turn.failed
+      && (kind !== "input" || turn.ownsInputAudio)
+    ));
     if (candidates.length === 1) return candidates[0];
     this.#telemetry(`Dropped ambiguous ${kind} transcript.`);
     return null;
