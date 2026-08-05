@@ -59,6 +59,17 @@ export function backpressureAction(
   return bufferedAmount >= 32 * 1024 ? "fail_microphone_turn" : "send";
 }
 
+export function backendConnectionClosedStatus(code: number, reason: string): string {
+  const normalizedReason = reason.trim();
+  if (code === 1000 && normalizedReason.length === 0) {
+    return "Backend connection closed.";
+  }
+  const details = normalizedReason.length > 0
+    ? `${code}: ${normalizedReason}`
+    : String(code);
+  return `Backend connection closed (${details})`;
+}
+
 export function voiceStatusForState(state: VoiceStatusState): VoiceStatus {
   if (!state.sessionActive) return "off";
   if (

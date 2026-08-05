@@ -8,6 +8,7 @@ import {
 } from "../../ai-voice-realtime/src/protocol/browserMessages.js";
 import {
   backpressureAction,
+  backendConnectionClosedStatus,
   canAcceptTurnRoleUpdate,
   createTurnRoleState,
   finishTurnRole,
@@ -80,6 +81,21 @@ test("uses bounded source-specific transport backpressure actions", () => {
   assert.equal(backpressureAction("tab", 32 * 1024), "tab_discontinuity");
   assert.equal(backpressureAction("microphone", 32 * 1024 - 1), "send");
   assert.equal(backpressureAction("microphone", 32 * 1024), "fail_microphone_turn");
+});
+
+test("reports backend WebSocket close details with a safe generic fallback", () => {
+  assert.equal(
+    backendConnectionClosedStatus(1008, "Rate limit exceeded."),
+    "Backend connection closed (1008: Rate limit exceeded.)",
+  );
+  assert.equal(
+    backendConnectionClosedStatus(1006, ""),
+    "Backend connection closed (1006)",
+  );
+  assert.equal(
+    backendConnectionClosedStatus(1000, ""),
+    "Backend connection closed.",
+  );
 });
 
 test("publishes voice availability only after live protocol readiness", () => {

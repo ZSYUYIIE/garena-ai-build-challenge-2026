@@ -43,6 +43,7 @@ import {
 import { useCaptureTarget } from "./useCaptureTarget";
 import {
   backpressureAction,
+  backendConnectionClosedStatus,
   canAcceptTurnRoleUpdate,
   createTurnRoleState,
   descriptionAfterTurnComplete,
@@ -724,12 +725,12 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         setError("Cannot reach StreamSense at 127.0.0.1:8000. Start the Express backend first.");
         setStatus("error");
       });
-      websocket.addEventListener("close", () => {
+      websocket.addEventListener("close", (event) => {
         protocol.close();
         if (!isCurrent()) return;
         releaseResources();
         setStatus("error");
-        setStatusText("Backend connection closed.");
+        setStatusText(backendConnectionClosedStatus(event.code, event.reason));
       });
     } catch (cause) {
       if (!isCurrent()) { startupVideo?.pause(); if (startupVideo) startupVideo.srcObject = null; for (const track of startupStream?.getTracks() ?? []) track.stop(); return; }
