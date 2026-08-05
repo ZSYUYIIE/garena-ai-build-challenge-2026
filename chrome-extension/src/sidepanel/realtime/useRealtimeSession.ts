@@ -39,6 +39,7 @@ import {
   canAcceptTurnRoleUpdate,
   createTurnRoleState,
   descriptionAfterTurnComplete,
+  descriptionTurnOwnsCompletion,
   finishTurnRole,
   parseServerMessage,
   settlingTurnAfterComplete,
@@ -119,6 +120,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const activeTurnRef = useRef<TurnRoleState | null>(null);
   const settlingTurnRef = useRef<TurnRoleState | null>(null);
   const speakingTurnIdRef = useRef<string | null>(null);
+  const descriptionTurnIdRef = useRef<string | null>(null);
   const voiceTurnRef = useRef<VoiceTurn | null>(null);
   const nextVoiceTurnIdRef = useRef<string | null>(null);
   const tabDiscontinuityPendingRef = useRef(false);
@@ -157,6 +159,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     activeTurnRef.current = null;
     settlingTurnRef.current = null;
     speakingTurnIdRef.current = null;
+    descriptionTurnIdRef.current = null;
     publishLiveProviderState("closed");
     publishVoiceStatus({
       sessionActive: false,
@@ -191,6 +194,11 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   ) => {
     speechCoordinatorRef.current?.turnComplete(message);
     const settledActiveTurn = activeTurnRef.current?.turnId === message.turnId;
+    const settledDescriptionTurn = descriptionTurnOwnsCompletion(
+      descriptionTurnIdRef.current,
+      message.turnId,
+      message.mode,
+    );
     if (settledActiveTurn) {
       settlingTurnRef.current = settlingTurnAfterComplete(activeTurnRef.current, message.turnId);
       activeTurnRef.current = null;
@@ -201,6 +209,9 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           if (settlingTurnRef.current?.turnId === message.turnId) settlingTurnRef.current = null;
           settlingTurnTimerRef.current = null;
         }, LATE_TRANSCRIPT_SETTLEMENT_MS);
+    }
+    if (settledDescriptionTurn) {
+      descriptionTurnIdRef.current = null;
       setDescription((current) => descriptionAfterTurnComplete(
         current,
         message.mode,
@@ -631,7 +642,13 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             if (speakingTurnId !== speakingTurnIdRef.current) {
               publishVoiceStatus({ geminiSpeaking: false });
             }
-            if (message.mode === "narration") setDescription("");
+            if (
+              message.mode === "narration"
+              && (descriptionTurnIdRef.current === null || descriptionTurnIdRef.current === message.turnId)
+            ) {
+              descriptionTurnIdRef.current = null;
+              setDescription("");
+            }
             break;
           }
           case "turn_complete":
@@ -639,7 +656,17 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             break;
           case "status_text": if (message.text) setStatusText(message.text); break;
           case "narration":
-          case "narration_update": if (message.text) setDescription(message.text); break;
+            if (message.text) {
+              descriptionTurnIdRef.current = null;
+              setDescription(message.text);
+            }
+            break;
+          case "narration_update":
+            if (message.text) {
+              descriptionTurnIdRef.current = message.turnId;
+              setDescription(message.text);
+            }
+            break;
           case "event": if (message.event) setEvents((current) => current.some((item) => item.id === message.event!.id) ? current : [message.event!, ...current].slice(0, 100)); break;
           case "error": setError(message.text ?? "The realtime session reported an error."); setStatus("error"); break;
           case "analysis_error": setError(message.text ?? "The current frame could not be analyzed."); break;

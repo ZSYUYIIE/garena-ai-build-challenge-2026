@@ -27,6 +27,21 @@ function pcmAtRate(
   );
 }
 
+function broadbandNoise(durationMs: number, targetRms: number, seed = 1): Int16Array {
+  const length = (durationMs * SAMPLE_RATE) / 1_000;
+  let state = seed >>> 0;
+  const raw = new Float64Array(length);
+  let energy = 0;
+  for (let index = 0; index < length; index += 1) {
+    state = ((state * 1_664_525) + 1_013_904_223) >>> 0;
+    const sample = (state / 0xffff_ffff) * 2 - 1;
+    raw[index] = sample;
+    energy += sample * sample;
+  }
+  const scale = targetRms / Math.sqrt(energy / length);
+  return Int16Array.from(raw, (sample) => Math.round(sample * scale * 32_767));
+}
+
 function pushFrames(
   detector: { push(pcm: Int16Array, timestampMs: number): VadEvent[] },
   samples: Int16Array,
@@ -116,6 +131,29 @@ test("keeps production-cadence ambient noise and short spikes closed", () => {
     ...pushFrames(spikeDetector, pcm(400, 0.002), 540, 20),
   ];
   assert.equal(spikeEvents.some((event) => event.type === "speech_start"), false);
+});
+
+test("keeps stationary broadband noise above the RMS floor closed", () => {
+  const events = pushFrames(
+    new AdaptiveVoiceActivityDetector(),
+    broadbandNoise(2_000, 0.02),
+    0,
+    20,
+  );
+
+  assert.equal(events.some((event) => event.type === "speech_start"), false);
+});
+
+test("ends an open speech turn during stationary broadband noise above the RMS floor", () => {
+  const detector = new AdaptiveVoiceActivityDetector();
+  const events = [
+    ...pushFrames(detector, pcm(500, 0.002), 0, 20),
+    ...pushFrames(detector, pcm(300, 0.32), 500, 20),
+    ...pushFrames(detector, broadbandNoise(2_000, 0.02), 800, 20),
+  ];
+
+  assert.equal(events.filter((event) => event.type === "speech_start").length, 1);
+  assert.equal(events.filter((event) => event.type === "speech_end").length, 1);
 });
 
 test("opens a natural rising speech onset at the production cadence", () => {

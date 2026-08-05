@@ -9,6 +9,7 @@ export const VAD_NOISE_MULTIPLIER = 3;
 
 const INITIAL_NOISE_RMS = 0.003;
 const NOISE_SMOOTHING = 0.1;
+const MAX_SPEECH_ZERO_CROSSING_RATE = 0.2;
 const MAX_REFERENCE_DELAY_MS = 250;
 const REFERENCE_DELAY_STEP_MS = 10;
 const ECHO_CORRELATION_THRESHOLD = 0.86;
@@ -38,6 +39,18 @@ function rms(pcm: Int16Array): number {
   return Math.sqrt(total / pcm.length);
 }
 
+function zeroCrossingRate(pcm: Int16Array): number {
+  if (pcm.length < 2) return 0;
+  let crossings = 0;
+  let previousSign = 0;
+  for (const sample of pcm) {
+    const sign = sample === 0 ? previousSign : Math.sign(sample);
+    if (previousSign !== 0 && sign !== previousSign) crossings += 1;
+    previousSign = sign;
+  }
+  return crossings / (pcm.length - 1);
+}
+
 function clonePcm(pcm: Int16Array): Int16Array {
   return pcm.slice();
 }
@@ -62,7 +75,10 @@ export class AdaptiveVoiceActivityDetector {
     const frameEndMs = timestampMs + frameDurationMs;
     const frameRms = rms(pcm);
     const threshold = Math.max(VAD_ABSOLUTE_RMS_FLOOR, this.noiseRms * VAD_NOISE_MULTIPLIER);
-    const speechLike = frameRms >= threshold;
+    const speechLike = (
+      frameRms >= threshold
+      && zeroCrossingRate(pcm) <= MAX_SPEECH_ZERO_CROSSING_RATE
+    );
     this.appendPreRoll(pcm);
 
     if (!this.open) {

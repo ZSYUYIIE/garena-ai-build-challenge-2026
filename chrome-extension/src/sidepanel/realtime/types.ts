@@ -144,6 +144,14 @@ export function descriptionAfterTurnComplete(
   return mode === "narration" && interrupted ? "" : currentDescription;
 }
 
+export function descriptionTurnOwnsCompletion(
+  currentTurnId: string | null,
+  completedTurnId: string,
+  mode: TurnMode,
+): boolean {
+  return mode === "narration" && currentTurnId === completedTurnId;
+}
+
 export function updateTurnChatMessages(
   messages: RealtimeChatMessage[],
   update: {

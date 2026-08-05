@@ -488,9 +488,7 @@ test("reports first-sample timestamps from sample-duration cursors", async () =>
   const { media } = await startBoth();
   media.context.worklets[0].emit(new Float32Array(9_600).fill(0.2));
   assert.deepEqual(media.tabPacketTimestamps, [1_000, 1_100]);
-  media.context.worklets[1].emit(
-    Float32Array.from({ length: 9_600 }, (_, index) => index % 2 === 0 ? 0.6 : -0.6),
-  );
+  media.context.worklets[1].emit(sineFloats(200, 0.6, 220, 48_000));
   assert.deepEqual(media.micPacketTimestamps.slice(0, 2), [800, 840]);
 });
 

@@ -12,6 +12,7 @@ import {
   canAcceptTurnRoleUpdate,
   createTurnRoleState,
   descriptionAfterTurnComplete,
+  descriptionTurnOwnsCompletion,
   finishTurnRole,
   settlingTurnAfterComplete,
   speakingTurnAfterPlaybackIdle,
@@ -223,4 +224,11 @@ test("keeps completed narration visible and clears only interrupted narration", 
     descriptionAfterTurnComplete("Current description", "answer", true),
     "Current description",
   );
+});
+
+test("settles narration description only for its current turn owner", () => {
+  assert.equal(descriptionTurnOwnsCompletion("narration-2", "narration-2", "narration"), true);
+  assert.equal(descriptionTurnOwnsCompletion("narration-2", "narration-1", "narration"), false);
+  assert.equal(descriptionTurnOwnsCompletion("narration-2", "narration-2", "answer"), false);
+  assert.equal(descriptionTurnOwnsCompletion(null, "narration-1", "narration"), false);
 });
