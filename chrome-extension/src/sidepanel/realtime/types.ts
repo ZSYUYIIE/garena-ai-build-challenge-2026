@@ -46,6 +46,11 @@ export type BackpressureAction =
   | "tab_discontinuity"
   | "fail_microphone_turn";
 
+// Microphone PCM shares the browser WebSocket with base64-encoded JPEG frames.
+// A maximum-size frame can occupy roughly 683 KiB of bufferedAmount by itself,
+// so the transport limit must leave room for that frame plus one second of PCM.
+const MICROPHONE_TRANSPORT_BUFFER_LIMIT_BYTES = 768 * 1024;
+
 export function backpressureAction(
   kind: TransportKind,
   bufferedAmount: number,
@@ -56,7 +61,9 @@ export function backpressureAction(
   if (kind === "tab") {
     return bufferedAmount >= 32 * 1024 ? "tab_discontinuity" : "send";
   }
-  return bufferedAmount >= 32 * 1024 ? "fail_microphone_turn" : "send";
+  return bufferedAmount >= MICROPHONE_TRANSPORT_BUFFER_LIMIT_BYTES
+    ? "fail_microphone_turn"
+    : "send";
 }
 
 export function backendConnectionClosedStatus(code: number, reason: string): string {

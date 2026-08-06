@@ -32,7 +32,7 @@ type TabOptions = {
   onVideoEnded?: () => void;
 };
 
-type MicrophoneOptions = {
+export type MicrophoneOptions = {
   onMicPacket: (packet: Int16Array, firstSampleTimestampMs: number) => void;
   onUserActivityStart: () => void;
   onUserActivityEnd: () => void;
@@ -166,6 +166,8 @@ export class RealtimeMediaAudio {
   private closedPorts = new Set<WorkletNode>();
   private stopped = false;
   private userActivityEnabled = true;
+  private pushToTalkMode = false;
+  private pushToTalkActive = false;
   private micActivityOpen = false;
   private tabOptions: TabOptions | null = null;
   private micOptions: MicrophoneOptions | null = null;
@@ -304,10 +306,51 @@ export class RealtimeMediaAudio {
 
   setUserActivityEnabled(enabled: boolean): void {
     this.userActivityEnabled = enabled;
+    this.pushToTalkActive = false;
     this.micActivityOpen = false;
     this.micChunker = this.audioContext ? new PcmChunker(640) : null;
     this.micNextPacketTimestampMs = null;
     this.userVad.reset();
+  }
+
+  setPushToTalkMode(enabled: boolean): void {
+    if (this.pushToTalkActive) this.stopPushToTalk();
+    this.pushToTalkMode = enabled;
+    this.userVad.reset();
+  }
+
+  startPushToTalk(): boolean {
+    if (
+      !this.pushToTalkMode
+      || this.pushToTalkActive
+      || !this.userActivityEnabled
+      || this.state.microphoneState !== "ready"
+      || !this.micOptions
+      || !this.audioContext
+      || this.stopped
+    ) {
+      return false;
+    }
+    this.pushToTalkActive = true;
+    this.micActivityOpen = true;
+    this.micChunker = new PcmChunker(640);
+    this.micNextPacketTimestampMs = Math.max(0, Math.round(this.dependencies.now()));
+    this.userVad.reset();
+    this.micOptions.onUserActivityStart();
+    return true;
+  }
+
+  stopPushToTalk(): boolean {
+    if (!this.pushToTalkActive || !this.micOptions) return false;
+    const remaining = this.micChunker?.flush();
+    if (remaining?.length) {
+      this.micOptions.onMicPacket(remaining, this.takeMicPacketTimestamp(remaining.length));
+    }
+    this.pushToTalkActive = false;
+    this.micActivityOpen = false;
+    this.userVad.reset();
+    this.micOptions.onUserActivityEnd();
+    return true;
   }
 
   pushPlaybackReference(reference: PlaybackReference): void {
@@ -315,7 +358,7 @@ export class RealtimeMediaAudio {
     this.userVad.pushReference(reference);
   }
 
-  setTabGain(gain: 0.3 | 1, fadeMs: number): void {
+  setTabGain(gain: 0 | 0.3 | 1, fadeMs: number): void {
     const node = this.tabBranch?.nodes[1] as (GraphNode & { gain?: AudioParam }) | undefined;
     const context = this.audioContext;
     if (!node?.gain || !context) return;
@@ -352,7 +395,10 @@ export class RealtimeMediaAudio {
     }
     this.micStream = stream;
     const audioTrack = stream.getAudioTracks()[0];
-    if (!audioTrack || audioTrack.getSettings().echoCancellation !== true) {
+    if (
+      !audioTrack
+      || (!this.pushToTalkMode && audioTrack.getSettings().echoCancellation !== true)
+    ) {
       this.stopTracks(stream);
       this.setState({ microphoneState: "degraded" });
       return "degraded";
@@ -418,7 +464,12 @@ export class RealtimeMediaAudio {
     const options = this.micOptions;
     if (!resampler || !chunker || !options || !this.userActivityEnabled || this.stopped || !(samples instanceof Float32Array)) return;
     const timestampMs = Math.max(0, Math.round(this.dependencies.now()));
-    for (const event of this.userVad.pushMicrophone(resampler.push(samples), timestampMs)) {
+    const pcm = resampler.push(samples);
+    if (this.pushToTalkMode) {
+      if (this.pushToTalkActive) this.emitMicChunks(chunker.push(pcm));
+      return;
+    }
+    for (const event of this.userVad.pushMicrophone(pcm, timestampMs)) {
       if (event.type === "speech_start") {
         this.micActivityOpen = true;
         this.micNextPacketTimestampMs = Math.max(
@@ -457,6 +508,7 @@ export class RealtimeMediaAudio {
     this.closeBranch(this.micBranch);
     this.micBranch = null;
     this.userVad.reset();
+    this.pushToTalkActive = false;
     this.micActivityOpen = false;
     this.micNextPacketTimestampMs = null;
     this.setState({ microphoneState: "degraded" });

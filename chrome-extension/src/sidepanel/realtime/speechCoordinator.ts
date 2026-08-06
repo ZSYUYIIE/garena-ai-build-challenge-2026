@@ -14,7 +14,7 @@ export type PlaybackController = {
 
 export type SpeechCoordinatorOptions = {
   playback: PlaybackController;
-  setTabGain: (gain: 0.3 | 1, fadeMs: number) => void;
+  setTabGain: (gain: 0 | 0.3 | 1, fadeMs: number) => void;
   onFailTurn?: (turnId: string, reason: string) => void;
   onPlaybackIdle?: (turnId: string) => void;
   setTimeout?: (callback: () => void, delayMs: number) => unknown;
@@ -58,6 +58,7 @@ export class SpeechCoordinator {
     if (!this.isActiveAnswer(turnId)) return;
     const active = this.active!;
     active.userSpeaking = false;
+    this.duckTabGain();
     this.cancelLocalSpeechTimer(active);
     this.resetResponseTimer(active);
   }
@@ -159,7 +160,8 @@ export class SpeechCoordinator {
       localSpeechTimer: null,
       responseTimer: null,
     };
-    this.duckTabGain();
+    if (userSpeaking) this.muteTabGain();
+    else this.duckTabGain();
     if (userSpeaking) {
       this.active.localSpeechTimer = this.setTimeoutFn(
         () => this.failTurn(turnId, "Speech turn exceeded 60 seconds. Please try again."),
@@ -218,6 +220,11 @@ export class SpeechCoordinator {
 
   private duckTabGain(): void {
     this.options.setTabGain(0.3, 150);
+    this.ducked = true;
+  }
+
+  private muteTabGain(): void {
+    this.options.setTabGain(0, 50);
     this.ducked = true;
   }
 

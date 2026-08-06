@@ -8,12 +8,34 @@ import {
   canAskRealtime,
   dispatchTypedQuestion,
   draftAfterAdmission,
+  isEditableShortcutTarget,
+  isVoiceHoldShortcut,
   questionAvailabilityFor,
   questionCopyFor,
   retireMicrophoneBeforeTypedAdmission,
   retryableAnswerNotice,
   voiceQuestionStatusFor,
 } from "../src/sidepanel/realtime/typedQuestion.ts";
+
+test("recognizes unmodified S as the hold-to-talk shortcut", () => {
+  const shortcut = {
+    altKey: false,
+    shiftKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    code: "KeyS",
+  };
+  assert.equal(isVoiceHoldShortcut(shortcut), true);
+  assert.equal(isVoiceHoldShortcut({ ...shortcut, altKey: true }), false);
+  assert.equal(isVoiceHoldShortcut({ ...shortcut, code: "KeyQ" }), false);
+});
+
+test("does not capture the voice shortcut while editing text", () => {
+  assert.equal(isEditableShortcutTarget(null), false);
+  assert.equal(isEditableShortcutTarget({ tagName: "DIV" } as unknown as EventTarget), false);
+  assert.equal(isEditableShortcutTarget({ tagName: "input" } as unknown as EventTarget), true);
+  assert.equal(isEditableShortcutTarget({ isContentEditable: true } as unknown as EventTarget), true);
+});
 
 test("admits typed questions only after handshake and Live readiness", () => {
   assert.equal(questionAvailabilityFor("idle", false, "closed"), "stopped");
@@ -47,6 +69,14 @@ test("provides reason-aware question copy", () => {
   assert.equal(
     voiceQuestionStatusFor("degraded", "ready"),
     "Voice unavailable — typed questions still work",
+  );
+  assert.equal(
+    voiceQuestionStatusFor("degraded", "ready", "denied"),
+    "Microphone permission denied — allow access, then select the microphone",
+  );
+  assert.equal(
+    voiceQuestionStatusFor("degraded", "ready", "degraded"),
+    "Microphone unavailable — select the microphone to retry",
   );
   assert.equal(
     voiceQuestionStatusFor("degraded", "degraded"),

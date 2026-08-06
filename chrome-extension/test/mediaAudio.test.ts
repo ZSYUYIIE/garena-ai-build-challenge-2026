@@ -168,7 +168,7 @@ class FakeAudioContext {
 
 function fixture(options: {
   tabAudio?: boolean;
-  mic?: "allowed" | "denied" | "pending" | "no-echo";
+  mic?: "allowed" | "denied" | "denied-once" | "pending" | "no-echo";
   pendingModule?: boolean;
   now?: () => number;
 } = {}) {
@@ -180,8 +180,16 @@ function fixture(options: {
   const micTrack = new FakeTrack("audio", { echoCancellation: options.mic !== "no-echo" });
   const micStream = new FakeStream([micTrack]);
   let resolveMic: ((stream: MediaStream) => void) | null = null;
+  let microphoneAttempts = 0;
   const microphone = options.mic === "denied"
     ? () => Promise.reject(new DOMException("Denied", "NotAllowedError"))
+    : options.mic === "denied-once"
+      ? () => {
+          microphoneAttempts += 1;
+          return microphoneAttempts === 1
+            ? Promise.reject(new DOMException("Denied", "NotAllowedError"))
+            : Promise.resolve(micStream as unknown as MediaStream);
+        }
     : options.mic === "pending"
       ? () => new Promise<MediaStream>((resolve) => { resolveMic = resolve; })
       : () => Promise.resolve(micStream as unknown as MediaStream);
@@ -265,6 +273,7 @@ test("cancels held tab-gain automation before every rapid duck and restore ramp"
   const gain = media.context.gains[0];
   gain.automation.length = 0;
 
+  media.audio.setTabGain(0, 50);
   media.audio.setTabGain(0.3, 150);
   media.audio.setTabGain(1, 250);
   media.audio.setTabGain(0.3, 150);
@@ -272,6 +281,7 @@ test("cancels held tab-gain automation before every rapid duck and restore ramp"
   assert.deepEqual(
     gain.automation,
     [
+      { method: "hold", time: 1 }, { method: "ramp", value: 0, time: 1.05 },
       { method: "hold", time: 1 }, { method: "ramp", value: 0.3, time: 1.15 },
       { method: "hold", time: 1 }, { method: "ramp", value: 1, time: 1.25 },
       { method: "hold", time: 1 }, { method: "ramp", value: 0.3, time: 1.15 },
@@ -334,6 +344,41 @@ test("keeps tab capture when microphone permission is denied", async () => {
   assert.equal(await media.audio.startMicrophone(media.micOptions), "denied");
   assert.equal(media.tabAudio.stopCalls, 0);
   assert.equal(media.states.at(-1), "captured/denied");
+});
+
+test("retries microphone capture after an initial permission denial", async () => {
+  const media = fixture({ mic: "denied-once" });
+  media.audio.prepareForUserGesture();
+  assert.equal(await media.audio.startMicrophone(media.micOptions), "denied");
+  assert.equal(await media.audio.startMicrophone(media.micOptions), "ready");
+  assert.equal(media.states.at(-1), "absent/ready");
+});
+
+test("streams microphone PCM only while push-to-talk is held", async () => {
+  const media = fixture();
+  media.audio.setPushToTalkMode(true);
+  media.audio.prepareForUserGesture();
+  assert.equal(await media.audio.startMicrophone(media.micOptions), "ready");
+
+  media.context.worklets[0].emit(sineFloats(40, 0.25, 220, 48_000));
+  assert.deepEqual(media.userEvents, []);
+  assert.equal(media.micPackets.length, 0);
+
+  assert.equal(media.audio.startPushToTalk(), true);
+  media.context.worklets[0].emit(sineFloats(40, 0.25, 220, 48_000));
+  assert.equal(media.audio.stopPushToTalk(), true);
+  assert.deepEqual(media.userEvents, ["start", "end"]);
+  assert.equal(media.micPackets.length, 1);
+  assert.equal(media.audio.stopPushToTalk(), false);
+});
+
+test("accepts a microphone without confirmed echo cancellation in push-to-talk mode", async () => {
+  const media = fixture({ mic: "no-echo" });
+  media.audio.setPushToTalkMode(true);
+  media.audio.prepareForUserGesture();
+  assert.equal(await media.audio.startMicrophone(media.micOptions), "ready");
+  assert.equal(media.audio.startPushToTalk(), true);
+  assert.equal(media.audio.stopPushToTalk(), true);
 });
 
 test("stops captured tracks when context cannot become running", async () => {

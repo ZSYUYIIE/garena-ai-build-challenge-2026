@@ -38,7 +38,7 @@ function modelChunk(turnId: string, mode: "answer" | "narration" = "answer") {
 
 function fixture() {
   const clock = new FakeClock();
-  const gainCalls: Array<{ gain: 0.3 | 1; fadeMs: number }> = [];
+  const gainCalls: Array<{ gain: 0 | 0.3 | 1; fadeMs: number }> = [];
   const failures: Array<{ turnId: string; reason: string }> = [];
   const clears: Array<string | undefined> = [];
   const completions: string[] = [];
@@ -76,9 +76,12 @@ function fixture() {
   };
 }
 
-test("ducks only user-requested answers to 30 percent", () => {
+test("mutes tab playback while the user holds push-to-talk, then ducks for the answer", () => {
   const f = fixture();
   f.coordinator.userStarted("answer-1");
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 0, fadeMs: 50 });
+
+  f.coordinator.userEnded("answer-1");
   assert.deepEqual(f.gainCalls.at(-1), { gain: 0.3, fadeMs: 150 });
 
   f.coordinator.turnComplete({ turnId: "answer-1", mode: "answer" });
@@ -90,13 +93,13 @@ test("ducks only user-requested answers to 30 percent", () => {
   assert.equal(f.gainCalls.length, gainCallCount);
 });
 
-test("barge-in immediately clears answer or narration playback and keeps the replacement ducked", () => {
+test("barge-in immediately clears answer or narration playback and mutes the tab", () => {
   const f = fixture();
   f.coordinator.typedQuestionStarted("answer-1");
   f.coordinator.modelAudio(modelChunk("answer-1"));
   f.coordinator.userStarted("answer-2");
   assert.equal(f.clears.includes("answer-1"), true);
-  assert.deepEqual(f.gainCalls.at(-1), { gain: 0.3, fadeMs: 150 });
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 0, fadeMs: 50 });
 });
 
 test("tab activity clears narration without changing tab gain", () => {

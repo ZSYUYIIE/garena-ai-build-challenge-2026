@@ -3,6 +3,31 @@ import type { LiveProviderState, RealtimeStatus, TurnMode, VoiceStatus } from ".
 export type QuestionAvailability = "stopped" | "connecting" | "ready" | "degraded";
 export type MicrophoneRetirementResult = "none" | "retired" | "transport_failed";
 
+export type VoiceShortcutEvent = Pick<
+  KeyboardEvent,
+  "altKey" | "shiftKey" | "ctrlKey" | "metaKey" | "code"
+>;
+
+export function isVoiceHoldShortcut(event: VoiceShortcutEvent): boolean {
+  return !event.altKey
+    && !event.shiftKey
+    && !event.ctrlKey
+    && !event.metaKey
+    && event.code === "KeyS";
+}
+
+export function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (!target || typeof target !== "object") return false;
+  const candidate = target as { isContentEditable?: boolean; tagName?: unknown };
+  const tagName = typeof candidate.tagName === "string"
+    ? candidate.tagName.toUpperCase()
+    : "";
+  return candidate.isContentEditable === true
+    || tagName === "INPUT"
+    || tagName === "TEXTAREA"
+    || tagName === "SELECT";
+}
+
 export function questionAvailabilityFor(
   status: RealtimeStatus,
   helloAccepted: boolean,
@@ -38,13 +63,23 @@ export function questionCopyFor(availability: QuestionAvailability) {
 export function voiceQuestionStatusFor(
   voiceStatus: VoiceStatus,
   availability: QuestionAvailability,
+  microphoneState?: "pending" | "ready" | "denied" | "degraded",
 ): string | null {
   const availabilityText = questionCopyFor(availability).statusText;
   if (availabilityText) return availabilityText;
+  if (microphoneState === "denied") {
+    return "Microphone permission denied — allow access, then select the microphone";
+  }
+  if (microphoneState === "degraded") {
+    return "Microphone unavailable — select the microphone to retry";
+  }
+  if (microphoneState === "pending" && availability === "ready") {
+    return "Requesting microphone access…";
+  }
   return {
     off: null,
-    listening: "Mic open — ask a question",
-    user_speaking: "Listening to you…",
+    listening: "Hold S or the microphone to ask by voice",
+    user_speaking: "Listening live… Release S to send",
     gemini_speaking: "Gemini is replying…",
     degraded: "Voice unavailable — typed questions still work",
   }[voiceStatus];

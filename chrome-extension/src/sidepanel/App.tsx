@@ -1,6 +1,5 @@
 import { useCallback } from "react";
 
-import "./index.css";
 import { EventTimelineSection } from "./components/EventTimelineSection";
 import { Header } from "./components/Header";
 import { QuestionSection } from "./components/QuestionSection";
@@ -31,12 +30,27 @@ function StreamSensePanel() {
         session.stop();
       }
     },
-    [session],
+    [session.start, session.stop],
   );
 
   const handleAsk = useCallback(
     (question: string) => session.ask(question),
-    [session],
+    [session.ask],
+  );
+
+  const handleEnableVoice = useCallback(
+    () => session.enableVoice(),
+    [session.enableVoice],
+  );
+
+  const handleStartVoice = useCallback(
+    () => session.startVoiceQuestion(),
+    [session.startVoiceQuestion],
+  );
+
+  const handleStopVoice = useCallback(
+    () => session.stopVoiceQuestion(),
+    [session.stopVoiceQuestion],
   );
 
   return (
@@ -64,8 +78,14 @@ function StreamSensePanel() {
         <QuestionSection
           messages={session.messages}
           onAsk={handleAsk}
+          onEnableVoice={handleEnableVoice}
+          onStartVoice={handleStartVoice}
+          onStopVoice={handleStopVoice}
+          canEnableVoice={session.canEnableVoice}
+          canStartVoice={session.canStartVoice}
           questionAvailability={session.questionAvailability}
           voiceStatus={session.voiceStatus}
+          microphoneState={session.microphoneState}
           tabContextStatus={session.tabContextStatus}
         />
       </div>

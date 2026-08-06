@@ -79,8 +79,11 @@ test("uses bounded source-specific transport backpressure actions", () => {
   assert.equal(backpressureAction("frame", 128 * 1024), "replace_latest_frame");
   assert.equal(backpressureAction("tab", 32 * 1024 - 1), "send");
   assert.equal(backpressureAction("tab", 32 * 1024), "tab_discontinuity");
-  assert.equal(backpressureAction("microphone", 32 * 1024 - 1), "send");
-  assert.equal(backpressureAction("microphone", 32 * 1024), "fail_microphone_turn");
+  // A queued base64-encoded maximum-size video frame must not be mistaken for
+  // one second of queued microphone PCM on their shared WebSocket.
+  assert.equal(backpressureAction("microphone", 700 * 1024), "send");
+  assert.equal(backpressureAction("microphone", 768 * 1024 - 1), "send");
+  assert.equal(backpressureAction("microphone", 768 * 1024), "fail_microphone_turn");
 });
 
 test("reports backend WebSocket close details with a safe generic fallback", () => {

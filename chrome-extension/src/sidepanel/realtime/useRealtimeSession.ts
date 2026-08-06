@@ -6,6 +6,10 @@ import {
   isCaptureAuthorizationError,
   targetChangeRequiresReset,
 } from "../../services/captureTarget";
+import {
+  isMicrophonePermissionGrantedMessage,
+  microphonePermissionPageUrl,
+} from "../../services/microphonePermission";
 import type { NarrationMode } from "../context/ConfigurationContext";
 import {
   calculateFrameDimensions,
@@ -22,6 +26,8 @@ import {
   createContextTimeToExtensionSessionMs,
   createMediaSocketProtocol,
   RealtimeMediaAudio,
+  type MicrophoneOptions,
+  type MicrophoneState,
   type RealtimeMediaState,
 } from "./mediaAudio";
 import {
@@ -128,6 +134,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const liveProviderStateRef = useRef<LiveProviderState>("closed");
 
   const mediaAudioRef = useRef<RealtimeMediaAudio | null>(null);
+  const retryMicrophoneRef = useRef<(() => Promise<MicrophoneState>) | null>(null);
   const speechCoordinatorRef = useRef<SpeechCoordinator | null>(null);
   const activeTurnRef = useRef<TurnRoleState | null>(null);
   const settlingTurnRef = useRef<TurnRoleState | null>(null);
@@ -189,6 +196,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     websocketRef.current = null;
     speechCoordinatorRef.current = null;
     mediaAudioRef.current = null;
+    retryMicrophoneRef.current = null;
     mediaStreamRef.current = null;
     captureVideoRef.current = null;
     captureCanvasRef.current = null;
@@ -312,6 +320,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     });
     controller = mediaAudio;
     mediaAudioRef.current = mediaAudio;
+    mediaAudio.setPushToTalkMode(true);
     resourceLifecycle.register(() => mediaAudio.stop());
     const preparedAudio = mediaAudio.prepareForUserGesture();
     const audioClockOrigin = {
@@ -456,7 +465,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     const { capture: captureFrame } = createFrameCaptureScheduler(runFrameCapture);
     captureFrameRef.current = captureFrame;
 
-    const microphonePromise = mediaAudio.startMicrophone({
+    const microphoneOptions: MicrophoneOptions = {
       onMicPacket: (pcm, timestampMs) => {
         callbackGate.run(() => {
           const turn = microphoneTurns.current();
@@ -520,7 +529,15 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       },
       tabReference: null,
       modelReference: null,
+    };
+    const startMicrophoneAttempt = () => mediaAudio.startMicrophone(microphoneOptions);
+    retryMicrophoneRef.current = startMicrophoneAttempt;
+    resourceLifecycle.register(() => {
+      if (retryMicrophoneRef.current === startMicrophoneAttempt) {
+        retryMicrophoneRef.current = null;
+      }
     });
+    const microphonePromise = startMicrophoneAttempt();
 
     setStatus("requesting_capture");
     setStatusText("Capturing the active tab without the StreamSense panel.");
@@ -796,6 +813,55 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     );
   }, [publishVoiceStatus, settleTurnComplete]);
 
+  const enableVoice = useCallback(() => {
+    const retryMicrophone = retryMicrophoneRef.current;
+    const microphoneState = voiceStateRef.current.microphoneState;
+    if (
+      !retryMicrophone
+      || (microphoneState !== "denied" && microphoneState !== "degraded")
+    ) {
+      return false;
+    }
+    setError(null);
+    if (microphoneState === "denied") {
+      void chrome.tabs.create({ url: microphonePermissionPageUrl() });
+      return true;
+    }
+    publishVoiceStatus({ microphoneState: "pending" });
+    void retryMicrophone();
+    return true;
+  }, [publishVoiceStatus]);
+
+  useEffect(() => {
+    const handlePermissionGranted = (message: unknown) => {
+      if (!isMicrophonePermissionGrantedMessage(message)) return;
+      const retryMicrophone = retryMicrophoneRef.current;
+      if (!retryMicrophone) return;
+      setError(null);
+      publishVoiceStatus({ microphoneState: "pending" });
+      void retryMicrophone();
+    };
+    chrome.runtime.onMessage.addListener(handlePermissionGranted);
+    return () => chrome.runtime.onMessage.removeListener(handlePermissionGranted);
+  }, [publishVoiceStatus]);
+
+  const startVoiceQuestion = useCallback(() => {
+    if (!canAskRealtime(
+      statusRef.current,
+      voiceStateRef.current.helloAccepted,
+      liveProviderStateRef.current,
+    )) {
+      return false;
+    }
+    const started = mediaAudioRef.current?.startPushToTalk() ?? false;
+    if (started) setError(null);
+    return started;
+  }, []);
+
+  const stopVoiceQuestion = useCallback(() => (
+    mediaAudioRef.current?.stopPushToTalk() ?? false
+  ), []);
+
   useEffect(() => {
     if (!targetChangeRequiresReset(capturedTabIdRef.current, captureTarget.target)) return;
     stopRef.current();
@@ -828,15 +894,19 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     voiceStateRef.current.helloAccepted,
     liveProviderState,
   );
+  const microphoneState = voiceStateRef.current.microphoneState;
 
   return {
     status, statusText, error, description, events, messages, voiceStatus, tabContextStatus,
+    microphoneState,
     isRunning: status === "connecting" || status === "connected",
     isBusy: status === "requesting_capture",
     canStart: captureTarget.canStart,
     canAsk: questionAvailability === "ready",
+    canEnableVoice: microphoneState === "denied" || microphoneState === "degraded",
+    canStartVoice: questionAvailability === "ready" && microphoneState === "ready",
     questionAvailability,
-    start, stop, ask,
+    start, stop, ask, enableVoice, startVoiceQuestion, stopVoiceQuestion,
   };
 }
 
