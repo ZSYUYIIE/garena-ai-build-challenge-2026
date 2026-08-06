@@ -64,24 +64,107 @@ extension ID remains stable.
 
 ## 3. Configure Google Cloud Speech-to-Text
 
-Replace `YOUR_PROJECT_ID` in every command:
+Replace `YOUR_GOOGLE_ACCOUNT` and `YOUR_PROJECT_ID` below. Run the commands in
+this order; the CLI login and Application Default Credentials login are
+separate and both are required for the full setup.
+
+### 3.1 Sign in to the Google Cloud CLI
 
 ```bash
 gcloud auth login
+```
+
+Complete the browser sign-in, then confirm that the intended account is marked
+`ACTIVE`:
+
+```bash
+gcloud auth list
+```
+
+If the correct account is already listed but is not active, select it:
+
+```bash
+gcloud config set account YOUR_GOOGLE_ACCOUNT
+```
+
+### 3.2 Select and verify the Google Cloud project
+
+```bash
 gcloud config set project YOUR_PROJECT_ID
-gcloud services enable speech.googleapis.com --project=YOUR_PROJECT_ID
+gcloud config get-value project
+```
+
+The final command must print the same `YOUR_PROJECT_ID` you intend to place in
+`GOOGLE_CLOUD_PROJECT`.
+
+### 3.3 Enable Cloud Speech-to-Text V2
+
+```bash
+gcloud services enable speech.googleapis.com \
+  --project=YOUR_PROJECT_ID
+```
+
+Confirm that the API is enabled:
+
+```bash
+gcloud services list --enabled \
+  --project=YOUR_PROJECT_ID \
+  --filter="name:speech.googleapis.com"
+```
+
+The output should contain `speech.googleapis.com`. If the enable command is
+denied, the selected account needs permission to enable services in that
+project, such as the Service Usage Admin role.
+
+### 3.4 Create Application Default Credentials
+
+```bash
+gcloud auth application-default login
+```
+
+Complete the second browser sign-in. This writes local ADC outside the
+repository; on macOS the usual location is
+`~/.config/gcloud/application_default_credentials.json`.
+
+### 3.5 Assign the ADC quota project
+
+```bash
+gcloud auth application-default set-quota-project YOUR_PROJECT_ID
+```
+
+Expected success output includes:
+
+```text
+Quota project "YOUR_PROJECT_ID" was added to ADC
+```
+
+If you previously saw a warning that the active project did not match the ADC
+quota project, this command resolves it. The account needs the
+`serviceusage.services.use` permission on the quota project.
+
+The complete command sequence, without the explanatory checks, is:
+
+```bash
+gcloud auth login
+gcloud config set account YOUR_GOOGLE_ACCOUNT
+gcloud config set project YOUR_PROJECT_ID
+gcloud services enable speech.googleapis.com \
+  --project=YOUR_PROJECT_ID
 gcloud auth application-default login
 gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 ```
 
-These are two related credential flows:
+`gcloud config set account` can be omitted when `gcloud auth login` already
+made the correct account active.
+
+The two authentication stores serve different purposes:
 
 - `gcloud auth login` selects the CLI account used to enable services.
 - `gcloud auth application-default login` creates Application Default
   Credentials (ADC) used by the Node.js Speech-to-Text client.
 
-The account needs permission to enable/use services in the project. Do not put
-a service-account JSON file in this repository.
+The Gemini API key does not replace ADC for Cloud Speech-to-Text. Do not put a
+service-account JSON file or the generated ADC file in this repository.
 
 ## 4. Configure the backend environment
 
