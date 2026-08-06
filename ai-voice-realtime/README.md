@@ -1,7 +1,7 @@
 # StreamSense Realtime Voice Backend
 
 StreamSense connects the Chrome extension to Gemini Interactions for grounded
-screen-change analysis, Gemini Live for open-microphone questions and native
+screen-change analysis, Gemini Live for push-to-talk questions and native
 voice replies, and Google Cloud Speech-to-Text V2 for captured-tab context.
 
 ```text
@@ -101,11 +101,12 @@ Then:
 1. Open an ordinary HTTP or HTTPS tab you want StreamSense to understand.
 2. Click the StreamSense toolbar icon. This authorizes that exact tab and opens
    the side panel.
-3. Enable the side-panel switch. Chrome may show the microphone permission
-   prompt the first time; allow it for open-microphone questions.
-4. Ask by voice or use the typed question field. Gemini answers in its native
-   voice. StreamSense may narrate a meaningful visual change only while the tab
-   is not speaking.
+3. Enable the side-panel switch. Chrome may open a dedicated extension page for
+   microphone permission the first time; allow it for push-to-talk questions.
+4. Focus the side panel, hold `S`, speak, and release to submit, or hold the
+   microphone button. The live user transcript and Gemini response appear in
+   the chat, and Gemini answers in its native voice. StreamSense may narrate a
+   meaningful visual change only while the tab is not speaking.
 5. Disable the switch to stop. The captured-tab badge returns from `ON` to
    `OFF` after Chrome reports capture has ended.
 
@@ -125,9 +126,10 @@ it.
   closes. Do not include private transcript text in bug reports.
 - Screen frames continue at no more than one frame per second while the session
   runs so Gemini has current visual context.
-- A voice or typed user question fades captured-tab playback to 30 percent. The
-  tab returns to full volume only after Gemini's local PCM playback queue is
-  idle.
+- While push-to-talk is held, captured-tab playback fades to 0 percent. It
+  returns to 30 percent while Gemini answers and to full volume after Gemini's
+  local PCM playback queue is idle. Typed questions use the 30-percent answer
+  level directly.
 - Automatic narration does not lower tab volume and is suppressed or cancelled
   while local tab-audio detection or Cloud Speech-to-Text reports speech.
 
