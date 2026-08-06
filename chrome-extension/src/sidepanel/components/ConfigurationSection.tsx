@@ -14,16 +14,25 @@ export function ConfigurationSection() {
   const narrationModes = Object.values(NarrationMode);
 
   return (
-    <div>
-      <p>Current narration level: </p>
-      <Select>
-        <SelectTrigger>{options.narrationLevel}</SelectTrigger>
+    <div className="flex items-center justify-between gap-2">
+      <label htmlFor="narration-level" className="text-sm text-muted-foreground">
+        Narration level
+      </label>
+      <Select aria-label="Narration level">
+        <SelectTrigger
+          id="narration-level"
+          aria-label="Narration level"
+          size="sm"
+        >
+          {options.narrationLevel}
+        </SelectTrigger>
         <SelectContent>
           {narrationModes.map((mode) => (
             <SelectItem
               key={mode}
               value={mode}
               onClick={() => setOptions({ ...options, narrationLevel: mode })}
+              className="text-sm"
             >
               {mode}
             </SelectItem>

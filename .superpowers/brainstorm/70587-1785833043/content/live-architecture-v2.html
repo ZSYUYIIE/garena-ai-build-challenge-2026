@@ -1,0 +1,133 @@
+<h2>Revised architecture: separate conversation and media context</h2>
+<p class="subtitle">Both audio sources reach Gemini Live, but never as an indistinguishable mixed stream.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Chrome extension capture</div>
+  <div class="mockup-body">
+    <div class="split">
+      <div class="section">
+        <div class="label">User lane</div>
+        <h3>Open microphone</h3>
+        <p>Mono PCM carries the user's questions and interruptions.</p>
+      </div>
+      <div class="section">
+        <div class="label">Media lane</div>
+        <h3>Captured-tab audio</h3>
+        <p>Separate PCM carries dialogue and other relevant sound from the selected tab.</p>
+      </div>
+    </div>
+    <div class="section">
+      <div class="label">Shared visual lane</div>
+      <h3>Changed screen frames</h3>
+      <p>Sampled JPEG frames provide visual grounding and timestamps for both conversation and media context.</p>
+    </div>
+  </div>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Live session A — conversation</div>
+    <div class="mockup-body">
+      <div class="section">
+        <h3>Inputs</h3>
+        <ul>
+          <li>User microphone PCM</li>
+          <li>Changed screen frames</li>
+          <li>Explicit narration triggers</li>
+          <li>Media-context tool results</li>
+        </ul>
+      </div>
+      <div class="section">
+        <h3>Responsibilities</h3>
+        <ul>
+          <li>Open-mic VAD and barge-in</li>
+          <li>Answers to the user's voice</li>
+          <li>Native audio responses</li>
+          <li>Meaningful visual narration</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Live session B — silent media observer</div>
+    <div class="mockup-body">
+      <div class="section">
+        <h3>Inputs</h3>
+        <ul>
+          <li>Captured-tab PCM</li>
+          <li>Timestamped screen frames</li>
+        </ul>
+      </div>
+      <div class="section">
+        <h3>Responsibilities</h3>
+        <ul>
+          <li>Transcribe and summarize tab speech</li>
+          <li>Track when tab speech is active</li>
+          <li>Produce no user-facing audio</li>
+          <li>Write a bounded, timestamped context buffer</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">Backend coordination</div>
+  <div class="mockup-body">
+    <div class="split">
+      <div class="section">
+        <div class="label">Context bridge</div>
+        <h3>Media-context tool</h3>
+        <p>Session A can retrieve recent Session B transcript and summary when a user's question depends on what the video said.</p>
+      </div>
+      <div class="section">
+        <div class="label">Polite narration</div>
+        <h3>Narration gate</h3>
+        <p>Automatic narration is withheld while tab speech is active and resumes only after a quiet hold period. User questions still receive answers.</p>
+      </div>
+    </div>
+    <div class="section">
+      <div class="label">Retention boundary</div>
+      <h3>Rolling context, not raw-audio storage</h3>
+      <p>Raw tab audio is streamed and discarded. Only a short in-memory transcript/summary window is available to the conversation and event tools.</p>
+    </div>
+  </div>
+</div>
+
+<div class="pros-cons">
+  <div class="pros">
+    <h4>Why split the sessions</h4>
+    <ul>
+      <li>Video dialogue cannot masquerade as the user's voice.</li>
+      <li>Gemini still understands audiovisual context.</li>
+      <li>Narration suppression follows real tab speech.</li>
+    </ul>
+  </div>
+  <div class="cons">
+    <h4>Cost of the split</h4>
+    <ul>
+      <li>Two Live connections per extension session.</li>
+      <li>Higher token/audio cost.</li>
+      <li>More session lifecycle and reconnection logic.</li>
+    </ul>
+  </div>
+</div>
+
+<h3>Does this revised source separation match what you want?</h3>
+<div class="options">
+  <div class="option" data-choice="approve-two-live-sessions" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Approve two sessions</h3>
+      <p>Keep microphone conversation and captured-tab context distinct.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="prefer-one-mixed-session" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Prefer one mixed session</h3>
+      <p>Accept weaker source attribution in exchange for lower cost and complexity.</p>
+    </div>
+  </div>
+</div>

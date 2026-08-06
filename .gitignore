@@ -12,6 +12,7 @@ dist
 release
 dist-ssr
 *.local
+.worktrees/
 
 # Editor directories and files
 .vscode/*

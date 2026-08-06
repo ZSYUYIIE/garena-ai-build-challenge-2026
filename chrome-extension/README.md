@@ -1,6 +1,34 @@
-# Development Setup
+# StreamSense Chrome Extension
 
-1. Ensure node.js is installed on your machine. You can download it from [nodejs.org](https://nodejs.org/).
-2. Run `npm install` to install the required dependencies.
-3. Run `npm run dev` to start the development server.
-4. Load unpacked extension in Chrome by navigating to `chrome://extensions/`, enabling "Developer mode", and clicking "Load unpacked". Select the `chrome-extension/dist` folder of the project.
+This Manifest V3 extension captures an authorized Chrome tab, samples JPEG frames, and displays narration, questions, and timestamped events from the local StreamSense backend.
+
+## Build for the demo
+
+Start the backend first by following `ai-voice-realtime/README.md`. Then:
+
+```bash
+cd chrome-extension
+npm install
+npm run build
+```
+
+Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `chrome-extension/dist`.
+
+On an ordinary HTTP or HTTPS page, click the StreamSense toolbar icon to authorize that exact tab and open the side panel. Use the side-panel switch to start or stop capture.
+
+## Development
+
+Use the Vite watch process when changing extension code:
+
+```bash
+npm run dev
+```
+
+Reload the unpacked extension from `chrome://extensions` after rebuilding when necessary.
+
+## Checks
+
+```bash
+npm test
+npm run build
+```

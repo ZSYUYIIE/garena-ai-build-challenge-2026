@@ -1,0 +1,21 @@
+{
+  "name": "ai-voice-realtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test",
+    "check": "node --check server.js && node --test"
+  },
+  "dependencies": {
+    "@google-cloud/speech": "7.5.0",
+    "@google/genai": "2.15.0",
+    "better-sqlite3": "^13.0.2",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ws": "^8.18.0",
+    "zod": "^4.4.3"
+  }
+}

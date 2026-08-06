@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>StreamSense Backend Diagnostic</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="stage">
+        <video id="preview" autoplay muted playsinline></video>
+        <canvas id="frameCanvas" width="640" height="360"></canvas>
+        <div class="statusbar">
+          <span id="connection">Disconnected</span>
+          <span id="mode">narrating</span>
+          <span id="audioStatus">audio idle</span>
+          <span id="telemetry">idle</span>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="controls">
+          <div class="source-toggle" role="radiogroup" aria-label="Capture source">
+            <label>
+              <input type="radio" name="captureSource" value="camera" checked />
+              <span>Camera</span>
+            </label>
+            <label>
+              <input type="radio" name="captureSource" value="screen" />
+              <span>Screen</span>
+            </label>
+          </div>
+          <button id="startBtn">Start</button>
+          <button id="stopBtn" disabled>Stop</button>
+        </div>
+
+        <form id="questionForm" class="question">
+          <input id="questionInput" type="text" autocomplete="off" placeholder="Ask about the live video..." />
+          <button type="submit">Ask</button>
+        </form>
+
+        <section class="timeline" aria-labelledby="timelineHeading">
+          <div class="timeline-header">
+            <h2 id="timelineHeading">Event timeline</h2>
+            <span id="eventCount">0</span>
+          </div>
+          <p id="timelineEmpty" class="timeline-empty">
+            Meaningful moments will appear here as the stream plays.
+          </p>
+          <div
+            id="timelineEvents"
+            class="timeline-events"
+            role="list"
+            aria-live="polite"
+          ></div>
+        </section>
+
+        <div class="transcript" id="transcript" aria-live="polite"></div>
+      </aside>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

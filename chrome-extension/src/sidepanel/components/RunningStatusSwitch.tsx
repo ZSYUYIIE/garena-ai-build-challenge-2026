@@ -1,35 +1,38 @@
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { ExtensionStatusService } from "@/services/extensionStatus";
-import { useEffect, useState } from "react";
 
-export function RunningStatusSwitch() {
-  const [isRunning, setIsRunning] = useState(false);
+type RunningStatusSwitchProps = {
+  isRunning: boolean;
+  isBusy: boolean;
+  canStart: boolean;
+  onChange: (isRunning: boolean) => void;
+};
 
-  useEffect(() => {
-    ExtensionStatusService.isRunning().then(setIsRunning);
-
-    const unsubscribe = ExtensionStatusService.onStatusUpdate((isRunning) => {
-      setIsRunning(isRunning);
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, []);
+export function RunningStatusSwitch({
+  isRunning,
+  isBusy,
+  canStart,
+  onChange,
+}: RunningStatusSwitchProps) {
+  const startUnavailable = !isRunning && !canStart;
 
   return (
     <div className="flex items-center space-x-2">
       <Switch
         id="is-extension-running"
+        aria-label="Turn StreamSense on or off"
         isSelected={isRunning}
-        onChange={(isSelected) => {
-          ExtensionStatusService.toggle();
-          setIsRunning(isSelected);
-        }}
+        isDisabled={isBusy || startUnavailable}
+        onChange={onChange}
       />
       <Label htmlFor="is-extension-running">
-        {isRunning ? "Extension running" : "Extension stopped"}
+        {isBusy
+          ? "Starting..."
+          : startUnavailable
+            ? "Authorize this tab"
+            : isRunning
+              ? "StreamSense running"
+              : "StreamSense stopped"}
       </Label>
     </div>
   );

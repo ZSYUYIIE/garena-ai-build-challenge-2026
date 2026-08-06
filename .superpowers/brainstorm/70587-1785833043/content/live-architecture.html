@@ -1,0 +1,96 @@
+<h2>Backend-mediated Gemini Live architecture</h2>
+<p class="subtitle">One Live session receives the user microphone and sampled screen frames. Tab audio never leaves the extension.</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Chrome extension side panel</div>
+    <div class="mockup-body">
+      <div class="section">
+        <div class="label">Visual context</div>
+        <h3>Tab frame sampler</h3>
+        <p>Captures a JPEG at up to 1 FPS, sends material changes, and forces a fresh frame when the user starts a question.</p>
+      </div>
+      <div class="section">
+        <div class="label">Conversation input</div>
+        <h3>User microphone</h3>
+        <p>Open mic produces mono PCM for Gemini VAD and natural barge-in.</p>
+      </div>
+      <div class="section">
+        <div class="label">Local control only</div>
+        <h3>Tab speech detector</h3>
+        <p>Observes captured-tab audio and emits only <strong>speaking / quiet</strong>. Its audio is never sent to Gemini.</p>
+      </div>
+      <div class="section">
+        <div class="label">Output</div>
+        <h3>Native audio player</h3>
+        <p>Plays Gemini audio, displays transcripts, and immediately clears queued playback on interruption.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Local StreamSense backend</div>
+    <div class="mockup-body">
+      <div class="section">
+        <div class="label">Session boundary</div>
+        <h3>Live session orchestrator</h3>
+        <p>Owns one authenticated Gemini Live WebSocket per extension session and relays audio, video, transcripts, and lifecycle events.</p>
+      </div>
+      <div class="section">
+        <div class="label">Polite narration</div>
+        <h3>Narration gate</h3>
+        <p>Prompts Gemini only after a meaningful visual change when the tab is quiet. User speech always has priority.</p>
+      </div>
+      <div class="section">
+        <div class="label">Structured memory</div>
+        <h3>Event tool adapter</h3>
+        <p>Validates Gemini function calls before recording timeline events in the existing event store.</p>
+      </div>
+      <div class="section">
+        <div class="label">Provider connection</div>
+        <h3>Gemini Live</h3>
+        <p>Receives microphone PCM, changed JPEG frames, and narration triggers; returns native audio plus input/output transcripts.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Source isolation</h3>
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>Gemini receives</h4>
+      <ul>
+        <li>User microphone audio</li>
+        <li>Sampled screen frames</li>
+        <li>Backend narration prompts</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>Gemini never receives</h4>
+      <ul>
+        <li>Captured-tab audio</li>
+        <li>Browser speech-synthesis output</li>
+        <li>Permanent API credentials in the extension</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<h3>Does this architecture boundary look right?</h3>
+<div class="options">
+  <div class="option" data-choice="approve-architecture" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Approve architecture</h3>
+      <p>Continue to narration, interruption, and tab-speech behavior.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="change-architecture" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Needs changes</h3>
+      <p>Describe what should move, connect differently, or leave scope.</p>
+    </div>
+  </div>
+</div>
