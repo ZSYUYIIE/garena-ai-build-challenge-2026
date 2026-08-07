@@ -5,8 +5,10 @@ for the StreamSense session dashboard. It is a read model over the configured
 history repository. The endpoint does not call Gemini, Cloud Speech-to-Text,
 MongoDB, an embedding provider, or Redis by itself.
 
-The dashboard renders these relationships as accessible text and links. A
-Three.js or other visual graph renderer is intentionally outside this branch.
+The History dashboard renders the contract in two complementary forms: readable
+DOM relationships and an optional Three.js map. The API remains
+renderer-neutral. The visual layer may position and style supplied records, but
+must not infer missing nodes, relationships, confidence, or semantic scores.
 
 ## Request
 
@@ -88,7 +90,7 @@ node ID, a `type`, and a finite `weight` from 0 through 1.
 | `shared_entity` | event → entity | Exactly `1`. It means the event contains that normalized entity label. Multiple events can point to the same entity node. |
 | `shared_topic` | event → topic | Exactly `1`. It means the event contains that normalized topic label. Multiple events can point to the same topic node. |
 | `temporal_relation` | previous event → next event in the same session | `round3(1 / (1 + elapsedSeconds / 60))`, where `elapsedSeconds = max(0, next.timestampSeconds - previous.timestampSeconds)`. Consecutive events at the same timestamp have weight `1`; the weight decays as their gap grows. |
-| `semantic_similarity` | event ↔ event relationship supplied by a future semantic integration | Reserved and optional. A future Anson-owned adapter may provide a normalized similarity score from 0 through 1. The current builder emits no such edges. It omits them rather than inventing a score. |
+| `semantic_similarity` | event ↔ event relationship supplied by a future semantic integration | Reserved and optional. A future adapter may provide a normalized similarity score from 0 through 1. The current builder emits no such edges. It omits them rather than inventing a score. |
 
 `round3` means rounding to three decimal places. A non-semantic edge weight is
 structural; it must not be presented as model confidence or probability.
@@ -96,8 +98,8 @@ structural; it must not be presented as model confidence or probability.
 Before emitting `semantic_similarity`, an integration must define stable pair
 identity, normalize provider-specific scores to `[0, 1]`, apply its own bounded
 threshold/ranking policy, and include only event nodes already admitted to the
-graph. This branch deliberately does not define provider, embedding, MongoDB,
-or Redis internals; those remain Anson-owned.
+graph. This contract deliberately does not define provider, embedding, MongoDB,
+or Redis internals; those remain behind the durable integration boundary.
 
 ## Ordering and truncation
 
@@ -106,6 +108,36 @@ The in-memory repository supplies sessions newest-first and events in ascending
 bounded inputs in order. When the node or edge limit is reached, later
 relationships are omitted. Clients must treat arrays as a bounded projection,
 not a complete database export.
+
+## Dashboard presentation semantics
+
+After Zod validation, the dashboard builds a deterministic scene model from the
+supplied arrays. It deduplicates IDs, omits dangling edges whose endpoint is not
+present, and preserves stable ordering. Presentation mappings are:
+
+| Node type | Three.js shape | Additional visual meaning |
+| --- | --- | --- |
+| `session` | sphere | Session cluster anchor. |
+| `event` | cube | Size reflects the supplied `importance`; it is not similarity or confidence. |
+| `entity` | diamond | Shared entity label. |
+| `topic` | ring | Shared topic label. |
+
+Structural edge types retain the meanings defined above. A supplied
+`semantic_similarity` edge is a distinct dashed bridge. When the backend omits
+that edge, the client does not calculate or fabricate one.
+
+The canvas supports pointer orbit, zoom, and shape selection, but is not the
+only access path. A native labeled-node selector, semantic detail panel,
+session/event links, legend, status text, and the readable relationship lists
+expose the same supplied information to keyboard and assistive-technology
+users. `prefers-reduced-motion` disables settling motion. If WebGL
+initialization fails, the dashboard reports the optional view as unavailable
+and leaves all DOM controls and relationships usable.
+
+The renderer schedules bounded frames only for initialization, interaction,
+selection, and resize. Replacing graph data or leaving the route cancels the
+pending frame, removes listeners and labels, disconnects resize observation,
+and disposes controls, geometries, materials, and the WebGL renderer.
 
 ## Errors and availability
 
@@ -129,7 +161,8 @@ unavailable.
 
 The context graph consumes `HistoryService` repository results only. Durable
 MongoDB history, vector retrieval, Redis current context, retrieval ranking,
-and optional semantic edges are not complete on this branch. The handoff for
+and optional semantic edges are not supplied by the current in-memory
+composition. The handoff for
 those pieces is documented in
 [`semantic-history-integration.md`](semantic-history-integration.md).
 

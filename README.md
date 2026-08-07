@@ -1,11 +1,13 @@
 # StreamSense
 
-StreamSense is a Chrome side-panel extension that watches an authorized browser
-tab, describes meaningful visual changes, builds a timestamped event timeline,
-and lets the user ask Gemini questions by text or push-to-talk voice.
+StreamSense is one local accessibility product with two user surfaces: a Chrome
+side panel for live assistance and a browser dashboard for saved history. The
+side panel watches an explicitly authorized tab, describes meaningful visual
+changes, builds a timestamped event timeline, and lets the user ask questions
+by text or voice. **View History** opens the dashboard in a normal Chrome tab.
 
-The project has three main runtime pieces: the extension, the local backend,
-and the session dashboard.
+Both surfaces use the same local backend. The extension uses its protocol-v2
+WebSocket for realtime work, while the dashboard uses bounded REST endpoints.
 
 ```text
 Chrome extension
@@ -29,8 +31,9 @@ context and is never presented as the user's speech.
 | `session-dashboard/` | Accessible React dashboard for previous sessions, timeline search, and context exploration. |
 | `docs/` | Design notes and verification material. |
 
-There is deliberately no repository-root `package.json`. Install and run each
-package from its own directory.
+The repository root is an npm workspace and the supported starting point for
+installing, developing, building, demonstrating, and checking all three
+packages.
 
 ## Prerequisites
 
@@ -45,21 +48,23 @@ deterministic session-dashboard workflow below requires only Node.js and npm.
 
 ## 1. Install dependencies
 
-From the repository root:
+From the repository root (`D:\Work\garena-ai-build-challenge-2026` on the
+example Windows checkout):
 
 ```bash
-cd ai-voice-realtime
-npm install
-
-cd ../chrome-extension
 npm install
 npm run build
-
-cd ../session-dashboard
-npm install
 ```
 
-The extension build is written to `chrome-extension/dist`.
+On Windows PowerShell, `npm.cmd install` and `npm.cmd run build` are equivalent
+if the `npm` shim is unavailable. The workspace install uses the root lockfile.
+The build writes the unpacked extension to `chrome-extension/dist` and the
+dashboard assets to `session-dashboard/dist`.
+
+The root `.npmrc` currently sets `ignore-scripts=true` because the pinned
+dependencies used by this prototype include the required runtime artifacts and
+do not need native install hooks. Review that setting before adding a package
+that genuinely requires an `install` or `postinstall` script.
 
 ## 2. Load the Chrome extension
 
@@ -182,8 +187,7 @@ service-account JSON file or the generated ADC file in this repository.
 ## 4. Configure the backend environment
 
 ```bash
-cd ai-voice-realtime
-cp .env.example .env
+cp ai-voice-realtime/.env.example ai-voice-realtime/.env
 ```
 
 Edit `ai-voice-realtime/.env`:
@@ -216,18 +220,16 @@ shared or production backend.
 
 ## 5. Start StreamSense
 
-Keep the backend running in a terminal:
+For normal development, run one command from the repository root:
 
 ```bash
-cd ai-voice-realtime
-npm start
+npm run dev
 ```
 
-Expected output:
-
-```text
-Server running on http://127.0.0.1:8000
-```
+This supervised profile starts exactly one normal in-memory backend on port
+`8000`, the extension development process on `5173`, and the dashboard on
+`5174`. It checks that all required ports are free before starting. Press
+Ctrl+C once to stop the process group.
 
 Then in Chrome:
 
@@ -241,6 +243,9 @@ Then in Chrome:
    **Allow microphone**, then return to the captured tab.
 5. Let the video play. Meaningful visual changes appear in the timeline and may
    be narrated according to the selected narration level.
+6. Select **View History** to open
+   `http://127.0.0.1:5174/dashboard/` in a normal tab while the full development
+   profile is running.
 
 If you switch to another tab, click the toolbar icon on that new tab to
 authorize it before starting again.
@@ -283,108 +288,91 @@ when stopped. Reload the unpacked extension after rebuilding; legacy unowned
 
 ## Session dashboard development without Speech-to-Text
 
-The history dashboard can run from deterministic demo data without opening the
-extension, connecting a WebSocket, configuring Gemini, or starting Cloud
-Speech-to-Text. Use two terminals from the repository root.
-
-Terminal 1:
+The History surface can run from deterministic demo data without opening the
+extension or creating a realtime WebSocket session:
 
 ```bash
-cd ai-voice-realtime
-npm install
-npm run start:dashboard-demo
-```
-
-Terminal 2:
-
-```bash
-cd session-dashboard
-npm install
-npm run dev
+npm run dev:dashboard
 ```
 
 Open `http://127.0.0.1:5174/dashboard/`. Vite serves the React application on
-port `5174` and proxies `/api` to the backend on port `8000`.
+port `5174` and proxies `/api` to the one demo backend on port `8000`.
 
 `start:dashboard-demo` is an explicit development-only mode. It seeds a fresh
 in-memory repository every time the backend starts and is refused when
 `NODE_ENV=production`. Normal `npm start` uses an empty in-memory history
 repository. Neither mode is durable: dashboard history is lost at process
 restart. Durable MongoDB storage, vector embeddings/search, Redis current
-context, and retrieval ranking remain Anson-owned integration work and are not
-implemented on this branch.
+context, and retrieval ranking remain a separate integration workstream and are
+not implemented by the current in-memory composition.
 
-For an inspectable copy of the deterministic fixture, run:
+The Explore route includes an optional Three.js map of the bounded graph
+response. It visualizes only supplied session, event, entity, topic, and edge
+records; it does not infer semantic relationships. A native labeled-node
+selector and readable relationship lists remain available for keyboard and
+assistive-technology use. Reduced-motion preference limits rendering to
+interaction, WebGL failure leaves the DOM view usable, and route/data changes
+dispose the renderer, animation, observers, listeners, and GPU resources.
+
+For an inspectable copy of the deterministic fixture, run the package-scoped
+utility:
 
 ```bash
-cd ai-voice-realtime
-npm run seed:dashboard
+npm run seed:dashboard --workspace ai-voice-realtime
 ```
 
 That command writes the Git-ignored
 `ai-voice-realtime/data/dashboard-demo.json`. It does not start the backend,
 populate a running process, or change what `npm start` loads.
 
-### Serve a production build locally
-
-Build the dashboard before starting the backend so the static route is present:
+### Serve a built one-backend demo locally
 
 ```bash
-cd session-dashboard
-npm install
-npm run build
-
-cd ../ai-voice-realtime
-npm install
-npm run start:dashboard-demo
+npm run demo
 ```
 
-Open `http://127.0.0.1:8000/dashboard/`. Replace
-`npm run start:dashboard-demo` with `npm start` to inspect the empty/default
-memory mode. This local build workflow does not prove physical Chrome, Gemini,
-or Cloud Speech-to-Text behavior.
+`demo` first builds the extension and dashboard, then starts exactly one
+development-only backend with deterministic history. Open
+`http://127.0.0.1:8000/dashboard/`; load `chrome-extension/dist` for the Live
+surface. There is no separate Vite server in this profile. Dashboard-only use
+does not start provider sessions, but this workflow is not evidence that
+physical Chrome capture, Gemini, or Cloud Speech-to-Text works in the current
+environment.
 
 ## Development
 
-Run the extension build in watch mode:
+Run commands from the repository root:
 
-```bash
-cd chrome-extension
-npm run dev
-```
+| Command | Processes and purpose |
+| --- | --- |
+| `npm run dev` | Normal backend `8000` + Live extension `5173` + History dashboard `5174`. |
+| `npm run dev:realtime` | Normal backend `8000` + Live extension `5173`; omits the dashboard Vite process. |
+| `npm run dev:dashboard` | Demo-history backend `8000` + History dashboard `5174`; no extension process. |
+| `npm run build` | Builds `chrome-extension/dist` and `session-dashboard/dist`. |
+| `npm run demo` | Builds both surfaces, then serves the deterministic dashboard through one backend on `8000`. |
+| `npm run check` | Runs orchestration tests, backend checks, extension tests/build, and dashboard tests/typecheck/build. |
 
-For automatic backend reloads:
-
-```bash
-cd ai-voice-realtime
-npm run dev
-```
-
-Reload the extension in `chrome://extensions` after extension changes. Restart
-the backend after changing `.env`.
-
-Run all project checks:
-
-```bash
-cd ai-voice-realtime
-npm test
-npm run check
-
-cd ../chrome-extension
-npm test
-npm run build
-
-cd ../session-dashboard
-npm run check
-```
+Reload the unpacked extension in `chrome://extensions` after extension build
+changes. Restart the relevant profile after changing `ai-voice-realtime/.env`.
+The dev runner uses strict ports and exits if any required port is already in
+use; do not start a second backend beside it.
 
 ## Troubleshooting
 
 ### Cannot reach StreamSense at 127.0.0.1:8000
 
 The backend is not running, exited after startup, or is using a different port.
-Run `npm start` in `ai-voice-realtime` and keep that terminal open. The extension
-manifest and default WebSocket URL expect port `8000`.
+Run the appropriate root development command and keep that terminal open. The
+extension manifest and default WebSocket URL expect port `8000`.
+
+### View History opens a 404 page
+
+Use `npm run dev` when developing both surfaces; its extension build points
+**View History** to the dashboard Vite server on port `5174`. The
+`dev:realtime` profile deliberately omits that server and falls back to the
+backend `/dashboard/` URL, which exists only when `session-dashboard/dist` has
+been built. Run `npm run build`, `npm run demo`, or the full `npm run dev`
+profile as appropriate.
 
 ### Authorize this tab cannot be selected
 

@@ -2,15 +2,15 @@
 
 ## Scope and status
 
-StreamSense is a local, backend-mediated realtime screen assistant built for a
-Chrome Manifest V3 side panel. It combines sampled tab frames, open-microphone
-questions, captured-tab speech context, Gemini native audio responses, and a
-grounded event timeline. An accessible React dashboard now provides a separate
-read surface for previous-session metadata, chronological events, search, and
-bounded context relationships.
+StreamSense is one local, backend-mediated accessibility product with two user
+surfaces. Its Manifest V3 side panel provides Live sampled-tab assistance,
+questions, native audio responses, and a grounded current-session timeline.
+Its History dashboard provides previous-session metadata, chronological events,
+search, and bounded context relationships. **View History** links the compact
+Live surface to the dashboard, and both use the same backend process.
 
-This document describes the `feat/session-dashboard` feature as verified on
-2026-08-07. The active realtime defaults remain:
+This document describes the current local product boundaries as of 2026-08-07.
+The active realtime defaults remain:
 
 - backend default vision model: `gemini-3.6-flash`;
 - backend default Live model: `gemini-3.1-flash-live-preview`;
@@ -48,7 +48,8 @@ flowchart LR
     subgraph Dashboard["Session dashboard"]
         React["Accessible React routes"]
         Timeline["Previous-session timeline"]
-        Search["Search + context relationships"]
+        Search["Search + readable context relationships"]
+        Graph["Optional Three.js view"]
     end
 
     Vision["Gemini Interactions\ngemini-3.6-flash"]
@@ -67,18 +68,20 @@ flowchart LR
     Session --> Live
     Session --> STT
     STT --> Transcript
-    Transcript -. "quoted, untrusted context" .-> Vision
+    Transcript -. "local redundancy check after frame analysis" .-> Policy
     Transcript -. "tool result, never user speech" .-> Live
     Vision --> Policy
     Policy --> Live
     Vision --> Events
     Events --> Panel
+    Panel -. "View History" .-> React
     Session -. "accepted lifecycle/events" .-> Archive
     Archive --> History
     React --> REST
     REST --> History
     React --> Timeline
     React --> Search
+    React --> Graph
     Live --> Player
     Player --> Panel
 ```
@@ -117,10 +120,30 @@ page injection. Setting a different `VITE_STREAMSENSE_WS_URL` is not by itself a
 remote-deployment solution; the manifest host permissions and CSP would also
 need a deliberate security review and change.
 
-There is no root npm package. `chrome-extension`, `ai-voice-realtime`, and
-`session-dashboard` are installed, run, and verified independently.
+The repository root is an npm workspace and process-orchestration boundary:
+
+| Profile | Exactly one backend | Frontend development processes |
+| --- | --- | --- |
+| `npm run dev` | normal memory mode on `127.0.0.1:8000` | extension `5173`, dashboard `5174` |
+| `npm run dev:realtime` | normal memory mode on `127.0.0.1:8000` | extension `5173` |
+| `npm run dev:dashboard` | deterministic demo mode on `127.0.0.1:8000` | dashboard `5174` |
+
+The runner preflights every required endpoint, gives Vite strict ports, and
+supervises the process group. `npm run build` builds both frontends. `npm run
+demo` performs that build and then starts a single backend serving the built
+dashboard at `127.0.0.1:8000/dashboard/`; it does not start Vite or a second
+backend.
 
 ## Runtime entry points
+
+### Root workspace
+
+`package.json` defines the three workspaces and public development commands.
+`scripts/dev-plan.js` declares the fixed process topology;
+`scripts/dev-runner.js` resolves Vite, preflights ports, and starts the selected
+plan; `scripts/process-supervisor.js` owns fail-fast and coordinated shutdown.
+`scripts/check-runner.js` runs the orchestration, backend, extension, and
+dashboard gates serially and stops at the first failure.
 
 ### Chrome extension
 
@@ -140,6 +163,12 @@ The toolbar action is the authorization gesture:
    separate media graphs, starts the local WebSocket, and sends protocol v2
    `session_hello` before other session commands.
 
+The side panel's **View History** button opens a normal tab. Its build-time
+dashboard URL accepts only a loopback HTTP(S) `/dashboard/` URL; otherwise the
+extension safely derives `/dashboard/` from its validated WebSocket endpoint.
+The full root dev profile injects `http://127.0.0.1:5174/dashboard/`; the
+realtime-only and built-demo paths use the backend route on port `8000`.
+
 ### Session dashboard
 
 `session-dashboard/src` is a separate Vite/React application with base path
@@ -150,8 +179,9 @@ startup, Express serves it at `/dashboard/` with an SPA fallback.
 
 The dashboard has overview, session detail/timeline, semantic-search, and
 context-exploration routes. It uses React Query for bounded request state and
-Zod to validate every response envelope. Its context relationships remain
-accessible DOM lists; there is no Three.js renderer.
+Zod to validate every response envelope. Context exploration keeps readable
+DOM relationship lists as its primary representation and adds an optional
+Three.js view of the same validated nodes and edges.
 
 ### Backend
 
@@ -200,7 +230,8 @@ adapter. Demo mode is refused under `NODE_ENV=production`.
 | `HistoryArchiveQueue` | Bounded, serial, failure-contained off-path lifecycle/event archival | Realtime speech/provider decisions |
 | `HistoryService` | Session aggregates, bounded REST read models, semantic degradation, context graph | Provider-specific vectors or databases |
 | `HistoryRepository` | Session/event CRUD and stable cursor pagination contract | Semantic ranking |
-| `session-dashboard` | Accessible history navigation and validated API consumption | Providers, credentials, or storage implementation |
+| `session-dashboard` | Accessible History navigation, validated API consumption, and optional graph presentation | Providers, credentials, storage implementation, or inferred relationships |
+| `ThreeGraphExplorer` | Deterministic layout, pointer inspection, labeled selector, reduced-motion/fallback state, and renderer lifecycle | Graph retrieval, semantic scoring, or durable data |
 
 ## Configuration and active providers
 
@@ -427,14 +458,16 @@ Tab audio uses 1,600-sample/100 ms chunks. It never enters the microphone packet
 kind and never goes to Gemini Live raw. The backend holds only normalized final
 segments in memory, capped at 120 seconds and 12,000 Unicode code points.
 
-Recent transcript is used in two bounded ways:
+Recent transcript is used in two bounded, source-separated ways:
 
-- up to 2,000 recent characters in the atomic vision prompt to suppress or
-  corroborate what is already visible;
-- a Live tool result capped at 4,000 characters and 5-120 seconds of lookback.
+- a local overlap check runs only after frame-only visual analysis and may
+  suppress redundant narration; transcript text is not placed in the vision
+  prompt and cannot create a visual fact;
+- a Live tool result is capped at 4,000 characters and 5-120 seconds of
+  lookback.
 
-Both paths explicitly label the text as captured-tab media, not user speech,
-and instruct the model never to execute it as instructions.
+The Live tool path labels the text as captured-tab media, not user speech, and
+instructs the model never to execute it as instructions.
 
 ### 7. Model audio playback and barge-in
 
@@ -479,6 +512,11 @@ the user-visible cross-session read surface.
 
 ### 9. Historical dashboard reads
 
+The Live side panel does not fetch historical records into its compact state.
+**View History** opens the dashboard, which makes same-origin REST requests to
+the shared backend. Opening the dashboard does not create a WebSocket
+`ClientSession` or initialize Gemini/STT providers.
+
 Express mounts these bounded routes before the legacy static page:
 
 - `GET /api/sessions` (newest-first, opaque cursor, maximum 50);
@@ -496,20 +534,46 @@ Semantic search is an injected `SemanticHistoryService`. The normal memory mode
 uses an unavailable adapter and keeps list/detail/timeline reads healthy. Demo
 mode uses deterministic fixture matching and does not generate embeddings or
 exercise a vector database. MongoDB persistence, vector embeddings/search,
-Redis current context, and retrieval ranking remain Anson-owned and incomplete.
+Redis current context, and retrieval ranking remain behind a separate durable
+integration boundary and are incomplete.
 The handoff is defined in `docs/semantic-history-integration.md`.
 
 The context graph is a bounded structural projection of session, event, entity,
 and topic records. Structural membership weights are exactly `1`; temporal
 weights use `round3(1 / (1 + elapsedSeconds / 60))`. The
-`semantic_similarity` type is reserved for a verified Anson-owned score and is
-currently omitted rather than fabricated. See `docs/context-graph-api.md` for
+`semantic_similarity` type is reserved for a verified integration-owned score
+and is currently omitted rather than fabricated. See
+`docs/context-graph-api.md` for
 the complete contract.
 
 History REST requests do not create a WebSocket `ClientSession`; therefore the
 dashboard can run without Gemini or Cloud Speech-to-Text credentials. This
 no-STT path is an independent development workflow, not a change to realtime
 STT behavior.
+
+### 10. Context graph presentation and cleanup
+
+`GET /api/context-graph` remains renderer-neutral. The dashboard first validates
+its bounded response, then `buildGraphSceneModel()` deterministically positions
+only the supplied nodes and drops dangling edges. It maps session, event,
+entity, and topic nodes to sphere, importance-sized cube, diamond, and ring
+geometry. Structural edge types retain their API meanings. A supplied
+`semantic_similarity` edge is shown as a distinct dashed bridge; the renderer
+does not generate one or infer a score.
+
+The Three.js canvas is optional and pointer-oriented. A native labeled node
+selector, semantic detail panel, session/event links, legend, live status, and
+the readable `RelationshipList` preserve the complete non-canvas path for
+keyboard and assistive-technology users. `prefers-reduced-motion` keeps the
+renderer interaction-driven, and WebGL initialization failure leaves those DOM
+controls and relationships available with a status message.
+
+Rendering uses bounded requestAnimationFrame bursts for initialization,
+controls, selection, and resize rather than a permanent animation loop. When
+graph data changes or the route unmounts, cleanup cancels the pending frame,
+removes canvas/control/window listeners, disconnects `ResizeObserver`, removes
+the CSS label layer, and disposes controls, geometries, materials, and the WebGL
+renderer.
 
 ## Protocol v2
 
@@ -621,6 +685,10 @@ Provider failure is not automatically fatal to the whole capture session:
 - SQLite timeline event writes;
 - bounded history REST routes and off-path in-memory archival;
 - the React previous-session dashboard under `session-dashboard/`;
+- side-panel **View History** navigation into that dashboard;
+- the optional Three.js context view with readable DOM alternatives and WebGL
+  fallback;
+- root workspace development/build/demo/check orchestration;
 - deterministic, explicitly selected dashboard demo data.
 
 ### Legacy or compatibility-only
@@ -671,6 +739,9 @@ not claim fresh physical-provider acceptance or freeze historical test counts.
   queue behavior, deterministic demo data, and history-router isolation;
 - accessible dashboard overview/detail/timeline/search/context routes with
   loading, empty, degraded, and error states;
+- deterministic context-graph layout, node/edge filtering, optional Three.js
+  rendering, reduced-motion behavior, fallback, and teardown boundaries;
+- root fixed-port development plans and the built one-backend demo path;
 - a production dashboard build served under `/dashboard/` when the build exists.
 
 ## What does not work yet or is not proven
@@ -715,11 +786,16 @@ current end-to-end proof.
 - The dashboard's normal and demo repositories are in-memory and lose/reset
   data at backend restart. The exported demo JSON is not a runtime datastore.
 - Durable MongoDB history, vector embedding/search, Redis current context,
-  retrieval ranking, and production score calibration remain Anson-owned and
-  incomplete. No physical integration with those services is claimed.
+  retrieval ranking, and production score calibration remain separate
+  integration work. No physical integration with those services is claimed.
 - `semantic_similarity` context edges are reserved but not emitted until a
   verified, normalized semantic score is supplied; structural edges are used
   instead of fabricated similarity.
+- Automated graph tests do not prove real-browser GPU/WebGL availability,
+  contrast, visible focus, reduced-motion behavior, or resource cleanup under
+  Chrome DevTools observation.
+- Root process-supervision tests do not by themselves prove every physical
+  Windows Ctrl+C, child-crash, and orphan-process scenario.
 - Provider usage/cost controls are indirect (frame/change/rate bounds); there is
   no user-facing budget dashboard or quota management.
 
@@ -728,7 +804,7 @@ current end-to-end proof.
 The top-level split is appropriate: realtime browser capabilities stay in the
 extension, provider credentials and policy stay in the backend, and the
 dashboard remains a provider-agnostic REST client. History repository and
-semantic interfaces provide focused seams for Anson-owned durable work.
+semantic interfaces provide focused seams for durable integration work.
 Testable factories (`createExtensionManifest`, `createStreamSenseServer`) keep
 browser/process bootstraps thin.
 
@@ -751,20 +827,15 @@ would increase risk without changing the runtime boundaries.
 Before calling a checkout release-ready:
 
 ```bash
-cd ai-voice-realtime
+npm install
 npm run check
-
-cd ../chrome-extension
-npm test
-npm run build
-
-cd ../session-dashboard
-npm run check
-
-cd ..
 git diff --check
 git status --short --branch
 ```
+
+The root check covers orchestration tests, backend checks, extension tests and
+build, and dashboard tests/typecheck/build. It does not perform a real provider
+call or physical Chrome/GPU/process-tree acceptance.
 
 Then perform the real Chrome/provider matrix in
 `docs/verification/2026-08-04-gemini-live-voice-acceptance.md` using sanitized

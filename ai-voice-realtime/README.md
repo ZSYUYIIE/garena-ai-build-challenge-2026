@@ -1,8 +1,11 @@
 # StreamSense Realtime Voice Backend
 
-StreamSense connects the Chrome extension to Gemini Interactions for grounded
-screen-change analysis, Gemini Live for push-to-talk questions and native
-voice replies, and Google Cloud Speech-to-Text V2 for captured-tab context.
+This is the shared local backend for both StreamSense surfaces: the Live Chrome
+side panel uses `/ws`, and the History dashboard uses `/api` plus the optional
+built `/dashboard/` route. For realtime sessions it connects to Gemini
+Interactions for grounded screen-change analysis, Gemini Live for questions
+and native voice replies, and Google Cloud Speech-to-Text V2 for captured-tab
+context.
 
 ```text
 screen frames + user microphone -> StreamSense backend -> Gemini
@@ -22,16 +25,14 @@ not as user speech.
   Default Credentials (ADC) available to the backend process.
 - Google Chrome for the extension demo.
 
-There is no repository-root `package.json`. Run backend commands from
-`ai-voice-realtime`, extension commands from `chrome-extension`, and dashboard
-commands from `session-dashboard`.
+The repository root is an npm workspace. Use its lockfile and root scripts for
+normal installation, integrated development, builds, demos, and full checks.
 
 ## Backend setup
 
 ```bash
-cd ai-voice-realtime
 npm install
-cp .env.example .env
+cp ai-voice-realtime/.env.example ai-voice-realtime/.env
 ```
 
 Configure `.env` without committing the populated file:
@@ -67,16 +68,27 @@ Keep the backend bound to loopback and restore exact-ID matching after the test.
 
 ## Run the backend
 
-Use the stable command for normal runs:
+For integrated development, run one of these commands from the repository root:
+
+| Command | Supervised processes |
+| --- | --- |
+| `npm run dev` | Normal backend `8000`, extension `5173`, dashboard `5174`. |
+| `npm run dev:realtime` | Normal backend `8000`, extension `5173`. |
+| `npm run dev:dashboard` | Demo-history backend `8000`, dashboard `5174`. |
+
+Every profile preflights its fixed ports and starts exactly one backend. Do not
+start a package-scoped server at the same time.
+
+For an intentionally backend-only stable run:
 
 ```bash
-npm start
+npm start --workspace ai-voice-realtime
 ```
 
-Use the development command only when automatic Node reload is useful:
+For backend-only automatic Node reload:
 
 ```bash
-npm run dev
+npm run dev --workspace ai-voice-realtime
 ```
 
 The backend listens on `http://127.0.0.1:8000` by default. Keep this terminal
@@ -91,28 +103,15 @@ history repository are distinct persistence boundaries.
 
 The dashboard REST routes do not create a realtime `ClientSession` and do not
 start Gemini or Cloud Speech-to-Text providers. For deterministic dashboard
-development, use two terminals from the repository root. No API key, Google
-Cloud project, ADC, extension, or WebSocket connection is required for this
-workflow.
-
-Terminal 1:
+development, use the root profile. No API key, Google Cloud project, ADC,
+extension, or WebSocket connection is required merely to browse its fixture.
 
 ```bash
-cd ai-voice-realtime
-npm install
-npm run start:dashboard-demo
-```
-
-Terminal 2:
-
-```bash
-cd session-dashboard
-npm install
-npm run dev
+npm run dev:dashboard
 ```
 
 Open `http://127.0.0.1:5174/dashboard/`. Vite proxies `/api` requests to this
-backend at `127.0.0.1:8000`.
+single demo backend at `127.0.0.1:8000`.
 
 `start:dashboard-demo` sets `STREAMSENSE_HISTORY_MODE=demo`, loads a fixed set
 of development sessions into a fresh in-memory repository, and starts the
@@ -120,32 +119,27 @@ server. It is rejected when `NODE_ENV=production`. Restarting the process resets
 the same deterministic fixture. `STREAMSENSE_HISTORY_MODE=memory` is the normal
 default and starts empty; both modes are process-local and non-durable.
 
-`npm run seed:dashboard` is different: it only exports the deterministic
+`npm run seed:dashboard --workspace ai-voice-realtime` is different: it only
+exports the deterministic
 fixture to the Git-ignored `data/dashboard-demo.json` for inspection. It does
 not start the server, seed a running process, or make `npm start` load that file.
 
 Durable MongoDB session/event storage, vector embeddings and search, Redis
-current context, and production retrieval ranking remain Anson-owned work. The
-current branch supplies repository and semantic-adapter boundaries but does not
-implement or claim those integrations.
+current context, and production retrieval ranking remain separate integration
+work. The current composition supplies repository and semantic-adapter
+boundaries but does not implement or claim those integrations.
 
-### Serve the built dashboard
-
-Build before starting the backend, because the backend discovers
-`session-dashboard/dist` during startup:
+### Serve the built one-backend demo
 
 ```bash
-cd session-dashboard
-npm install
-npm run build
-
-cd ../ai-voice-realtime
-npm install
-npm run start:dashboard-demo
+npm run demo
 ```
 
-Open `http://127.0.0.1:8000/dashboard/`. Use `npm start` instead of the final
-command for the default empty memory mode.
+The root command builds both frontends, then starts exactly one demo-history
+backend. Open `http://127.0.0.1:8000/dashboard/`; no Vite server is involved.
+Load the generated `chrome-extension/dist` if you also want the Live surface.
+Dashboard-only browsing does not initialize provider sessions, but it is not
+physical Gemini or Cloud Speech-to-Text acceptance.
 
 ### History REST surface
 
@@ -172,11 +166,9 @@ Chrome, Gemini, or Cloud Speech-to-Text acceptance run.
 
 ## Build and load the Chrome extension
 
-In a second terminal:
+From the repository root:
 
 ```bash
-cd chrome-extension
-npm install
 npm run build
 ```
 
@@ -202,6 +194,9 @@ Then:
    meaningful visual change only while the tab is not speaking.
 5. Disable the switch to stop. The captured-tab badge returns from `ON` to
    `OFF` after Chrome reports capture has ended.
+6. Select **View History** to open the dashboard. The full `npm run dev`
+   profile targets port `5174`; the built demo uses the backend route on port
+   `8000`.
 
 Chrome internal pages and the Chrome Web Store cannot be captured. If you
 change tabs before starting, click the toolbar icon on the new tab to authorize
@@ -270,28 +265,13 @@ model.
 
 ## Verification
 
-Backend:
-
 ```bash
-cd ai-voice-realtime
-npm test
 npm run check
 ```
 
-Extension:
-
-```bash
-cd chrome-extension
-npm test
-npm run build
-```
-
-Dashboard:
-
-```bash
-cd session-dashboard
-npm run check
-```
+The root gate runs orchestration tests, backend checks, extension tests/build,
+and dashboard tests/typecheck/build. Focused backend iteration can use
+`npm run check --workspace ai-voice-realtime`.
 
 The backend suite covers strict protocol validation, independent mic/tab audio
 routing, request-rate and payload bounds, exact extension-origin enforcement,

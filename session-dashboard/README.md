@@ -1,38 +1,32 @@
 # StreamSense Session Dashboard
 
-The session dashboard is the accessible history surface for previous
-StreamSense viewing sessions. It is intentionally separate from the compact
-realtime Chrome side panel and consumes only bounded history REST endpoints.
-It never calls Gemini, MongoDB, an embedding provider, Redis, Cloud
-Speech-to-Text, or the realtime WebSocket directly.
+The session dashboard is StreamSense's accessible History surface for previous
+viewing sessions. The compact Chrome side panel is the Live surface and opens
+this application through **View History**. Both use the same local backend, but
+the dashboard consumes only bounded REST endpoints. It never calls Gemini,
+MongoDB, an embedding provider, Redis, Cloud Speech-to-Text, or the realtime
+WebSocket directly.
 
-There is no repository-root `package.json`. Run dashboard commands from
-`session-dashboard` and backend commands from `ai-voice-realtime`.
+Use the repository-root npm workspace for installation and integrated commands.
+`npm run dev` starts the shared backend on `8000`, the Live extension process on
+`5173`, and this History application on `5174`; the extension's **View History**
+button targets the latter. `npm run dev:dashboard` omits the extension and uses
+deterministic demo history instead.
 
 ## Run the deterministic demo
 
-This workflow does not require the Chrome extension, a Gemini API key, Google
-Cloud ADC, or a working Speech-to-Text provider.
-
-Terminal 1, from the repository root:
+This workflow does not require the Chrome extension or a realtime provider
+session. From the repository root:
 
 ```bash
-cd ai-voice-realtime
 npm install
-npm run start:dashboard-demo
-```
-
-Terminal 2:
-
-```bash
-cd session-dashboard
-npm install
-npm run dev
+npm run dev:dashboard
 ```
 
 Open `http://127.0.0.1:5174/dashboard/`. Vite serves the React app on port
 `5174` and proxies relative `/api` requests to `http://127.0.0.1:8000`, so
-development does not require permissive CORS.
+development does not require permissive CORS. The command supervises exactly
+one demo backend and one dashboard Vite process; Ctrl+C stops the profile.
 
 `start:dashboard-demo` is development-only and is refused when
 `NODE_ENV=production`. It seeds a fresh in-memory repository during backend
@@ -42,37 +36,30 @@ Normal backend startup (`npm start`, or `STREAMSENSE_HISTORY_MODE=memory`) uses
 an empty in-memory history repository. Realtime sessions may populate it, but
 both memory and demo history disappear when the backend restarts. Durable
 MongoDB storage, vector embeddings/search, Redis current context, and retrieval
-ranking remain Anson-owned integration work and are incomplete on this branch.
+ranking remain a separate integration workstream and are not supplied by the
+current in-memory composition.
 
 ### Export the fixture without starting the server
 
 ```bash
-cd ai-voice-realtime
-npm run seed:dashboard
+npm run seed:dashboard --workspace ai-voice-realtime
 ```
 
 This writes `ai-voice-realtime/data/dashboard-demo.json`, which is ignored by
 Git. Exporting the JSON does not start or populate a backend process, and the
 normal server does not load the exported file.
 
-## Serve the built dashboard
-
-Build the frontend before starting the backend:
+## Serve the built one-backend demo
 
 ```bash
-cd session-dashboard
-npm install
-npm run build
-
-cd ../ai-voice-realtime
-npm install
-npm run start:dashboard-demo
+npm run demo
 ```
 
-Open `http://127.0.0.1:8000/dashboard/`. The backend serves
-`session-dashboard/dist` and applies an SPA fallback for `/dashboard/*` routes.
-Use `npm start` instead of the final command to view the default empty memory
-mode.
+`demo` builds both the extension and dashboard, then starts exactly one backend
+with deterministic in-memory history. Open
+`http://127.0.0.1:8000/dashboard/`. The backend serves
+`session-dashboard/dist` and applies an SPA fallback for `/dashboard/*` routes;
+no Vite server runs in this profile.
 
 ## Routes and accessibility
 
@@ -80,13 +67,32 @@ mode.
 - `/dashboard/sessions/:sessionId` — metadata, summary, entities, topics, and a
   chronological event timeline
 - `/dashboard/search` — natural-language historical search
-- `/dashboard/explore` — accessible context relationships; no Three.js or
-  visual-only graph renderer is included
+- `/dashboard/explore` — readable context relationships plus an optional
+  Three.js relationship map
 
 Every route uses semantic headings and landmarks. Timeline events remain normal
 DOM text in an ordered list. The application includes a skip link, visible
 keyboard focus, route-change focus management, explicit loading/error/empty
 states, and reduced-motion behavior.
+
+The 3D explorer is a presentation of the nodes and edges returned by
+`GET /api/context-graph`; it does not infer missing relationships. Sessions are
+spheres, events are importance-sized cubes, entities are diamonds, and topics
+are rings. Structural links use their supplied edge types and optional verified
+`semantic_similarity` links are visually distinct; absent semantic scores are
+not fabricated.
+
+Pointer users can orbit, zoom, and select shapes. Keyboard and
+assistive-technology users can select every labeled node with a native control,
+inspect its details, follow the session/event link, and continue to the primary
+readable relationship lists. Reduced-motion preference disables ambient
+settling motion. If WebGL cannot start, the app reports the unavailable visual
+view while leaving the selector and DOM relationships usable.
+
+Rendering is on demand rather than an unbounded animation loop. Changing graph
+data or leaving the route cancels pending animation, removes listeners and
+labels, disconnects resize observation, and disposes controls, geometries,
+materials, and the WebGL renderer.
 
 ## REST contract
 
@@ -193,15 +199,17 @@ semantic adapter handoff is in
 ## Verification
 
 ```bash
-cd session-dashboard
 npm run check
 ```
 
-`npm run check` runs Vitest/Testing Library, TypeScript validation, and the Vite
-production build. Tests cover API validation, loading/empty/error states,
-chronological rendering, search unavailability, the context-graph boundary,
-keyboard entry, route focus, and axe checks. Browser contrast and visible-focus
-inspection remain a separate manual acceptance step.
+The root check includes dashboard Vitest/Testing Library tests, TypeScript
+validation, and the Vite production build after the orchestration, backend, and
+extension gates. Focused dashboard iteration can use
+`npm run check --workspace session-dashboard`. Tests cover API validation,
+loading/empty/error states, chronological rendering, search degradation, graph
+model bounds, renderer fallback/cleanup boundaries, keyboard entry, route
+focus, and axe checks. Real-browser WebGL, contrast, visible focus, and
+reduced-motion inspection remain separate manual acceptance work.
 
 The dashboard work did not change the Cloud Speech-to-Text architecture. These
 automated and local demo workflows do not constitute physical Chrome, Gemini,
