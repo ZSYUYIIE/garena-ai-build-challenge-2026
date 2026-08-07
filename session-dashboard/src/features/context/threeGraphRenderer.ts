@@ -6,13 +6,15 @@ import {
 } from "three/addons/renderers/CSS2DRenderer.js";
 
 import type {
-  GraphNodeShape,
   GraphSceneModel,
+  PositionedGraphEdge,
   PositionedGraphNode,
 } from "./graphModel";
 
 export type GraphRendererController = {
   resetCamera: () => void;
+  rotateCamera: (horizontalRadians: number, verticalRadians: number) => void;
+  zoomCamera: (factor: number) => void;
   selectNode: (nodeId: string | null) => void;
   setPaused: (paused: boolean) => void;
   dispose: () => void;
@@ -30,6 +32,13 @@ export type GraphRendererOptions = {
 export type GraphRendererFactory = (
   options: GraphRendererOptions,
 ) => GraphRendererController;
+
+type NodeVisual = {
+  mesh: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
+  label: HTMLElement;
+  materials: Array<THREE.MeshStandardMaterial | THREE.MeshBasicMaterial>;
+  baseOpacityByMaterial: Map<THREE.Material, number>;
+};
 
 export const createThreeGraphRenderer: GraphRendererFactory = ({
   container,
@@ -61,8 +70,8 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   container.append(labelRenderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x081426);
-  scene.fog = new THREE.FogExp2(0x081426, 0.018);
+  scene.background = new THREE.Color(0x07111f);
+  scene.fog = new THREE.FogExp2(0x07111f, 0.008);
 
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
   const home = cameraHome(model);
@@ -72,54 +81,91 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   controls.target.copy(home.target);
   controls.enableDamping = !reducedMotion;
   controls.dampingFactor = 0.08;
-  controls.enablePan = true;
-  controls.screenSpacePanning = true;
+  // Pan is disabled because every pointer camera operation must have a visible
+  // non-drag alternative. Orbit and zoom are mirrored by the controls above.
+  controls.enablePan = false;
+  controls.screenSpacePanning = false;
+  // Keep ordinary page scrolling from being trapped over the large canvas;
+  // the visible Zoom in/out buttons provide the equivalent operation.
+  controls.enableZoom = false;
   controls.autoRotate = false;
   controls.minDistance = 5;
-  controls.maxDistance = Math.max(45, home.distance * 3);
+  controls.maxDistance = Math.max(48, home.distance * 2.6);
   controls.update();
 
-  scene.add(new THREE.HemisphereLight(0xcfe9ff, 0x17253d, 2.4));
-  const keyLight = new THREE.DirectionalLight(0xffffff, 2.1);
+  scene.add(new THREE.HemisphereLight(0xd8efff, 0x10233f, 2.6));
+  const keyLight = new THREE.DirectionalLight(0xffffff, 2.25);
   keyLight.position.set(8, 14, 12);
   scene.add(keyLight);
-  const fillLight = new THREE.DirectionalLight(0x5ce4d3, 1.1);
+  const fillLight = new THREE.DirectionalLight(0x5ce4d3, 1.25);
   fillLight.position.set(-12, 4, -8);
   scene.add(fillLight);
 
   const graphRoot = new THREE.Group();
   scene.add(graphRoot);
 
+  const sphereGeometry = new THREE.SphereGeometry(1, 30, 20);
+  const nodeVisuals = new Map<string, NodeVisual>();
   const nodeMeshes = new Map<string, THREE.Mesh>();
-  const nodeLabels = new Map<string, HTMLElement>();
-  const disposableGeometries: THREE.BufferGeometry[] = [];
+  const edgeMaterials = new Map<string, THREE.LineBasicMaterial>();
+  const edgeBaseOpacity = new Map<string, number>();
+  const domainLabels = new Map<string, HTMLElement>();
+  const disposableGeometries: THREE.BufferGeometry[] = [sphereGeometry];
   const disposableMaterials: THREE.Material[] = [];
 
+  for (const domain of model.domains) {
+    const label = document.createElement("span");
+    label.className = "graph-domain-label";
+    label.style.setProperty("--domain-color", `#${domain.color.toString(16).padStart(6, "0")}`);
+    label.textContent = `${domain.label} · ${domain.sessionCount} ${domain.sessionCount === 1 ? "session" : "sessions"}`;
+    const labelObject = new CSS2DObject(label);
+    labelObject.position.set(
+      domain.position.x,
+      domain.position.y + 4.8,
+      domain.position.z,
+    );
+    graphRoot.add(labelObject);
+    domainLabels.set(domain.key, label);
+  }
+
   for (const node of model.nodes) {
-    const geometry = createNodeGeometry(node.shape);
-    const material = new THREE.MeshStandardMaterial({
-      color: node.color,
-      emissive: node.color,
-      emissiveIntensity: 0.08,
-      roughness: 0.55,
-      metalness: 0.08,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
+    const material = createNodeMaterial(node);
+    const mesh = new THREE.Mesh(sphereGeometry, material);
     mesh.position.set(node.position.x, node.position.y, node.position.z);
     mesh.scale.setScalar(node.radius);
     mesh.userData.nodeId = node.id;
     mesh.userData.baseRadius = node.radius;
     graphRoot.add(mesh);
     nodeMeshes.set(node.id, mesh);
-    disposableGeometries.push(geometry);
     disposableMaterials.push(material);
+
+    const materials: Array<THREE.MeshStandardMaterial | THREE.MeshBasicMaterial> = [
+      material,
+    ];
+    const baseOpacityByMaterial = new Map<THREE.Material, number>([
+      [material, material.opacity],
+    ]);
+    for (const scale of haloScales(node)) {
+      const haloMaterial = new THREE.MeshBasicMaterial({
+        color: node.color,
+        transparent: true,
+        opacity: node.surface === "anchor" ? 0.34 : 0.26,
+        wireframe: true,
+        depthWrite: false,
+      });
+      const halo = new THREE.Mesh(sphereGeometry, haloMaterial);
+      halo.position.copy(mesh.position);
+      halo.scale.setScalar(node.radius * scale);
+      halo.renderOrder = 2;
+      graphRoot.add(halo);
+      materials.push(haloMaterial);
+      baseOpacityByMaterial.set(haloMaterial, haloMaterial.opacity);
+      disposableMaterials.push(haloMaterial);
+    }
 
     const label = document.createElement("span");
     label.className = `graph-node-label graph-node-label--${node.type}`;
-    label.classList.toggle(
-      "is-default-visible",
-      node.labelVisibleByDefault,
-    );
+    label.classList.toggle("is-default-visible", node.labelVisibleByDefault);
     label.textContent = node.label;
     const labelObject = new CSS2DObject(label);
     labelObject.position.set(
@@ -128,10 +174,17 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
       node.position.z,
     );
     graphRoot.add(labelObject);
-    nodeLabels.set(node.id, label);
+
+    nodeVisuals.set(node.id, {
+      mesh,
+      label,
+      materials,
+      baseOpacityByMaterial,
+    });
   }
 
   const nodeById = new Map(model.nodes.map((node) => [node.id, node]));
+  const connectedNodeIdsByNodeId = createAdjacency(model);
   for (const edge of model.edges) {
     const source = nodeById.get(edge.source);
     const target = nodeById.get(edge.target);
@@ -141,22 +194,13 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
       vectorForNode(source),
       vectorForNode(target),
     ]);
-    const material = edge.semanticBridge
-      ? new THREE.LineDashedMaterial({
-          color: 0xff8fd8,
-          dashSize: 0.32,
-          gapSize: 0.2,
-          opacity: 0.45 + edge.weight * 0.45,
-          transparent: true,
-        })
-      : new THREE.LineBasicMaterial({
-          color: edgeColor(edge.type),
-          opacity: 0.2 + edge.weight * 0.42,
-          transparent: true,
-        });
+    const material = createEdgeMaterial(edge);
     const line = new THREE.Line(geometry, material);
-    if (edge.semanticBridge) line.computeLineDistances();
+    if (material instanceof THREE.LineDashedMaterial) line.computeLineDistances();
+    line.renderOrder = edge.semanticBridge ? 3 : 1;
     graphRoot.add(line);
+    edgeMaterials.set(edge.id, material);
+    edgeBaseOpacity.set(edge.id, material.opacity);
     disposableGeometries.push(geometry);
     disposableMaterials.push(material);
   }
@@ -197,17 +241,66 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
     if (settlingFrames > 0) frameRequest = window.requestAnimationFrame(tick);
   };
 
-  const updateNodeAppearance = () => {
-    for (const [nodeId, mesh] of nodeMeshes) {
-      const baseRadius = Number(mesh.userData.baseRadius) || 1;
+  const updateGraphAppearance = () => {
+    const focusNodeId = selectedNodeId ?? hoveredNodeId;
+    const connectedNodeIds = focusNodeId
+      ? new Set(connectedNodeIdsByNodeId.get(focusNodeId) ?? [])
+      : new Set<string>();
+    const focusNode = focusNodeId ? nodeById.get(focusNodeId) : null;
+
+    for (const [nodeId, visual] of nodeVisuals) {
+      const baseRadius = Number(visual.mesh.userData.baseRadius) || 1;
       const selected = nodeId === selectedNodeId;
       const hovered = nodeId === hoveredNodeId;
-      mesh.scale.setScalar(baseRadius * (selected ? 1.3 : hovered ? 1.16 : 1));
-      const material = mesh.material as THREE.MeshStandardMaterial;
-      material.emissiveIntensity = selected ? 0.62 : hovered ? 0.34 : 0.08;
-      const label = nodeLabels.get(nodeId);
-      label?.classList.toggle("is-selected", selected);
-      label?.classList.toggle("is-hovered", hovered);
+      const focused = nodeId === focusNodeId;
+      const connected = connectedNodeIds.has(nodeId);
+      const unrelated = Boolean(focusNodeId) && !focused && !connected;
+      visual.mesh.scale.setScalar(
+        baseRadius *
+          (selected ? 1.34 : hovered ? 1.18 : connected ? 1.08 : unrelated ? 0.86 : 1),
+      );
+
+      for (const material of visual.materials) {
+        const baseOpacity = visual.baseOpacityByMaterial.get(material) ?? 1;
+        material.opacity = unrelated ? Math.max(0.07, baseOpacity * 0.16) : baseOpacity;
+        material.transparent = true;
+        material.needsUpdate = true;
+      }
+      const material = visual.mesh.material;
+      material.emissiveIntensity = selected
+        ? 0.72
+        : hovered
+          ? 0.42
+          : connected
+            ? 0.22
+            : unrelated
+              ? 0.02
+              : 0.1;
+
+      visual.label.classList.toggle("is-selected", selected);
+      visual.label.classList.toggle("is-hovered", hovered);
+      visual.label.classList.toggle("is-connected", connected);
+      visual.label.classList.toggle("is-dimmed", unrelated);
+    }
+
+    for (const edge of model.edges) {
+      const material = edgeMaterials.get(edge.id);
+      if (!material) continue;
+      const connected =
+        Boolean(focusNodeId) &&
+        (edge.source === focusNodeId || edge.target === focusNodeId);
+      material.opacity = focusNodeId
+        ? connected
+          ? 0.94
+          : 0.025
+        : edgeBaseOpacity.get(edge.id) ?? 0.14;
+      material.needsUpdate = true;
+    }
+
+    for (const [domainKey, label] of domainLabels) {
+      const unrelated =
+        Boolean(focusNode) && !focusNode!.domainKeys.includes(domainKey);
+      label.classList.toggle("is-dimmed", unrelated);
     }
     requestRender(paused || reducedMotion ? 1 : 10);
   };
@@ -230,7 +323,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
     hoveredNodeId = nextHoveredNodeId;
     canvas.style.cursor = hoveredNodeId ? "pointer" : "grab";
     onHover(hoveredNodeId);
-    updateNodeAppearance();
+    updateGraphAppearance();
   };
 
   const handlePointerLeave = () => {
@@ -238,7 +331,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
     hoveredNodeId = null;
     canvas.style.cursor = "grab";
     onHover(null);
-    updateNodeAppearance();
+    updateGraphAppearance();
   };
 
   const handleClick = (event: PointerEvent) => {
@@ -246,7 +339,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
     const nodeId = hitTest(event);
     if (!nodeId) return;
     selectedNodeId = nodeId;
-    updateNodeAppearance();
+    updateGraphAppearance();
     onSelect(nodeId);
   };
 
@@ -273,8 +366,14 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   const resize = () => {
     if (disposed) return;
     const rectangle = container.getBoundingClientRect();
-    const width = Math.max(320, Math.floor(rectangle.width || container.clientWidth || 720));
-    const height = Math.max(320, Math.floor(rectangle.height || container.clientHeight || 500));
+    const width = Math.max(
+      320,
+      Math.floor(rectangle.width || container.clientWidth || 720),
+    );
+    const height = Math.max(
+      320,
+      Math.floor(rectangle.height || container.clientHeight || 500),
+    );
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     renderer.setSize(width, height, false);
@@ -289,6 +388,34 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   resize();
   requestRender(1);
 
+  const rotateCamera = (horizontalRadians: number, verticalRadians: number) => {
+    const offset = camera.position.clone().sub(controls.target);
+    const spherical = new THREE.Spherical().setFromVector3(offset);
+    spherical.theta += horizontalRadians;
+    spherical.phi = THREE.MathUtils.clamp(
+      spherical.phi + verticalRadians,
+      0.18,
+      Math.PI - 0.18,
+    );
+    camera.position.copy(controls.target).add(offset.setFromSpherical(spherical));
+    camera.lookAt(controls.target);
+    controls.update();
+    requestRender(reducedMotion || paused ? 1 : 18);
+  };
+
+  const zoomCamera = (factor: number) => {
+    const offset = camera.position.clone().sub(controls.target);
+    const distance = THREE.MathUtils.clamp(
+      offset.length() * factor,
+      controls.minDistance,
+      controls.maxDistance,
+    );
+    camera.position.copy(controls.target).add(offset.setLength(distance));
+    camera.lookAt(controls.target);
+    controls.update();
+    requestRender(reducedMotion || paused ? 1 : 18);
+  };
+
   return {
     resetCamera() {
       camera.position.copy(home.position);
@@ -296,9 +423,11 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
       controls.update();
       requestRender(reducedMotion || paused ? 1 : 24);
     },
+    rotateCamera,
+    zoomCamera,
     selectNode(nodeId) {
       selectedNodeId = nodeId && nodeMeshes.has(nodeId) ? nodeId : null;
-      updateNodeAppearance();
+      updateGraphAppearance();
     },
     setPaused(nextPaused) {
       paused = nextPaused || reducedMotion;
@@ -308,7 +437,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
         frameRequest = null;
         settlingFrames = 0;
       }
-      requestRender(paused ? 1 : 24);
+      requestRender(1);
     },
     dispose() {
       if (disposed) return;
@@ -328,22 +457,66 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
       labelRenderer.domElement.remove();
       graphRoot.clear();
       scene.clear();
+      renderer.renderLists.dispose();
       renderer.dispose();
     },
   };
 };
 
-function createNodeGeometry(shape: GraphNodeShape): THREE.BufferGeometry {
-  switch (shape) {
-    case "sphere":
-      return new THREE.SphereGeometry(1, 28, 18);
-    case "box":
-      return new THREE.BoxGeometry(1.35, 1.35, 1.35);
-    case "octahedron":
-      return new THREE.OctahedronGeometry(1.08, 0);
-    case "torus":
-      return new THREE.TorusGeometry(0.78, 0.26, 14, 32);
+function createNodeMaterial(
+  node: PositionedGraphNode,
+): THREE.MeshStandardMaterial {
+  const entity = node.surface === "entity";
+  const topic = node.surface === "topic";
+  return new THREE.MeshStandardMaterial({
+    color: node.color,
+    emissive: node.color,
+    emissiveIntensity:
+      node.surface === "anchor" ? 0.28 : node.surface === "event" ? 0.18 : 0.14,
+    roughness: node.surface === "anchor" ? 0.34 : 0.5,
+    metalness: node.surface === "anchor" ? 0.2 : 0.08,
+    wireframe: entity,
+    transparent: true,
+    opacity: topic ? 0.68 : entity ? 0.92 : 1,
+    depthWrite: !topic,
+  });
+}
+
+function haloScales(node: PositionedGraphNode): number[] {
+  if (node.surface === "anchor") return [1.24, 1.46];
+  if (node.surface === "entity") return [1.2];
+  if (node.surface === "topic") return [1.3];
+  return [];
+}
+
+function createEdgeMaterial(edge: PositionedGraphEdge): THREE.LineBasicMaterial {
+  const opacity = edge.type === "same_session" ? 0.34 : 0.22;
+  if (edge.type === "semantic_similarity") {
+    return new THREE.LineDashedMaterial({
+      color: 0xff8fd8,
+      dashSize: 0.36,
+      gapSize: 0.24,
+      opacity,
+      transparent: true,
+      depthWrite: false,
+    });
   }
+  if (edge.type === "shared_topic") {
+    return new THREE.LineDashedMaterial({
+      color: edgeColor(edge.type),
+      dashSize: 0.16,
+      gapSize: 0.2,
+      opacity,
+      transparent: true,
+      depthWrite: false,
+    });
+  }
+  return new THREE.LineBasicMaterial({
+    color: edgeColor(edge.type),
+    opacity,
+    transparent: true,
+    depthWrite: false,
+  });
 }
 
 function edgeColor(type: string): number {
@@ -351,14 +524,25 @@ function edgeColor(type: string): number {
     case "same_session":
       return 0x5ce4d3;
     case "temporal_relation":
-      return 0xf6b73c;
+      return 0xffd166;
     case "shared_entity":
-      return 0x6da7ff;
+      return 0x9bc1ff;
     case "shared_topic":
-      return 0xd58cff;
+      return 0xe1b6ff;
     default:
-      return 0xb9c8dd;
+      return 0xff8fd8;
   }
+}
+
+function createAdjacency(model: GraphSceneModel): Map<string, string[]> {
+  const adjacency = new Map(
+    model.nodes.map((node) => [node.id, [] as string[]]),
+  );
+  for (const edge of model.edges) {
+    adjacency.get(edge.source)?.push(edge.target);
+    adjacency.get(edge.target)?.push(edge.source);
+  }
+  return adjacency;
 }
 
 function vectorForNode(node: PositionedGraphNode): THREE.Vector3 {
@@ -372,9 +556,9 @@ function cameraHome(model: GraphSceneModel): {
 } {
   if (model.nodes.length === 0) {
     return {
-      position: new THREE.Vector3(0, 10, 18),
+      position: new THREE.Vector3(0, 6, 18),
       target: new THREE.Vector3(0, 0, 0),
-      distance: 20,
+      distance: 19,
     };
   }
 
@@ -382,9 +566,15 @@ function cameraHome(model: GraphSceneModel): {
   model.nodes.forEach((node) => bounds.expandByPoint(vectorForNode(node)));
   const target = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
-  const distance = Math.max(13, size.length() * 1.2);
+  const largestDimension = Math.max(size.x, size.y, size.z, 8);
+  const fieldOfViewRadians = THREE.MathUtils.degToRad(45);
+  const distance = Math.max(
+    12,
+    (largestDimension / (2 * Math.tan(fieldOfViewRadians / 2))) * 1.2,
+  );
+  const cameraDirection = new THREE.Vector3(0, 0.28, 1).normalize();
   return {
-    position: target.clone().add(new THREE.Vector3(0, distance * 0.55, distance)),
+    position: target.clone().add(cameraDirection.multiplyScalar(distance)),
     target,
     distance,
   };

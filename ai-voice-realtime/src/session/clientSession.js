@@ -186,7 +186,12 @@ export class ClientSession {
       sourceLabel: "Authorized browser tab",
       dataOrigin: "realtime",
     });
-    this.sendBrowser({ type: "connected", protocolVersion: PROTOCOL_VERSION, model: this.liveModel });
+    this.sendBrowser({
+      type: "connected",
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      model: this.liveModel,
+    });
     this.sendBrowser({ type: "status", mode: "narration" });
     // Captured audio is unknown until the cloud stream proves it is clean.
     this.applySpeechActions(this.speechPolicy.setTabAudioState?.(

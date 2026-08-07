@@ -7,8 +7,51 @@ import { renderDashboard } from "./renderDashboard";
 import {
   demoGraphResponse,
   demoSearchResponse,
+  demoSession,
   jsonResponse,
+  laterEvent,
+  sessionId,
 } from "./fixtures";
+
+type HistorySurfaceFetchOptions = {
+  graphBody?: unknown;
+  graphStatus?: number;
+};
+
+function createHistorySurfaceFetch({
+  graphBody = demoGraphResponse,
+  graphStatus = 200,
+}: HistorySurfaceFetchOptions = {}) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+
+    if (url.startsWith("/api/context-graph?")) {
+      return jsonResponse(graphBody, graphStatus);
+    }
+    if (url.startsWith(`/api/sessions/${sessionId}/events?`)) {
+      return jsonResponse({
+        meta: { dataOrigin: "demo" },
+        events: [laterEvent],
+        nextCursor: null,
+      });
+    }
+    if (url === `/api/sessions/${sessionId}`) {
+      return jsonResponse({
+        meta: { dataOrigin: "demo" },
+        session: demoSession,
+      });
+    }
+    if (url.startsWith("/api/sessions?")) {
+      return jsonResponse({
+        meta: { dataOrigin: "demo" },
+        sessions: [demoSession],
+        nextCursor: null,
+      });
+    }
+
+    throw new Error(`Unexpected request: ${url}`);
+  });
+}
 
 describe("history intelligence surfaces", () => {
   it("submits natural-language search and renders grounded results", async () => {
@@ -26,7 +69,9 @@ describe("history intelligence surfaces", () => {
     );
     await user.click(screen.getByRole("button", { name: "Search history" }));
 
-    expect(await screen.findByText(demoSearchResponse.results[0]!.description)).toBeInTheDocument();
+    expect(
+      await screen.findByText(demoSearchResponse.results[0]!.description),
+    ).toBeInTheDocument();
     expect(screen.getByText("93% similar")).toBeInTheDocument();
     expect(screen.getByLabelText("Data source notice")).toHaveTextContent(
       "Development demo data",
@@ -71,59 +116,86 @@ describe("history intelligence surfaces", () => {
         name: "Semantic search is temporarily unavailable",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Sessions" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Memory" })).toBeInTheDocument();
   });
 
-  it("provides an accessible context-graph boundary without a visual renderer", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse(demoGraphResponse)),
-    );
+  it("redirects a valid legacy Explore link into session relationships", async () => {
+    const fetchMock = createHistorySurfaceFetch();
+    vi.stubGlobal("fetch", fetchMock);
 
-    const { container } = renderDashboard("/explore");
+    renderDashboard(`/explore?sessionId=${sessionId}`);
 
     expect(
-      await screen.findByRole("heading", {
-        name: "3D relationship map",
-      }),
+      await screen.findByRole("heading", { level: 1, name: demoSession.title }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "How this session connects" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "3D relationship map" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", {
         name: "People, topics, sessions, and moments",
       }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Defensive save")).not.toHaveLength(0);
-    expect(screen.getByText(/same session/i)).toBeInTheDocument();
-
-    const accessibility = await axe.run(container, {
-      rules: { "color-contrast": { enabled: false } },
-    });
-    expect(accessibility.violations).toEqual([]);
+    expect(
+      screen.getByRole("heading", { name: "Relationships" }),
+    ).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([input]) => {
+        const url = String(input);
+        return (
+          url.startsWith("/api/context-graph?") &&
+          url.includes(`sessionId=${sessionId}`) &&
+          url.includes("limit=100")
+        );
+      }),
+    ).toBe(true);
   });
 
-  it("keeps context-graph unavailability separate from session history", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        jsonResponse(
-          {
-            error: {
-              code: "context_graph_unavailable",
-              message: "Context graph is not configured.",
-            },
-          },
-          503,
-        ),
-      ),
-    );
+  it("safely redirects an invalid legacy session id to Memory home", async () => {
+    vi.stubGlobal("fetch", createHistorySurfaceFetch());
 
-    renderDashboard("/explore");
+    renderDashboard("/explore?sessionId=..%2F..%2Fsearch");
 
     expect(
       await screen.findByRole("heading", {
-        name: "Context exploration is not available yet",
+        level: 1,
+        name: "Your streams, remembered.",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Sessions" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "3D relationship map" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /Explore session context/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps map unavailability separate from session history on Memory home", async () => {
+    vi.stubGlobal(
+      "fetch",
+      createHistorySurfaceFetch({
+        graphBody: {
+          error: {
+            code: "context_graph_unavailable",
+            message: "Context graph is not configured.",
+          },
+        },
+        graphStatus: 503,
+      }),
+    );
+
+    renderDashboard();
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "The relationship map is not available yet",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: demoSession.title }),
+    ).toBeInTheDocument();
   });
 });

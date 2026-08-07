@@ -1,3 +1,5 @@
+import { isUuid } from "../../lib/uuid.ts";
+
 export type RealtimeStatus =
   | "idle"
   | "requesting_capture"
@@ -262,7 +264,7 @@ export type ServerMessage =
   | TextServerMessage
   | TurnTextServerMessage
   | TranscriptServerMessage
-  | { type: "connected"; protocolVersion: 2; model?: string }
+  | { type: "connected"; protocolVersion: 2; sessionId: string; model?: string }
   | { type: "event"; event?: StreamEvent }
   | {
       type: "model_audio";
@@ -290,8 +292,6 @@ export type ServerMessage =
       suppressed?: boolean;
     };
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const BASE64_PATTERN =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const PCM_MIME_PATTERN = /^audio\/pcm;rate=([1-9][0-9]*)$/;
@@ -324,7 +324,7 @@ function requireString(value: unknown): string {
 }
 
 function requireTurn(value: Record<string, unknown>): void {
-  if (!UUID_PATTERN.test(requireString(value.turnId))) invalidServerMessage();
+  if (!isUuid(value.turnId)) invalidServerMessage();
   if (value.mode !== "answer" && value.mode !== "narration") invalidServerMessage();
 }
 
@@ -393,8 +393,9 @@ export function parseServerMessage(rawText: string): ServerMessage {
       requireOptionalString(value.text);
       return value as ServerMessage;
     case "connected":
-      requireExactKeys(value, ["type", "protocolVersion"], ["model"]);
+      requireExactKeys(value, ["type", "protocolVersion", "sessionId"], ["model"]);
       if (value.protocolVersion !== 2) invalidServerMessage();
+      if (!isUuid(value.sessionId)) invalidServerMessage();
       requireOptionalString(value.model);
       return value as ServerMessage;
     case "event":

@@ -30,7 +30,11 @@ export function buildContextGraph({ sessions, sessionEvents, limit = 80 }) {
       type: "session",
       label: session.title,
       sessionId: session.sessionId,
-      metadata: { domain: session.domain, startedAt: session.startedAt },
+      metadata: {
+        domain: session.domain,
+        startedAt: session.startedAt,
+        durationSeconds: session.durationSeconds,
+      },
     })) break;
 
     let previousEvent = null;

@@ -109,6 +109,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>("off");
   const [tabContextStatus, setTabContextStatus] = useState<"absent" | "connecting" | "ready" | "degraded">("absent");
   const [liveProviderState, setLiveProviderState] = useState<LiveProviderState>("closed");
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   const statusRef = useRef(status);
   statusRef.current = status;
@@ -186,6 +187,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     microphoneTurnOwnershipRef.current?.clear();
     microphoneTurnOwnershipRef.current = null;
     retireMicrophoneTurnRef.current = null;
+    setActiveSessionId(null);
     publishLiveProviderState("closed");
     publishVoiceStatus({
       sessionActive: false,
@@ -545,6 +547,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     setStatus("requesting_capture");
     setStatusText("Capturing the active tab without the StreamSense panel.");
     setError(null);
+    setActiveSessionId(null);
     setEvents([]);
     setMessages([]);
     setDescription("Waiting for the first description...");
@@ -638,6 +641,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         switch (message.type) {
           case "connected":
             setStatus("connected"); setStatusText(`Connected to ${message.model ?? "Gemini"}.`); setError(null);
+            setActiveSessionId(message.sessionId);
             publishLiveProviderState("connecting");
             publishVoiceStatus({ helloAccepted: true });
             break;
@@ -900,7 +904,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
 
   return {
     status, statusText, error, description, events, messages, voiceStatus, tabContextStatus,
-    microphoneState,
+    microphoneState, activeSessionId,
     isRunning: status === "connecting" || status === "connected",
     isBusy: status === "requesting_capture",
     canStart: captureTarget.canStart,

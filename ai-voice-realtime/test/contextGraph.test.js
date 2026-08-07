@@ -30,6 +30,9 @@ test("context graph is bounded, deterministic, and has no dangling edges", () =>
   assert.equal(first.edges.some((edge) => edge.type === "same_session"), true);
   assert.equal(first.edges.some((edge) => edge.type === "temporal_relation"), true);
   assert.equal(first.edges.some((edge) => edge.type === "semantic_similarity"), false);
+  const sessionNode = first.nodes.find((node) => node.type === "session");
+  assert.equal(sessionNode.metadata.domain, sessions[0].domain);
+  assert.equal(sessionNode.metadata.durationSeconds, sessions[0].durationSeconds);
 });
 
 test("context graph uses bounded stable IDs for Unicode entity and topic labels", () => {

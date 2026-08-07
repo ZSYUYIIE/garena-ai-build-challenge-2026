@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import type { GraphEdge, GraphNode } from "../../api/contracts";
 import { formatPercent, humanizeEventType } from "../../lib/format";
 
@@ -38,18 +40,46 @@ export function RelationshipList({
         <ul className="relationship-list relationship-edges">
           {edges.map((edge) => (
             <li key={edge.id}>
-              <span>
-                <strong>{nodeLabels.get(edge.source) ?? edge.source}</strong>
-                {" and "}
-                <strong>{nodeLabels.get(edge.target) ?? edge.target}</strong>
-              </span>
-              <span>
-                {humanizeEventType(edge.type)} · {formatPercent(edge.weight)} weight
-              </span>
+              <span>{relationshipSentence(edge, nodeLabels)}</span>
+              <span>{relationshipMeasure(edge)}</span>
             </li>
           ))}
         </ul>
       </section>
     </div>
   );
+}
+
+function relationshipSentence(
+  edge: GraphEdge,
+  labels: Map<string, string>,
+): ReactNode {
+  const source = labels.get(edge.source) ?? edge.source;
+  const target = labels.get(edge.target) ?? edge.target;
+
+  switch (edge.type) {
+    case "same_session":
+      return <><strong>{target}</strong> belongs to <strong>{source}</strong>.</>;
+    case "temporal_relation":
+      return <><strong>{source}</strong> is followed by <strong>{target}</strong>.</>;
+    case "shared_entity":
+      return <><strong>{source}</strong> mentions <strong>{target}</strong>.</>;
+    case "shared_topic":
+      return <><strong>{source}</strong> is tagged with <strong>{target}</strong>.</>;
+    case "semantic_similarity":
+      return <><strong>{source}</strong> is semantically related to <strong>{target}</strong>.</>;
+  }
+}
+
+function relationshipMeasure(edge: GraphEdge): string {
+  switch (edge.type) {
+    case "temporal_relation":
+      return `${formatPercent(edge.weight)} time-proximity score — not confidence`;
+    case "semantic_similarity":
+      return `${formatPercent(edge.weight)} backend-supplied similarity`;
+    case "same_session":
+    case "shared_entity":
+    case "shared_topic":
+      return "Recorded structural relationship";
+  }
 }

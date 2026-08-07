@@ -78,7 +78,7 @@ function StreamSensePanel() {
         <EventTimelineSection events={session.events} />
       </div>
       <div className="py-2">
-        <HistoryNavigation />
+        <HistoryNavigation activeSessionId={session.activeSessionId} />
       </div>
       <div className="flex min-h-0 flex-1 flex-col pt-3">
         <QuestionSection

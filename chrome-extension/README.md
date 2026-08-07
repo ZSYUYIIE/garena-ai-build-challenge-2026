@@ -3,9 +3,9 @@
 The Manifest V3 extension is StreamSense's compact Live surface. It captures
 one explicitly authorized HTTP(S) tab, sends bounded JPEG frames and
 source-separated audio to the shared local backend, presents narration and
-questions, and shows the current-session timeline. **View History** opens the
-History dashboard in a normal Chrome tab; the dashboard is part of the same
-product, not a replacement realtime client.
+questions, and shows the current-session timeline. **Open this session in
+History** opens the matching Memory page in a normal Chrome tab; the dashboard
+is part of the same product, not a replacement realtime client.
 
 ## Install, build, and load
 
@@ -32,19 +32,52 @@ Run integrated commands from the repository root:
 
 | Command | Processes |
 | --- | --- |
-| `npm run dev` | Shared backend `8000`, extension dev process `5173`, History dashboard `5174`. |
+| `npm run dev` | Shared backend `8000`, extension dev process `5173`, Memory dashboard `5174`. |
 | `npm run dev:realtime` | Shared backend `8000` and extension dev process `5173`; no dashboard Vite process. |
 | `npm run demo` | Builds both frontends and starts one demo-history backend on `8000`. |
 
 The extension always connects to `ws://127.0.0.1:8000/ws` unless a validated
-build-time WebSocket URL overrides it. In the full `dev` profile, **View
-History** opens `http://127.0.0.1:5174/dashboard/`. In `dev:realtime`, it falls
-back to `http://127.0.0.1:8000/dashboard/`, which requires a previously built
-`session-dashboard/dist`. The built `demo` serves that route directly from its
-single backend.
+build-time WebSocket URL overrides it. In the full `dev` profile, the History
+action uses `http://127.0.0.1:5174/dashboard/` as its validated root. In
+`dev:realtime`, it falls back to `http://127.0.0.1:8000/dashboard/`, which
+requires a previously built `session-dashboard/dist`. The built `demo` serves
+that route directly from its single backend.
 
 The root dev runner checks required ports before starting and supervises all
 children. Do not run another backend on port `8000` beside a root profile.
+
+## Live-to-Memory connectivity
+
+The strict protocol-v2 `connected` acknowledgement includes the backend's
+actual session UUID. The extension validates that UUID and keeps it only while
+the capture session is active. Its History row explains that Memory reads the
+same session archive from the shared StreamSense backend.
+
+While active, the action opens:
+
+```text
+/dashboard/sessions/{sessionId}?source=extension
+```
+
+Without an active session it opens:
+
+```text
+/dashboard/?source=extension
+```
+
+The destination is constructed only from the already validated dashboard
+configuration, and a malformed session ID is rejected before a tab opens. On
+the exact active-session route, Memory refetches the session, events, and
+relationship graph over REST every two seconds while the page remains open.
+That refresh is polling, not a WebSocket or live subscription. Capture,
+narration, questions, and interruption controls remain in the side panel.
+
+The default History projection is in memory. It can show new extension events
+during the lifetime of the shared backend process, but it is not reconstructed
+from the SQLite event store after restart. Stopping or restarting the backend
+therefore clears Memory history. The dashboard's explicit demo profile instead
+starts a fresh deterministic in-memory projection and does not prove extension
+connectivity.
 
 ## Realtime description and timeline ownership
 
@@ -57,8 +90,11 @@ active playback, the latest completed description, and the stopped state.
 Current-session timeline events arrive independently as strict `event`
 messages. The backend publishes a recorded event before automatic narration is
 eligible, so a spoken visual moment cannot silently bypass the live timeline.
-The separate History dashboard reads archived session/event projections over
+The separate Memory dashboard reads archived session/event projections over
 REST; the extension does not rehydrate old sessions into its compact timeline.
+The dashboard's Memory-first relationship map, search, accessibility shortcuts,
+high-contrast option, and readable relationship alternatives are documented in
+[`../session-dashboard/README.md`](../session-dashboard/README.md).
 
 ## Checks and acceptance caveat
 

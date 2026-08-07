@@ -28,8 +28,13 @@ test("acknowledges protocol v2 only after hello and validates every emitted serv
   assert.deepEqual(fixture.browser.messages[0], {
     type: "connected",
     protocolVersion: 2,
+    sessionId: fixture.session.sessionId,
     model: "live-model",
   });
+  assert.match(
+    fixture.browser.messages[0].sessionId,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
   for (const message of fixture.browser.messages) {
     assert.deepEqual(parseServerOutput(message), message);
   }

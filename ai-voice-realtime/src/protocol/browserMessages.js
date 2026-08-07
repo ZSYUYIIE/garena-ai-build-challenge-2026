@@ -24,6 +24,7 @@ export const SERVER_MESSAGE_TYPES = Object.freeze([
 ]);
 
 const turnId = z.string().uuid();
+const sessionId = z.string().uuid();
 const turnMode = z.enum(["answer", "narration"]);
 const providerState = z.enum(["connecting", "ready", "degraded", "closed"]);
 const pcmMimeType = z.string().refine((value) => {
@@ -49,7 +50,12 @@ const serverOutputSchema = z.discriminatedUnion("type", [
     type: z.literal("answer_update"), turnId, mode: z.literal("answer"),
     text: z.string(), finished: z.boolean(), languageCode: z.string().optional(),
   }).strict(),
-  z.object({ type: z.literal("connected"), protocolVersion: z.literal(2), model: z.string().optional() }).strict(),
+  z.object({
+    type: z.literal("connected"),
+    protocolVersion: z.literal(2),
+    sessionId,
+    model: z.string().optional(),
+  }).strict(),
   z.object({ type: z.literal("error"), text: z.string().optional() }).strict(),
   z.object({ type: z.literal("event"), event: serverEvent.optional() }).strict(),
   z.object({

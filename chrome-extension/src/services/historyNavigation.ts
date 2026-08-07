@@ -1,4 +1,4 @@
-import { configuredDashboardUrl } from "./backendUrls.ts";
+import { configuredHistoryDashboardUrl } from "./backendUrls.ts";
 
 export type CreateTab = (
   properties: { url: string },
@@ -11,9 +11,11 @@ export async function openHistoryDashboard(
   await createTab({ url: dashboardUrl });
 }
 
-export function openConfiguredHistoryDashboard(): Promise<void> {
+export function openConfiguredHistoryDashboard(
+  activeSessionId?: string | null,
+): Promise<void> {
   return openHistoryDashboard(
     (properties) => chrome.tabs.create(properties),
-    configuredDashboardUrl(),
+    configuredHistoryDashboardUrl(activeSessionId),
   );
 }

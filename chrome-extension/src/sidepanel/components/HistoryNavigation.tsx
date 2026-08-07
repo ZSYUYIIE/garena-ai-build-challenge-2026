@@ -2,13 +2,17 @@ import { useState } from "react";
 
 import { openConfiguredHistoryDashboard } from "../../services/historyNavigation";
 
-export function HistoryNavigation() {
+type HistoryNavigationProps = {
+  activeSessionId: string | null;
+};
+
+export function HistoryNavigation({ activeSessionId }: HistoryNavigationProps) {
   const [openFailed, setOpenFailed] = useState(false);
 
   async function handleOpenHistory() {
     setOpenFailed(false);
     try {
-      await openConfiguredHistoryDashboard();
+      await openConfiguredHistoryDashboard(activeSessionId);
     } catch {
       setOpenFailed(true);
     }
@@ -19,10 +23,21 @@ export function HistoryNavigation() {
       <button
         type="button"
         onClick={() => { void handleOpenHistory(); }}
-        aria-label="View StreamSense history in a new tab"
+        aria-label={activeSessionId
+          ? "Open this StreamSense session memory in History in a new tab"
+          : "Open StreamSense session memory in History in a new tab"}
         className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-2 text-left text-sm font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
-        <span>View History</span>
+        <span className="min-w-0">
+          <span className="block">
+            {activeSessionId ? "Open this session in History" : "Open StreamSense History"}
+          </span>
+          <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+            {activeSessionId
+              ? "Review this session memory from the shared StreamSense backend."
+              : "Review saved session memory from the shared StreamSense backend."}
+          </span>
+        </span>
         <OpenInNewTabIcon />
       </button>
       {openFailed ? (

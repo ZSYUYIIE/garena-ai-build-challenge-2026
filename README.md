@@ -4,10 +4,15 @@ StreamSense is one local accessibility product with two user surfaces: a Chrome
 side panel for live assistance and a browser dashboard for saved history. The
 side panel watches an explicitly authorized tab, describes meaningful visual
 changes, builds a timestamped event timeline, and lets the user ask questions
-by text or voice. **View History** opens the dashboard in a normal Chrome tab.
+by text or voice. **Open this session in History** opens that session's Memory
+view in a normal Chrome tab.
 
 Both surfaces use the same local backend. The extension uses its protocol-v2
 WebSocket for realtime work, while the dashboard uses bounded REST endpoints.
+The backend includes the current session UUID in its validated connection
+acknowledgement, so the extension can hand the exact saved session to Memory.
+This is shared-backend connectivity, not a second realtime client in the
+dashboard.
 
 ```text
 Chrome extension
@@ -15,7 +20,7 @@ Chrome extension
   ├─ user microphone PCM ───────────────┼─> Express/WebSocket backend ─> Gemini
   └─ captured-tab PCM ─> backend ─> Cloud Speech-to-Text V2
 
-Session dashboard ── REST `/api` ──> in-memory history service
+Memory dashboard ─── REST `/api` ──> in-memory history service
 ```
 
 Microphone audio and captured-tab audio remain separate. Only microphone audio
@@ -243,9 +248,18 @@ Then in Chrome:
    **Allow microphone**, then return to the captured tab.
 5. Let the video play. Meaningful visual changes appear in the timeline and may
    be narrated according to the selected narration level.
-6. Select **View History** to open
-   `http://127.0.0.1:5174/dashboard/` in a normal tab while the full development
-   profile is running.
+6. Select **Open this session in History**. While a session is active, the
+   extension opens
+   `http://127.0.0.1:5174/dashboard/sessions/{sessionId}?source=extension`.
+   Without an active session it opens
+   `http://127.0.0.1:5174/dashboard/?source=extension` instead.
+
+An active-session page opened from the extension refetches its session,
+timeline, and relationship REST resources every two seconds while that page is
+open. This bounded polling helps newly archived moments appear, but it is not a
+WebSocket, push channel, or guaranteed live subscription. Live capture,
+narration, questions, and interruption controls remain in the extension side
+panel.
 
 If you switch to another tab, click the toolbar icon on that new tab to
 authorize it before starting again.
@@ -286,9 +300,9 @@ description** while the session is otherwise running, and **Video description**
 when stopped. Reload the unpacked extension after rebuilding; legacy unowned
 `answer` and `narration` WebSocket messages are rejected by the current panel.
 
-## Session dashboard development without Speech-to-Text
+## Memory dashboard development without Speech-to-Text
 
-The History surface can run from deterministic demo data without opening the
+The Memory surface can run from deterministic demo data without opening the
 extension or creating a realtime WebSocket session:
 
 ```bash
@@ -306,13 +320,34 @@ restart. Durable MongoDB storage, vector embeddings/search, Redis current
 context, and retrieval ranking remain a separate integration workstream and are
 not implemented by the current in-memory composition.
 
-The Explore route includes an optional Three.js map of the bounded graph
-response. It visualizes only supplied session, event, entity, topic, and edge
-records; it does not infer semantic relationships. A native labeled-node
-selector and readable relationship lists remain available for keyboard and
-assistive-technology use. Reduced-motion preference limits rendering to
-interaction, WebGL failure leaves the DOM view usable, and route/data changes
-dispose the renderer, animation, observers, listeners, and GPU resources.
+Memory now leads with an optional Three.js relationship map before the recent
+session list. The former `/dashboard/explore` URL is a compatibility redirect:
+a valid `sessionId` goes to that session's `#relationships` section, otherwise
+it returns to the Memory overview. Relationship exploration is therefore part
+of Memory and each session, rather than a separate product area.
+
+The map renders every session, event, entity, and topic as a sphere. Color
+groups spheres into labeled entertainment-domain constellations; visual role
+and size provide non-color cues. Sessions are the largest double-halo anchors,
+event size represents supplied importance, and entity/topic size represents
+the number of supplied event connections. Solid or dashed edges retain the
+backend meanings for session membership, chronological adjacency, shared
+entities, shared topics, and optional backend-supplied semantic similarity.
+The client never invents a missing relationship.
+
+This is a relationship layout, not an XYZ chart. Domain clusters and
+time-ordered event arcs make the scene understandable, while depth only
+separates overlaps; absolute X, Y, and Z coordinates are not measurements.
+The native labeled-node selector and semantic details are the keyboard and
+screen-reader path on every map. Session pages also include complete readable
+node and relationship lists. WebGL failure preserves those DOM alternatives.
+
+Dashboard shortcuts have visible equivalents: `Ctrl+K` opens and focuses
+Memory search; `Alt+H` opens Memory; `Alt+G` focuses the graph selector;
+`Alt+C` toggles the persistent high-contrast mode; and `Alt+/` opens shortcut
+help (`Escape` closes it). The dashboard also provides a skip link, visible
+focus, route-focus management, forced-colors support, and reduced-motion
+behavior that disables camera easing and minimizes CSS motion.
 
 For an inspectable copy of the deterministic fixture, run the package-scoped
 utility:
@@ -345,9 +380,9 @@ Run commands from the repository root:
 
 | Command | Processes and purpose |
 | --- | --- |
-| `npm run dev` | Normal backend `8000` + Live extension `5173` + History dashboard `5174`. |
+| `npm run dev` | Normal backend `8000` + Live extension `5173` + Memory dashboard `5174`. |
 | `npm run dev:realtime` | Normal backend `8000` + Live extension `5173`; omits the dashboard Vite process. |
-| `npm run dev:dashboard` | Demo-history backend `8000` + History dashboard `5174`; no extension process. |
+| `npm run dev:dashboard` | Demo-history backend `8000` + Memory dashboard `5174`; no extension process. |
 | `npm run build` | Builds `chrome-extension/dist` and `session-dashboard/dist`. |
 | `npm run demo` | Builds both surfaces, then serves the deterministic dashboard through one backend on `8000`. |
 | `npm run check` | Runs orchestration tests, backend checks, extension tests/build, and dashboard tests/typecheck/build. |
@@ -365,10 +400,10 @@ The backend is not running, exited after startup, or is using a different port.
 Run the appropriate root development command and keep that terminal open. The
 extension manifest and default WebSocket URL expect port `8000`.
 
-### View History opens a 404 page
+### Open this session in History opens a 404 page
 
-Use `npm run dev` when developing both surfaces; its extension build points
-**View History** to the dashboard Vite server on port `5174`. The
+Use `npm run dev` when developing both surfaces; the full profile points the
+extension's History action to the dashboard Vite server on port `5174`. The
 `dev:realtime` profile deliberately omits that server and falls back to the
 backend `/dashboard/` URL, which exists only when `session-dashboard/dist` has
 been built. Run `npm run build`, `npm run demo`, or the full `npm run dev`

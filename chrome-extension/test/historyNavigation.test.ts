@@ -11,8 +11,11 @@ import {
   deriveDashboardUrlFromWebSocket,
   resolveBackendWebSocketUrl,
   resolveDashboardUrl,
+  resolveHistoryDashboardUrl,
 } from "../src/services/backendUrls.ts";
 import { openHistoryDashboard } from "../src/services/historyNavigation.ts";
+
+const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
 test("derives the dashboard HTTP URL from a validated backend WebSocket URL", () => {
   assert.equal(
@@ -69,6 +72,32 @@ test("accepts only an exact loopback HTTP dashboard override", () => {
   }
 });
 
+test("builds extension-origin History routes without changing the validated dashboard origin", () => {
+  const configuration = {
+    dashboardUrl: "http://127.0.0.1:5174/dashboard/",
+    webSocketUrl: "ws://127.0.0.1:8000/ws",
+  };
+
+  assert.equal(
+    resolveHistoryDashboardUrl(configuration),
+    "http://127.0.0.1:5174/dashboard/?source=extension",
+  );
+  assert.equal(
+    resolveHistoryDashboardUrl(configuration, SESSION_ID),
+    `http://127.0.0.1:5174/dashboard/sessions/${SESSION_ID}?source=extension`,
+  );
+});
+
+test("rejects an invalid active session ID before constructing a History route", () => {
+  assert.throws(
+    () => resolveHistoryDashboardUrl(
+      { dashboardUrl: "http://127.0.0.1:5174/dashboard/" },
+      "../search",
+    ),
+    /valid session ID/i,
+  );
+});
+
 test("opens the resolved dashboard in a normal Chrome tab", async () => {
   const calls: Array<{ url: string }> = [];
 
@@ -76,16 +105,18 @@ test("opens the resolved dashboard in a normal Chrome tab", async () => {
     (properties) => {
       calls.push(properties);
     },
-    resolveDashboardUrl({
+    resolveHistoryDashboardUrl({
       dashboardUrl: "http://127.0.0.1:5174/dashboard/",
       webSocketUrl: "ws://127.0.0.1:8000/ws",
-    }),
+    }, SESSION_ID),
   );
 
-  assert.deepEqual(calls, [{ url: "http://127.0.0.1:5174/dashboard/" }]);
+  assert.deepEqual(calls, [{
+    url: `http://127.0.0.1:5174/dashboard/sessions/${SESSION_ID}?source=extension`,
+  }]);
 });
 
-test("renders View History as a native keyboard-accessible labeled button", async () => {
+test("renders the active-session History handoff as a labeled native button", async () => {
   const vite = await createServer({
     configFile: false,
     root: process.cwd(),
@@ -98,16 +129,28 @@ test("renders View History as a native keyboard-accessible labeled button", asyn
     const module = await vite.ssrLoadModule(
       "/src/sidepanel/components/HistoryNavigation.tsx",
     ) as {
-      HistoryNavigation: () => ReturnType<typeof createElement>;
+      HistoryNavigation: (props: {
+        activeSessionId: string | null;
+      }) => ReturnType<typeof createElement>;
     };
-    const markup = renderToStaticMarkup(createElement(module.HistoryNavigation));
+    const markup = renderToStaticMarkup(createElement(module.HistoryNavigation, {
+      activeSessionId: SESSION_ID,
+    }));
 
     assert.match(markup, /<button\b[^>]*\btype="button"/);
     assert.match(
       markup,
-      /\baria-label="View StreamSense history in a new tab"/,
+      /\baria-label="Open this StreamSense session memory in History in a new tab"/,
     );
-    assert.match(markup, />View History</);
+    assert.match(markup, />Open this session in History</);
+    assert.match(markup, /shared StreamSense backend/);
+
+    const inactiveMarkup = renderToStaticMarkup(createElement(
+      module.HistoryNavigation,
+      { activeSessionId: null },
+    ));
+    assert.match(inactiveMarkup, />Open StreamSense History</);
+    assert.match(inactiveMarkup, /saved session memory from the shared StreamSense backend/);
   } finally {
     await vite.close();
   }

@@ -18,7 +18,7 @@ export function EventTimeline({ events }: { events: HistoryEvent[] }) {
           <article
             className="timeline-event"
             aria-labelledby={`event-title-${event.id}`}
-            tabIndex={0}
+            tabIndex={-1}
           >
             <div className="timeline-marker" aria-hidden="true" />
             <div className="timeline-event-body">

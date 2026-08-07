@@ -1,16 +1,29 @@
-# StreamSense Session Dashboard
+# StreamSense Memory Dashboard
 
-The session dashboard is StreamSense's accessible History surface for previous
-viewing sessions. The compact Chrome side panel is the Live surface and opens
-this application through **View History**. Both use the same local backend, but
-the dashboard consumes only bounded REST endpoints. It never calls Gemini,
-MongoDB, an embedding provider, Redis, Cloud Speech-to-Text, or the realtime
-WebSocket directly.
+The dashboard is StreamSense's accessible Memory surface. The compact Chrome
+side panel remains the Live surface for capture, narration, questions, and
+interruptions. Both surfaces use the same local backend, but Memory consumes
+only bounded REST endpoints. It never calls Gemini, MongoDB, an embedding
+provider, Redis, Cloud Speech-to-Text, or the realtime WebSocket directly.
+
+After the protocol-v2 handshake, the backend gives Live the actual session
+UUID. **Open this session in History** then opens:
+
+```text
+/dashboard/sessions/{sessionId}?source=extension
+```
+
+If no session is active, the action opens
+`/dashboard/?source=extension`. The active-session URL refetches the session,
+event timeline, and relationship graph over REST every two seconds while the
+page is open. This is periodic REST refresh, not a live subscription: capture
+and controls remain in the extension, updates can arrive after archival delay,
+and a backend restart still clears the in-memory Memory projection.
 
 Use the repository-root npm workspace for installation and integrated commands.
 `npm run dev` starts the shared backend on `8000`, the Live extension process on
-`5173`, and this History application on `5174`; the extension's **View History**
-button targets the latter. `npm run dev:dashboard` omits the extension and uses
+`5173`, and this Memory application on `5174`; the extension's History action
+targets the latter. `npm run dev:dashboard` omits the extension and uses
 deterministic demo history instead.
 
 ## Run the deterministic demo
@@ -61,33 +74,91 @@ with deterministic in-memory history. Open
 `session-dashboard/dist` and applies an SPA fallback for `/dashboard/*` routes;
 no Vite server runs in this profile.
 
-## Routes and accessibility
+## Routes and Live handoff
 
-- `/dashboard/` — overview, recent sessions, page metrics, and demo-data notice
-- `/dashboard/sessions/:sessionId` — metadata, summary, entities, topics, and a
-  chronological event timeline
+- `/dashboard/` — Memory-first overview with the relationship map before page
+  metrics and recent sessions
+- `/dashboard/sessions/:sessionId` — metadata, summary, a session-scoped
+  relationship map and readable lists, then the chronological event timeline
 - `/dashboard/search` — natural-language historical search
-- `/dashboard/explore` — readable context relationships plus an optional
-  Three.js relationship map
+- `/dashboard/explore` — legacy compatibility redirect, not a separate page
+
+`/dashboard/explore?sessionId={validUuid}` redirects to
+`/dashboard/sessions/{validUuid}#relationships`. If `source=extension` is the
+single valid source value it is preserved on that redirect. A missing or
+invalid session ID returns to the Memory overview, again preserving the valid
+extension source marker. New navigation should link to Memory or a session
+directly.
+
+## Relationship-map semantics
+
+The overview leads with the bounded graph returned by
+`GET /api/context-graph`. A domain filter can focus the constellation, and each
+session repeats the same component with that session ID. The client validates,
+deduplicates, and renders only supplied nodes and edges; it does not infer
+missing relationships or semantic scores.
+
+This is a relationship map, not an XYZ chart. Entertainment domains form
+deterministic labeled constellations, sessions anchor their domain cluster, and
+events follow a time-ordered arc around their session. Context nodes sit near
+the supplied nodes they connect. Depth is a deterministic overlap separator,
+not a measurement, and absolute X, Y, and Z values have no domain meaning.
+
+Every node uses sphere geometry. Meaning is deliberately not color-only:
+
+| Role | Sphere treatment and size meaning |
+| --- | --- |
+| Session | Largest anchor sphere with a double halo. |
+| Event | Filled sphere; radius represents supplied event importance. |
+| Entity | Wireframe sphere; radius represents its supplied event-connection count. |
+| Topic | Translucent sphere; radius represents its supplied event-connection count. |
+
+Sphere color groups content into Sports, Esports and games, Concerts, Product
+launches, Creator livestreams, or Other entertainment. A pearl node marks a
+context label connected across more than one domain. The legend names every
+domain and role.
+
+Edges preserve the API contract: session membership, next event in time,
+shared entity, shared topic, and optional backend-supplied semantic similarity.
+Topic and semantic links use distinct dashed treatments; selection brightens
+the selected sphere and its first-hop supplied connections while unrelated
+content dims. Edge weight retains the API meaning and is never presented as
+confidence unless the backend contract explicitly says so.
+
+## Accessibility controls and alternatives
 
 Every route uses semantic headings and landmarks. Timeline events remain normal
 DOM text in an ordered list. The application includes a skip link, visible
 keyboard focus, route-change focus management, explicit loading/error/empty
-states, and reduced-motion behavior.
+states, and status announcements.
 
-The 3D explorer is a presentation of the nodes and edges returned by
-`GET /api/context-graph`; it does not infer missing relationships. Sessions are
-spheres, events are importance-sized cubes, entities are diamonds, and topics
-are rings. Structural links use their supplied edge types and optional verified
-`semantic_similarity` links are visually distinct; absent semantic scores are
-not fabricated.
+The dashboard exposes these shortcuts and matching visible controls:
 
-Pointer users can orbit, zoom, and select shapes. Keyboard and
-assistive-technology users can select every labeled node with a native control,
-inspect its details, follow the session/event link, and continue to the primary
-readable relationship lists. Reduced-motion preference disables ambient
-settling motion. If WebGL cannot start, the app reports the unavailable visual
-view while leaving the selector and DOM relationships usable.
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+K` | Open and focus Memory search. |
+| `Alt+H` | Open the Memory overview. |
+| `Alt+G` | Focus the map's labeled-node selector. |
+| `Alt+C` | Toggle high contrast. |
+| `Alt+/` | Open or close shortcut help. |
+| `Escape` | Close open shortcut help and restore focus. |
+
+High contrast is a user-controlled mode persisted in local storage; it removes
+decorative shadows, strengthens borders and text, and keeps an explicit focus
+color. The stylesheet also includes forced-colors handling. Shortcuts never
+replace standard Tab navigation.
+
+Pointer users can orbit, zoom, and select spheres, and visible buttons provide
+rotate, tilt, zoom, and reset operations. Keyboard and assistive-technology
+users can select every labeled node in a native grouped control, inspect its
+role, domain, size meaning, and first-hop relationships, and follow its
+session/event link. Session pages continue with full readable node and
+relationship lists. On the overview, the native selector, details, status, and
+legends provide the non-canvas inspection path.
+
+`prefers-reduced-motion` disables camera easing and minimizes CSS animation and
+transitions. If WebGL cannot start, the app reports the optional visual view as
+unavailable while preserving the native selector and DOM information.
 
 Rendering is on demand rather than an unbounded animation loop. Changing graph
 data or leaving the route cancels pending animation, removes listeners and
@@ -210,6 +281,8 @@ loading/empty/error states, chronological rendering, search degradation, graph
 model bounds, renderer fallback/cleanup boundaries, keyboard entry, route
 focus, and axe checks. Real-browser WebGL, contrast, visible focus, and
 reduced-motion inspection remain separate manual acceptance work.
+These features and checks support accessibility work but do not by themselves
+constitute a formal WCAG conformance audit.
 
 The dashboard work did not change the Cloud Speech-to-Text architecture. These
 automated and local demo workflows do not constitute physical Chrome, Gemini,

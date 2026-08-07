@@ -19,7 +19,7 @@ const queryClient = new QueryClient({
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter basename="/dashboard">
+      <BrowserRouter basename="/dashboard/">
         <DashboardRoutes />
       </BrowserRouter>
     </QueryClientProvider>

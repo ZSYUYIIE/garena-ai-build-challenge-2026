@@ -1,9 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import type { GraphEdge, GraphNode } from "../../api/contracts";
@@ -12,7 +7,11 @@ import {
   formatPercent,
   humanizeEventType,
 } from "../../lib/format";
-import { buildGraphSceneModel } from "./graphModel";
+import {
+  buildGraphSceneModel,
+  type GraphSceneModel,
+  type PositionedGraphNode,
+} from "./graphModel";
 import {
   createThreeGraphRenderer,
   type GraphRendererController,
@@ -39,24 +38,23 @@ export function ThreeGraphExplorer({
     "ready",
   );
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
-  const [paused, setPaused] = useState(reducedMotion);
 
-  const selectedNode = model.nodes.find((node) => node.id === selectedNodeId) ?? null;
-  const hoveredNode = model.nodes.find((node) => node.id === hoveredNodeId) ?? null;
-  const selectedSession = selectedNode?.sessionId
+  const selectedNode =
+    model.nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const selectedSession = selectedNode?.clusterSessionId
     ? model.nodes.find(
         (node) =>
-          node.type === "session" && node.sessionId === selectedNode.sessionId,
+          node.type === "session" &&
+          node.sessionId === selectedNode.clusterSessionId,
       ) ?? null
     : null;
+  const summary = summarizeGraph(model);
 
   useEffect(() => {
-    if (reducedMotion) setPaused(true);
-  }, [reducedMotion]);
-
-  useEffect(() => {
-    if (selectedNodeId && !model.nodes.some((node) => node.id === selectedNodeId)) {
+    if (
+      selectedNodeId &&
+      !model.nodes.some((node) => node.id === selectedNodeId)
+    ) {
       setSelectedNodeId(null);
     }
   }, [model.nodes, selectedNodeId]);
@@ -74,7 +72,7 @@ export function ThreeGraphExplorer({
         model,
         reducedMotion,
         onSelect: setSelectedNodeId,
-        onHover: setHoveredNodeId,
+        onHover: () => undefined,
       });
       setRenderStatus("ready");
     } catch {
@@ -85,16 +83,12 @@ export function ThreeGraphExplorer({
 
     controllerRef.current = controller;
     controller.selectNode(selectedNodeId);
-    controller.setPaused(paused);
+    controller.setPaused(reducedMotion);
     return () => {
       controller.dispose();
       if (controllerRef.current === controller) controllerRef.current = null;
     };
   }, [model, reducedMotion, rendererFactory]);
-
-  useEffect(() => {
-    controllerRef.current?.setPaused(paused);
-  }, [paused]);
 
   const selectNode = (nodeId: string | null) => {
     setSelectedNodeId(nodeId);
@@ -102,9 +96,7 @@ export function ThreeGraphExplorer({
   };
 
   const resetView = () => {
-    setSelectedNodeId(null);
-    setHoveredNodeId(null);
-    controllerRef.current?.selectNode(null);
+    selectNode(null);
     controllerRef.current?.resetCamera();
   };
 
@@ -113,7 +105,7 @@ export function ThreeGraphExplorer({
       <section className="graph-explorer" aria-labelledby="graph-explorer-heading">
         <div className="graph-explorer-heading">
           <div>
-            <p className="eyebrow">Optional visual view</p>
+            <p className="eyebrow">StreamSense memory constellation</p>
             <h2 id="graph-explorer-heading">3D relationship map</h2>
           </div>
         </div>
@@ -122,41 +114,90 @@ export function ThreeGraphExplorer({
     );
   }
 
+  const groupedNodes = groupNodesByDomain(model.nodes);
+  const selectedRelationships = selectedNode
+    ? describeRelationships(selectedNode, model)
+    : [];
+  const hasCrossDomainNodes = model.nodes.some(
+    (node) => node.isCrossDomainBridge,
+  );
+
   return (
     <section className="graph-explorer" aria-labelledby="graph-explorer-heading">
       <div className="graph-explorer-heading">
-        <div>
-          <p className="eyebrow">Optional visual view</p>
+        <div className="graph-title-block">
+          <p className="eyebrow">StreamSense memory constellation</p>
           <h2 id="graph-explorer-heading">3D relationship map</h2>
-          <p>
-            Drag to orbit, scroll to zoom, or choose any node below. The map
-            labels session anchors and key events; hover or select a shape to
-            reveal its label. Readable relationship lists remain available
-            after this map.
+        </div>
+        <div className="graph-introduction">
+          <p id="graph-map-summary" className="graph-summary">
+            {summary}
+          </p>
+          <p id="graph-layout-explanation" className="graph-layout-explanation">
+            This is a relationship map, not an XYZ chart. Entertainment domains
+            form labeled constellations, sessions anchor each cluster, and
+            events follow a time-ordered arc. Depth only separates overlaps.
           </p>
         </div>
-        <div className="graph-toolbar" aria-label="3D map controls">
-          <button
-            className="button graph-control-button"
-            type="button"
-            onClick={() => setPaused((current) => !current)}
-            disabled={renderStatus === "unavailable" || reducedMotion}
-          >
-            {reducedMotion
-              ? "Motion reduced"
-              : paused
-                ? "Resume motion"
-                : "Pause motion"}
-          </button>
-          <button
-            className="button graph-control-button"
-            type="button"
-            onClick={resetView}
-            disabled={renderStatus === "unavailable"}
-          >
-            Reset view
-          </button>
-        </div>
+      </div>
+
+      <div className="graph-camera-controls" aria-label="3D map camera controls">
+        <button
+          className="button graph-control-button"
+          type="button"
+          onClick={() => controllerRef.current?.rotateCamera(-0.24, 0)}
+          disabled={renderStatus === "unavailable"}
+        >
+          Rotate left
+        </button>
+        <button
+          className="button graph-control-button"
+          type="button"
+          onClick={() => controllerRef.current?.rotateCamera(0.24, 0)}
+          disabled={renderStatus === "unavailable"}
+        >
+          Rotate right
+        </button>
+        <button
+          className="button graph-control-button"
+          type="button"
+          onClick={() => controllerRef.current?.rotateCamera(0, -0.18)}
+          disabled={renderStatus === "unavailable"}
+        >
+          Tilt up
+        </button>
+        <button
+          className="button graph-control-button"
+          type="button"
+          onClick={() => controllerRef.current?.rotateCamera(0, 0.18)}
+          disabled={renderStatus === "unavailable"}
+        >
+          Tilt down
+        </button>
+        <button
+          className="button graph-control-button"
+          type="button"
+          onClick={() => controllerRef.current?.zoomCamera(0.82)}
+          disabled={renderStatus === "unavailable"}
+        >
+          Zoom in
+        </button>
+        <button
+          className="button graph-control-button"
+          type="button"
+          onClick={() => controllerRef.current?.zoomCamera(1.22)}
+          disabled={renderStatus === "unavailable"}
+        >
+          Zoom out
+        </button>
+        <button
+          className="button graph-control-button"
+          type="button"
+          onClick={resetView}
+          disabled={renderStatus === "unavailable"}
+        >
+          Reset view
+        </button>
       </div>
 
       <div className="graph-visual-layout">
@@ -169,14 +210,15 @@ export function ThreeGraphExplorer({
             ref={canvasRef}
             className="graph-canvas"
             role="img"
-            aria-label="Interactive 3D context graph showing supplied sessions, events, entities, topics, and their relationships. Use the labeled node selector for keyboard access."
+            aria-label="Interactive 3D StreamSense memory constellation"
+            aria-describedby="graph-map-summary graph-layout-explanation"
           />
           {renderStatus === "unavailable" ? (
             <div className="graph-fallback" role="status">
               <strong>3D view unavailable</strong>
               <span>
-                WebGL could not start in this browser. Use the node selector and
-                readable relationship lists instead.
+                WebGL could not start in this browser. Use the node selector,
+                supplied connections, and readable relationship lists instead.
               </span>
             </div>
           ) : null}
@@ -188,26 +230,41 @@ export function ThreeGraphExplorer({
             <label htmlFor="graph-node-select">Labeled graph node</label>
             <select
               id="graph-node-select"
+              data-graph-node-selector
               value={selectedNodeId ?? ""}
               onChange={(event) => selectNode(event.target.value || null)}
             >
               <option value="">Choose a node</option>
-              {model.nodes.map((node) => (
-                <option key={node.id} value={node.id}>
-                  {humanizeEventType(node.type)}: {node.label}
-                </option>
+              {groupedNodes.map(([domainLabel, domainNodes]) => (
+                <optgroup key={domainLabel} label={domainLabel}>
+                  {domainNodes.map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {humanizeEventType(node.type)}: {node.label}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
+            <p className="field-hint">
+              This native selector is the keyboard alternative to choosing a
+              sphere in the canvas.
+            </p>
           </div>
 
           <div className="graph-selection" aria-live="polite">
             {selectedNode ? (
               <>
-                <span className={`graph-detail-type graph-detail-type--${selectedNode.type}`}>
-                  {humanizeEventType(selectedNode.type)} · {shapeLabel(selectedNode.shape)}
+                <span
+                  className={`graph-detail-type graph-detail-type--${selectedNode.type}`}
+                >
+                  {humanizeEventType(selectedNode.type)} sphere
                 </span>
                 <h4>{selectedNode.label}</h4>
                 <dl>
+                  <div>
+                    <dt>Entertainment domain</dt>
+                    <dd>{selectedNode.domainLabel}</dd>
+                  </div>
                   {selectedNode.timestampSeconds !== null ? (
                     <div>
                       <dt>Session time</dt>
@@ -227,15 +284,33 @@ export function ThreeGraphExplorer({
                     </div>
                   ) : null}
                   <div>
-                    <dt>Connected edges</dt>
-                    <dd>{countConnectedEdges(selectedNode.id, model.edges)}</dd>
+                    <dt>Sphere size</dt>
+                    <dd>{selectedNode.sizeMeaning}</dd>
+                  </div>
+                  <div>
+                    <dt>Supplied connections</dt>
+                    <dd>{selectedNode.connectionCount}</dd>
                   </div>
                 </dl>
+                {selectedRelationships.length > 0 ? (
+                  <div className="graph-relationship-summary">
+                    <h5>How this node connects</h5>
+                    <ul>
+                      {selectedRelationships.map((relationship) => (
+                        <li key={relationship.id}>{relationship.text}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p>No supplied relationships connect this node.</p>
+                )}
                 {selectedNode.sessionId ? (
                   <Link
                     className="text-link"
                     to={`/sessions/${selectedNode.sessionId}${
-                      selectedNode.eventId ? `#event-${selectedNode.eventId}` : ""
+                      selectedNode.eventId
+                        ? `#event-${selectedNode.eventId}`
+                        : ""
                     }`}
                   >
                     {selectedNode.eventId
@@ -246,32 +321,83 @@ export function ThreeGraphExplorer({
               </>
             ) : (
               <p>
-                Choose a labeled node or select a shape in the map to inspect
-                its type, importance, and session link.
+                Choose a labeled node or select a sphere. Its supplied
+                first-hop connections will brighten while unrelated content
+                dims.
               </p>
             )}
           </div>
 
-          <ul className="graph-legend" aria-label="Graph node type legend">
-            <li><span className="legend-shape legend-session" aria-hidden="true" />Session · sphere</li>
-            <li><span className="legend-shape legend-event" aria-hidden="true" />Event · cube, sized by importance</li>
-            <li><span className="legend-shape legend-entity" aria-hidden="true" />Entity · diamond</li>
-            <li><span className="legend-shape legend-topic" aria-hidden="true" />Topic · ring</li>
-          </ul>
+          <div className="graph-legend-section">
+            <h4>Sphere meaning</h4>
+            <ul className="graph-legend" aria-label="Graph node role legend">
+              <li>
+                <span className="legend-sphere legend-session" aria-hidden="true" />
+                Session · largest anchor with a double halo
+              </li>
+              <li>
+                <span className="legend-sphere legend-event" aria-hidden="true" />
+                Event · filled sphere sized by importance
+              </li>
+              <li>
+                <span className="legend-sphere legend-entity" aria-hidden="true" />
+                Entity · wireframe sphere sized by supplied connections
+              </li>
+              <li>
+                <span className="legend-sphere legend-topic" aria-hidden="true" />
+                Topic · translucent sphere sized by supplied connections
+              </li>
+            </ul>
+          </div>
+
+          <div className="graph-legend-section">
+            <h4>Entertainment domains</h4>
+            <ul className="graph-legend" aria-label="Entertainment domain legend">
+              {model.domains.map((domain) => (
+                <li key={domain.key}>
+                  <span
+                    className="legend-domain"
+                    style={{ backgroundColor: `#${domain.color.toString(16).padStart(6, "0")}` }}
+                    aria-hidden="true"
+                  />
+                  {domain.label} · {domain.sessionCount} {domain.sessionCount === 1 ? "session" : "sessions"}
+                </li>
+              ))}
+              {hasCrossDomainNodes ? (
+                <li>
+                  <span className="legend-domain legend-cross-domain" aria-hidden="true" />
+                  Pearl · connects multiple entertainment domains
+                </li>
+              ) : null}
+            </ul>
+          </div>
+
+          <div className="graph-legend-section">
+            <h4>Supplied relationships</h4>
+            <ul className="graph-legend graph-edge-legend" aria-label="Graph relationship legend">
+              <li><span className="legend-line legend-line--session" aria-hidden="true" />Belongs to the same session</li>
+              <li><span className="legend-line legend-line--temporal" aria-hidden="true" />Next event in time</li>
+              <li><span className="legend-line legend-line--entity" aria-hidden="true" />Mentions this entity</li>
+              <li><span className="legend-line legend-line--topic" aria-hidden="true" />Tagged with this topic</li>
+              <li><span className="legend-line legend-line--semantic" aria-hidden="true" />Backend-supplied semantic similarity, when available</li>
+            </ul>
+          </div>
         </aside>
       </div>
 
       <p className="graph-status" role="status" aria-live="polite">
-        {reducedMotion
-          ? "Reduced motion is active. The graph renders only on interaction."
-          : paused
-            ? "Graph motion is paused."
-            : hoveredNode
-              ? `Pointing at ${hoveredNode.label}, ${humanizeEventType(hoveredNode.type)}.`
-              : `${model.nodes.length} nodes and ${model.edges.length} supplied relationships are ready.`}
+        {selectedNode
+          ? `${selectedNode.label} selected with ${selectedNode.connectionCount} supplied ${selectedNode.connectionCount === 1 ? "connection" : "connections"}.`
+          : reducedMotion
+            ? "Reduced motion is active. Camera easing is disabled."
+            : `${model.nodes.length} spheres and ${model.edges.length} supplied relationships are ready.`}
         {model.droppedDanglingEdgeIds.length > 0
           ? ` ${model.droppedDanglingEdgeIds.length} invalid dangling relationship${model.droppedDanglingEdgeIds.length === 1 ? " was" : "s were"} omitted.`
           : ""}
+      </p>
+      <p className="graph-readable-handoff">
+        Prefer text? Use the labeled node selector and relationship summary.
+        Session pages also provide complete readable relationship lists.
       </p>
     </section>
   );
@@ -295,25 +421,85 @@ function usePrefersReducedMotion(): boolean {
   return reducedMotion;
 }
 
-function shapeLabel(shape: string): string {
-  switch (shape) {
-    case "sphere":
-      return "sphere";
-    case "box":
-      return "cube";
-    case "octahedron":
-      return "diamond";
-    case "torus":
-      return "ring";
-    default:
-      return shape;
-  }
+function summarizeGraph(model: GraphSceneModel): string {
+  const sessions = model.nodes.filter((node) => node.type === "session").length;
+  const events = model.nodes.filter((node) => node.type === "event").length;
+  const entities = model.nodes.filter((node) => node.type === "entity").length;
+  const topics = model.nodes.filter((node) => node.type === "topic").length;
+  const domainNames = model.domains.map((domain) => domain.label);
+  return `${sessions} ${sessions === 1 ? "session" : "sessions"} and ${events} significant ${events === 1 ? "moment" : "moments"} across ${joinWithAnd(domainNames)}. ${entities} ${entities === 1 ? "entity" : "entities"} and ${topics} ${topics === 1 ? "topic" : "topics"} connect the supplied history.`;
 }
 
-function countConnectedEdges(
-  nodeId: string,
-  edges: Array<{ source: string; target: string }>,
-): number {
-  return edges.filter((edge) => edge.source === nodeId || edge.target === nodeId)
-    .length;
+function joinWithAnd(values: string[]): string {
+  if (values.length === 0) return "no classified entertainment domains";
+  if (values.length === 1) return values[0]!;
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
+}
+
+function groupNodesByDomain(
+  nodes: PositionedGraphNode[],
+): Array<[string, PositionedGraphNode[]]> {
+  const groups = new Map<string, PositionedGraphNode[]>();
+  for (const node of nodes) {
+    const label = node.isCrossDomainBridge
+      ? "Cross-domain bridges"
+      : node.domainLabel;
+    const group = groups.get(label) ?? [];
+    group.push(node);
+    groups.set(label, group);
+  }
+  return [...groups.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+}
+
+function describeRelationships(
+  selectedNode: PositionedGraphNode,
+  model: GraphSceneModel,
+): Array<{ id: string; text: string }> {
+  const nodeById = new Map(model.nodes.map((node) => [node.id, node]));
+  return model.edges
+    .filter(
+      (edge) =>
+        edge.source === selectedNode.id || edge.target === selectedNode.id,
+    )
+    .map((edge) => {
+      const selectedIsSource = edge.source === selectedNode.id;
+      const other = nodeById.get(
+        selectedIsSource ? edge.target : edge.source,
+      );
+      const otherLabel = other?.label ?? "an unavailable node";
+      return {
+        id: edge.id,
+        text: relationshipText(edge.type, selectedIsSource, otherLabel),
+      };
+    });
+}
+
+function relationshipText(
+  type: GraphEdge["type"],
+  selectedIsSource: boolean,
+  otherLabel: string,
+): string {
+  switch (type) {
+    case "same_session":
+      return selectedIsSource
+        ? `Contains the event “${otherLabel}”.`
+        : `Belongs to the session “${otherLabel}”.`;
+    case "temporal_relation":
+      return selectedIsSource
+        ? `Is followed by “${otherLabel}”.`
+        : `Follows “${otherLabel}”.`;
+    case "shared_entity":
+      return selectedIsSource
+        ? `Mentions the entity “${otherLabel}”.`
+        : `Is mentioned in the event “${otherLabel}”.`;
+    case "shared_topic":
+      return selectedIsSource
+        ? `Is tagged with the topic “${otherLabel}”.`
+        : `Tags the event “${otherLabel}”.`;
+    case "semantic_similarity":
+      return `Has a backend-supplied semantic relationship with “${otherLabel}”.`;
+  }
 }

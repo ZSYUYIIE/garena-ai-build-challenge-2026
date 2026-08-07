@@ -13,12 +13,15 @@ import {
 import { DemoDataBanner } from "../../components/DemoDataBanner";
 import { PaginationControls } from "../../components/PaginationControls";
 import { TagList } from "../../components/TagList";
+import { ContextGraphPanel } from "../context/ContextGraphPanel";
 import { formatDateTime, formatDuration } from "../../lib/format";
 import { EventTimeline } from "./EventTimeline";
 
 export function SessionDetailPage() {
   const { sessionId = "" } = useParams();
   const location = useLocation();
+  const openedFromExtension =
+    new URLSearchParams(location.search).get("source") === "extension";
   const targetEventId = eventIdFromHash(location.hash);
   const paginationScope = `${sessionId}:${targetEventId ?? "all"}`;
   const [eventPagination, setEventPagination] = useState<{
@@ -40,6 +43,7 @@ export function SessionDetailPage() {
     queryKey: historyQueryKeys.session(sessionId),
     queryFn: ({ signal }) => historyClient.getSession(sessionId, signal),
     enabled: Boolean(sessionId),
+    refetchInterval: openedFromExtension ? 2_000 : false,
   });
   const eventsQuery = useQuery({
     queryKey: historyQueryKeys.events(sessionId, eventCursor, targetEventId),
@@ -52,8 +56,9 @@ export function SessionDetailPage() {
           eventId: targetEventId ?? undefined,
         },
         signal,
-      ),
+    ),
     enabled: Boolean(sessionId),
+    refetchInterval: openedFromExtension ? 2_000 : false,
   });
 
   useEffect(() => {
@@ -69,6 +74,14 @@ export function SessionDetailPage() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [eventsQuery.data, targetEventId]);
+
+  useEffect(() => {
+    if (location.hash !== "#relationships" || !sessionQuery.data) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("relationships")?.scrollIntoView?.({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [location.hash, sessionQuery.data]);
 
   if (sessionQuery.isPending) {
     return (
@@ -142,12 +155,12 @@ export function SessionDetailPage() {
           </h1>
           <p className="lede">{session.sourceLabel}</p>
         </div>
-        <Link
+        <a
           className="button button-secondary"
-          to={`/explore?sessionId=${encodeURIComponent(session.sessionId)}`}
+          href="#relationships"
         >
-          Explore context
-        </Link>
+          Jump to relationships
+        </a>
       </header>
 
       <dl className="detail-metadata">
@@ -184,6 +197,29 @@ export function SessionDetailPage() {
         </div>
       </section>
 
+      <section
+        id="relationships"
+        className="session-context-section"
+        aria-labelledby="relationships-heading"
+      >
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Session relationships</p>
+            <h2 id="relationships-heading">How this session connects</h2>
+          </div>
+        </div>
+        <p className="section-introduction">
+          Follow this session’s moments in order and inspect the people and
+          topics that connect them. The readable lists contain the same
+          relationships as the optional 3D view.
+        </p>
+        <ContextGraphPanel
+          options={{ sessionId: session.sessionId, limit: 100 }}
+          refreshIntervalMs={openedFromExtension ? 2_000 : undefined}
+          showRelationships
+        />
+      </section>
+
       <section aria-labelledby="timeline-heading">
         <div className="section-heading">
           <div>
@@ -191,7 +227,12 @@ export function SessionDetailPage() {
             <h2 id="timeline-heading">Significant events</h2>
           </div>
           {targetEventId ? (
-            <Link className="text-link" to={`/sessions/${sessionId}`}>
+            <Link
+              className="text-link"
+              to={`/sessions/${sessionId}${
+                openedFromExtension ? "?source=extension" : ""
+              }`}
+            >
               Show the full timeline
             </Link>
           ) : null}

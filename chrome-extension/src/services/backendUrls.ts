@@ -1,3 +1,5 @@
+import { isUuid } from "../lib/uuid.ts";
+
 export const DEFAULT_BACKEND_WEBSOCKET_URL = "ws://127.0.0.1:8000/ws";
 
 export type BackendUrlConfiguration = {
@@ -41,6 +43,35 @@ export function configuredDashboardUrl(): string {
     dashboardUrl: environment?.VITE_STREAMSENSE_DASHBOARD_URL,
     webSocketUrl: environment?.VITE_STREAMSENSE_WS_URL,
   });
+}
+
+export function resolveHistoryDashboardUrl(
+  configuration: BackendUrlConfiguration = {},
+  activeSessionId?: string | null,
+): string {
+  if (activeSessionId != null && !isUuid(activeSessionId)) {
+    throw new TypeError("StreamSense history requires a valid session ID.");
+  }
+
+  const historyUrl = new URL(resolveDashboardUrl(configuration));
+  historyUrl.pathname = activeSessionId
+    ? `/dashboard/sessions/${activeSessionId}`
+    : "/dashboard/";
+  historyUrl.searchParams.set("source", "extension");
+  return historyUrl.toString();
+}
+
+export function configuredHistoryDashboardUrl(
+  activeSessionId?: string | null,
+): string {
+  const environment = buildEnvironment();
+  return resolveHistoryDashboardUrl(
+    {
+      dashboardUrl: environment?.VITE_STREAMSENSE_DASHBOARD_URL,
+      webSocketUrl: environment?.VITE_STREAMSENSE_WS_URL,
+    },
+    activeSessionId,
+  );
 }
 
 function parseBackendWebSocketUrl(candidate?: string | null): URL | null {

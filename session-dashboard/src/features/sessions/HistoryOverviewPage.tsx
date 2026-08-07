@@ -13,11 +13,13 @@ import {
 } from "../../components/AsyncState";
 import { MetricCard } from "../../components/MetricCard";
 import { PaginationControls } from "../../components/PaginationControls";
+import { ContextGraphPanel } from "../context/ContextGraphPanel";
 import { formatDuration } from "../../lib/format";
 import { SessionCard } from "./SessionCard";
 
 export function HistoryOverviewPage() {
   const [cursor, setCursor] = useState<string | null>(null);
+  const [graphDomain, setGraphDomain] = useState("");
   const [previousCursors, setPreviousCursors] = useState<Array<string | null>>([]);
   const sessionsQuery = useQuery({
     queryKey: historyQueryKeys.sessions(cursor),
@@ -34,7 +36,9 @@ export function HistoryOverviewPage() {
     (total, session) => total + session.durationSeconds,
     0,
   );
-  const domains = new Set(sessions.map((session) => session.domain));
+  const domains = [...new Set(sessions.map((session) => session.domain))].sort(
+    (left, right) => left.localeCompare(right),
+  );
 
   const goForward = () => {
     const nextCursor = sessionsQuery.data?.nextCursor;
@@ -53,26 +57,69 @@ export function HistoryOverviewPage() {
 
   return (
     <div className="page-stack">
-      <section className="hero-section">
-        <div>
-          <p className="eyebrow">Previous viewing sessions</p>
-          <h1 data-route-heading tabIndex={-1}>
-            StreamSense History
-          </h1>
-          <p className="lede">
-            Review what happened, find meaningful moments, and understand the
-            people and topics that shaped each stream.
-          </p>
+      <section className="memory-hero" aria-labelledby="memory-heading">
+        <header className="memory-hero-copy">
+          <div>
+            <p className="eyebrow">Live moments become connected memory</p>
+            <h1 id="memory-heading" data-route-heading tabIndex={-1}>
+              Your streams, remembered.
+            </h1>
+            <p className="lede">
+              StreamSense turns important moments from the Chrome extension
+              into a searchable constellation of sessions, events, people, and
+              recurring ideas.
+            </p>
+          </div>
+          <div className="hero-actions">
+            <Link className="button button-primary" to="/search">
+              Search past moments
+            </Link>
+            <a className="button button-secondary" href="#recent-sessions">
+              Skip to sessions
+            </a>
+          </div>
+        </header>
+
+        <DemoDataBanner dataOrigin={sessionsQuery.data?.meta.dataOrigin ?? null} />
+
+        <div className="memory-map-shell" id="memory-map">
+          <div className="memory-map-heading">
+            <div>
+              <p className="eyebrow">Memory constellation</p>
+              <h2>See how moments connect</h2>
+            </div>
+            <div className="field memory-domain-filter">
+              <label htmlFor="memory-domain">Entertainment domain</label>
+              <select
+                id="memory-domain"
+                value={graphDomain}
+                onChange={(event) => setGraphDomain(event.target.value)}
+              >
+                <option value="">All domains</option>
+                {domains.map((domain) => (
+                  <option key={domain} value={domain}>
+                    {domain}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <ContextGraphPanel
+            options={{
+              domain: graphDomain || undefined,
+              limit: 80,
+            }}
+          />
         </div>
-        <Link className="button button-primary" to="/search">
-          Search past moments
-        </Link>
       </section>
 
-      <DemoDataBanner dataOrigin={sessionsQuery.data?.meta.dataOrigin ?? null} />
-
       {sessionsQuery.isPending ? (
-        <LoadingState label="Loading previous sessions…" />
+        <section className="page-section" aria-labelledby="history-loading-heading">
+          <h2 id="history-loading-heading" className="visually-hidden">
+            Session history
+          </h2>
+          <LoadingState label="Loading previous sessions…" />
+        </section>
       ) : sessionsQuery.isError ? (
         <ErrorState
           message={errorMessage(sessionsQuery.error)}
@@ -92,7 +139,7 @@ export function HistoryOverviewPage() {
             <div className="section-heading">
               <div>
                 <p className="eyebrow">At a glance</p>
-                <h2 id="overview-heading">This page of history</h2>
+                <h2 id="overview-heading">This page of memory</h2>
               </div>
               <p>{sessions.length} sessions shown</p>
             </div>
@@ -103,11 +150,11 @@ export function HistoryOverviewPage() {
                 label="Viewing time"
                 value={formatDuration(totalDuration)}
               />
-              <MetricCard label="Domains" value={String(domains.size)} />
+              <MetricCard label="Domains" value={String(domains.length)} />
             </dl>
           </section>
 
-          <section aria-labelledby="sessions-heading">
+          <section id="recent-sessions" aria-labelledby="sessions-heading">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Most recent first</p>

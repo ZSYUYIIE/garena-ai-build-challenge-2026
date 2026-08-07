@@ -1,17 +1,49 @@
 import axe from "axe-core";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { renderDashboard } from "./renderDashboard";
 import {
+  demoGraphResponse,
   demoSession,
   jsonResponse,
   secondDemoSession,
 } from "./fixtures";
 
+type OverviewFetchOptions = {
+  sessionsBody?: unknown;
+  sessionsStatus?: number;
+  graphBody?: unknown;
+  graphStatus?: number;
+};
+
+function createOverviewFetch({
+  sessionsBody = {
+    meta: { dataOrigin: "demo" },
+    sessions: [demoSession, secondDemoSession],
+    nextCursor: null,
+  },
+  sessionsStatus = 200,
+  graphBody = demoGraphResponse,
+  graphStatus = 200,
+}: OverviewFetchOptions = {}) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+
+    if (url.startsWith("/api/sessions?")) {
+      return jsonResponse(sessionsBody, sessionsStatus);
+    }
+    if (url.startsWith("/api/context-graph?")) {
+      return jsonResponse(graphBody, graphStatus);
+    }
+
+    throw new Error(`Unexpected request: ${url}`);
+  });
+}
+
 describe("history overview", () => {
-  it("announces loading while the session request is pending", () => {
+  it("announces both memory sources while their requests are pending", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() => new Promise<Response>(() => undefined)),
@@ -19,21 +51,27 @@ describe("history overview", () => {
 
     renderDashboard();
 
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Loading previous sessions",
-    );
+    expect(screen.getByText(/Loading previous sessions/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Building the memory constellation/),
+    ).toBeInTheDocument();
   });
 
   it("renders a clear empty-history state", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        jsonResponse({
+      createOverviewFetch({
+        sessionsBody: {
           meta: { dataOrigin: "empty" },
           sessions: [],
           nextCursor: null,
-        }),
-      ),
+        },
+        graphBody: {
+          meta: { dataOrigin: "empty" },
+          nodes: [],
+          edges: [],
+        },
+      }),
     );
 
     renderDashboard();
@@ -41,18 +79,21 @@ describe("history overview", () => {
     expect(
       await screen.findByRole("heading", { name: "No session history yet" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "No connected moments are available" }),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Data source notice")).not.toBeInTheDocument();
   });
 
-  it("shows a recoverable backend error", async () => {
+  it("shows a recoverable session-history error without hiding the map", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        jsonResponse(
-          { error: { code: "history_failed", message: "History is unavailable." } },
-          500,
-        ),
-      ),
+      createOverviewFetch({
+        sessionsBody: {
+          error: { code: "history_failed", message: "History is unavailable." },
+        },
+        sessionsStatus: 500,
+      }),
     );
 
     renderDashboard();
@@ -61,19 +102,15 @@ describe("history overview", () => {
       "History is unavailable",
     );
     expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+    expect(
+      screen.getByRole("heading", { name: "3D relationship map" }),
+    ).toBeInTheDocument();
   });
 
-  it("renders seeded sessions, metadata, metrics, and an explicit demo notice", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        jsonResponse({
-          meta: { dataOrigin: "demo" },
-          sessions: [demoSession, secondDemoSession],
-          nextCursor: null,
-        }),
-      ),
-    );
+  it("puts the relationship map first and filters it by entertainment domain", async () => {
+    const user = userEvent.setup();
+    const fetchMock = createOverviewFetch();
+    vi.stubGlobal("fetch", fetchMock);
 
     const { container } = renderDashboard();
 
@@ -83,6 +120,49 @@ describe("history overview", () => {
     expect(
       screen.getByRole("link", { name: secondDemoSession.title }),
     ).toBeInTheDocument();
+
+    const graphHeading = screen.getByRole("heading", {
+      name: "3D relationship map",
+    });
+    const sessionsHeading = screen.getByRole("heading", {
+      name: "Recent sessions",
+    });
+    expect(
+      Boolean(
+        graphHeading.compareDocumentPosition(sessionsHeading) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+
+    await user.keyboard("{Alt>}g{/Alt}");
+    expect(
+      screen.getByRole("combobox", { name: "Labeled graph node" }),
+    ).toHaveFocus();
+
+    const domainSelector = screen.getByRole("combobox", {
+      name: "Entertainment domain",
+    });
+    expect(
+      within(domainSelector).getByRole("option", { name: "Football" }),
+    ).toBeInTheDocument();
+    expect(
+      within(domainSelector).getByRole("option", { name: "Esports" }),
+    ).toBeInTheDocument();
+
+    await user.selectOptions(domainSelector, "Football");
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) => {
+          const url = String(input);
+          return (
+            url.startsWith("/api/context-graph?") &&
+            url.includes("limit=80") &&
+            url.includes("domain=Football")
+          );
+        }),
+      ).toBe(true);
+    });
+
     expect(screen.getByLabelText("Data source notice")).toHaveTextContent(
       "Development demo data",
     );
@@ -98,13 +178,13 @@ describe("history overview", () => {
     const user = userEvent.setup();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        jsonResponse({
+      createOverviewFetch({
+        sessionsBody: {
           meta: { dataOrigin: "demo" },
           sessions: [demoSession],
           nextCursor: null,
-        }),
-      ),
+        },
+      }),
     );
 
     renderDashboard();

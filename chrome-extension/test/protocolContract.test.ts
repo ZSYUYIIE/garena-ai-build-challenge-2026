@@ -176,8 +176,9 @@ test("keeps local typed text once while settling its echoed user role", () => {
 
 test("strictly parses protocol-v2 turn-bound server messages", () => {
   const turnId = "123e4567-e89b-42d3-a456-426614174000";
+  const sessionId = "11111111-1111-4111-8111-111111111111";
   const messages = [
-    { type: "connected", protocolVersion: 2 },
+    { type: "connected", protocolVersion: 2, sessionId },
     { type: "turn_started", turnId, mode: "answer" },
     {
       type: "user_transcript",
@@ -219,6 +220,7 @@ test("strictly parses protocol-v2 turn-bound server messages", () => {
 
 test("parses a strict fixture for every advertised server message type", () => {
   const turnId = "123e4567-e89b-42d3-a456-426614174000";
+  const sessionId = "11111111-1111-4111-8111-111111111111";
   const fixtures = [
     { type: "analysis_error", text: "provider unavailable" },
     {
@@ -228,7 +230,7 @@ test("parses a strict fixture for every advertised server message type", () => {
       text: "streamed answer",
       finished: false,
     },
-    { type: "connected", protocolVersion: 2, model: "gemini-live" },
+    { type: "connected", protocolVersion: 2, sessionId, model: "gemini-live" },
     { type: "error", text: "retryable error" },
     { type: "event" },
     {
@@ -263,8 +265,11 @@ test("parses a strict fixture for every advertised server message type", () => {
 
 test("rejects malformed strict server messages", () => {
   const turnId = "123e4567-e89b-42d3-a456-426614174000";
+  const sessionId = "11111111-1111-4111-8111-111111111111";
   const invalid = [
-    { type: "connected", protocolVersion: 1 },
+    { type: "connected", protocolVersion: 1, sessionId },
+    { type: "connected", protocolVersion: 2 },
+    { type: "connected", protocolVersion: 2, sessionId: "not-a-session-id" },
     { type: "turn_started", turnId, mode: "automatic" },
     { type: "answer_update", turnId, mode: "answer", text: "missing finished" },
     {

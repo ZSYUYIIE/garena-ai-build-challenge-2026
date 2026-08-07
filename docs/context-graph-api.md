@@ -1,14 +1,23 @@
 # Context Graph API Contract
 
 `GET /api/context-graph` exposes a bounded, renderer-neutral relationship graph
-for the StreamSense session dashboard. It is a read model over the configured
+for the StreamSense Memory dashboard. It is a read model over the configured
 history repository. The endpoint does not call Gemini, Cloud Speech-to-Text,
 MongoDB, an embedding provider, or Redis by itself.
 
-The History dashboard renders the contract in two complementary forms: readable
-DOM relationships and an optional Three.js map. The API remains
-renderer-neutral. The visual layer may position and style supplied records, but
-must not infer missing nodes, relationships, confidence, or semantic scores.
+The Memory dashboard uses the contract on its first page and inside each
+session. It presents a native node inspector and optional Three.js map; session
+pages also render complete readable DOM node and relationship lists. The API
+remains renderer-neutral. The visual layer may position and style supplied
+records, but must not infer missing nodes, relationships, confidence, or
+semantic scores.
+
+The former `/dashboard/explore` route is only a compatibility redirect. A valid
+`sessionId` redirects to that session's `#relationships` section; otherwise it
+returns to the Memory overview. An active session opened by the extension uses
+`/dashboard/sessions/{sessionId}?source=extension` and refetches this graph over
+REST every two seconds. That behavior is polling, not a live graph
+subscription.
 
 ## Request
 
@@ -113,26 +122,59 @@ not a complete database export.
 
 After Zod validation, the dashboard builds a deterministic scene model from the
 supplied arrays. It deduplicates IDs, omits dangling edges whose endpoint is not
-present, and preserves stable ordering. Presentation mappings are:
+present, and preserves stable ordering.
 
-| Node type | Three.js shape | Additional visual meaning |
-| --- | --- | --- |
-| `session` | sphere | Session cluster anchor. |
-| `event` | cube | Size reflects the supplied `importance`; it is not similarity or confidence. |
-| `entity` | diamond | Shared entity label. |
-| `topic` | ring | Shared topic label. |
+### Position is layout, not an XYZ measurement
 
-Structural edge types retain the meanings defined above. A supplied
-`semantic_similarity` edge is a distinct dashed bridge. When the backend omits
-that edge, the client does not calculate or fabricate one.
+The scene is a relationship constellation, not a three-axis chart. Session
+domain metadata is mapped into labeled entertainment groups: Sports, Esports
+and games, Concerts, Product launches, Creator livestreams, and Other
+entertainment. Domain centers are deterministic layout anchors, not points on
+an ordinal entertainment scale.
 
-The canvas supports pointer orbit, zoom, and shape selection, but is not the
-only access path. A native labeled-node selector, semantic detail panel,
-session/event links, legend, status text, and the readable relationship lists
-expose the same supplied information to keyboard and assistive-technology
-users. `prefers-reduced-motion` disables settling motion. If WebGL
-initialization fails, the dashboard reports the optional view as unavailable
-and leaves all DOM controls and relationships usable.
+Sessions orbit within their domain. Events form a time-ordered arc around their
+session, using `timestampSeconds` when available and stable chronological order
+as the fallback. Entity and topic nodes are positioned near the supplied nodes
+to which they connect; a context node shared by multiple domains becomes a
+pearl cross-domain bridge. Depth is only a small deterministic separation used
+to reduce overlap. Absolute X, Y, and Z coordinates are not quantities, and
+visual proximity without a supplied edge is not a relationship.
+
+### All-sphere node semantics
+
+Every node uses the same sphere geometry. Color identifies entertainment
+domain, while surface, halo, size, labels, and the DOM inspector convey role so
+meaning does not depend on color alone.
+
+| Node type | Sphere role and size meaning |
+| --- | --- |
+| `session` | Largest fixed-size anchor with a double halo. |
+| `event` | Filled sphere; radius represents supplied `importance`, not confidence or similarity. |
+| `entity` | Wireframe sphere; radius represents the number of supplied connections to events, capped for display. |
+| `topic` | Translucent sphere; radius represents the number of supplied connections to events, capped for display. |
+
+### Edge semantics
+
+Structural edge types retain the exact meanings defined above. Session,
+temporal, and entity relationships are solid lines with distinct legend
+colors. Shared-topic relationships use a short dashed line. A supplied
+`semantic_similarity` edge uses a separate dashed treatment. When the backend
+omits that edge, the client does not calculate or fabricate one. Selecting a
+sphere brightens only that node and its first-hop supplied relationships while
+unrelated content dims.
+
+The canvas supports pointer orbit, zoom, and sphere selection, with visible
+rotate, tilt, zoom, and reset buttons. It is never the only access path. A
+native grouped node selector, semantic detail panel, first-hop relationship
+sentences, session/event links, legends, and status text expose the supplied
+information to keyboard and assistive-technology users. Session pages continue
+with complete readable node and relationship lists.
+
+`Alt+G` focuses the native selector, and the dashboard also exposes visible
+shortcut help and a persistent high-contrast option. `prefers-reduced-motion`
+disables camera easing and minimizes CSS motion. If WebGL initialization fails,
+the dashboard reports the optional view as unavailable and leaves the DOM path
+usable. Forced-colors styles preserve visible focus and graph legends.
 
 The renderer schedules bounded frames only for initialization, interaction,
 selection, and resize. Replacing graph data or leaving the route cancels the
