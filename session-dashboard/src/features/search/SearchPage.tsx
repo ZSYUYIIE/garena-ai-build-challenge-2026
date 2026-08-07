@@ -15,6 +15,7 @@ import {
   UnavailableState,
 } from "../../components/AsyncState";
 import { DemoDataBanner } from "../../components/DemoDataBanner";
+import { Button, Input, Label } from "../../components/StreamSenseUi";
 import { TagList } from "../../components/TagList";
 import { formatPercent, humanizeEventType } from "../../lib/format";
 
@@ -59,8 +60,8 @@ export function SearchPage() {
 
       <form className="search-panel" role="search" onSubmit={submitSearch}>
         <div className="field field-grow">
-          <label htmlFor="history-query">What are you looking for?</label>
-          <input
+          <Label htmlFor="history-query">What are you looking for?</Label>
+          <Input
             id="history-query"
             name="query"
             type="search"
@@ -74,8 +75,8 @@ export function SearchPage() {
           <p className="field-hint">Use at least two characters.</p>
         </div>
         <div className="field">
-          <label htmlFor="history-domain">Domain (optional)</label>
-          <input
+          <Label htmlFor="history-domain">Domain (optional)</Label>
+          <Input
             id="history-domain"
             name="domain"
             type="text"
@@ -85,13 +86,14 @@ export function SearchPage() {
             placeholder="Football or esports"
           />
         </div>
-        <button
-          className="button button-primary search-button"
+        <Button
+          className="search-button"
+          size="lg"
           type="submit"
-          disabled={searchMutation.isPending || query.trim().length < 2}
+          isDisabled={searchMutation.isPending || query.trim().length < 2}
         >
           Search history
-        </button>
+        </Button>
       </form>
 
       <DemoDataBanner dataOrigin={response?.meta.dataOrigin ?? null} />

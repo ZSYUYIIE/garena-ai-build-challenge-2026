@@ -58,7 +58,10 @@ describe("ThreeGraphExplorer", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByText(/1 session and 1 significant moment/i)).toBeInTheDocument();
-    expect(screen.getByText(/relationship map, not an xyz chart/i)).toBeInTheDocument();
+    expect(screen.getByText(/memory hierarchy, not an xyz chart/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("list", { name: "Relationship map hierarchy" }),
+    ).toHaveTextContent("Domain island");
     expect(
       screen.getByRole("list", { name: "Graph node role legend" }),
     ).toHaveTextContent("Event · filled sphere sized by importance");
@@ -70,12 +73,16 @@ describe("ThreeGraphExplorer", () => {
   it("supports DOM selection, describes first-hop edges, and exposes the timeline", async () => {
     const user = userEvent.setup();
     const harness = createRendererHarness();
-    renderExplorer(harness.factory);
+    const view = renderExplorer(harness.factory);
 
-    await user.selectOptions(
-      screen.getByLabelText("Labeled graph node"),
-      `event:${secondEventId}`,
+    await user.click(screen.getByLabelText("Labeled graph node"));
+    const eventOption = await screen.findByRole("option", {
+      name: /event: close-range shot saved/i,
+    });
+    expect(eventOption.closest('[data-slot="select-content"]')).toHaveClass(
+      "graph-node-select-content",
     );
+    await user.click(eventOption);
 
     expect(harness.controller.selectNode).toHaveBeenCalledWith(
       `event:${secondEventId}`,
@@ -92,6 +99,10 @@ describe("ThreeGraphExplorer", () => {
       "href",
       `/sessions/11111111-1111-4111-8111-111111111111#event-${secondEventId}`,
     );
+    expect(view.container.querySelector(".graph-selection")).not.toHaveAttribute(
+      "aria-live",
+    );
+    expect(screen.getAllByRole("status")).toHaveLength(1);
   });
 
   it("provides native camera buttons as alternatives to dragging and scrolling", async () => {

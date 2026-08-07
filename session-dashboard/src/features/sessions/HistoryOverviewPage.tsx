@@ -7,6 +7,15 @@ import { historyClient } from "../../api/historyClient";
 import { historyQueryKeys } from "../../api/historyQueries";
 import { DemoDataBanner } from "../../components/DemoDataBanner";
 import {
+  buttonVariants,
+  Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/StreamSenseUi";
+import {
   EmptyState,
   ErrorState,
   LoadingState,
@@ -71,10 +80,16 @@ export function HistoryOverviewPage() {
             </p>
           </div>
           <div className="hero-actions">
-            <Link className="button button-primary" to="/search">
+            <Link
+              className={buttonVariants({ variant: "default", size: "lg" })}
+              to="/search"
+            >
               Search past moments
             </Link>
-            <a className="button button-secondary" href="#recent-sessions">
+            <a
+              className={buttonVariants({ variant: "outline", size: "lg" })}
+              href="#recent-sessions"
+            >
               Skip to sessions
             </a>
           </div>
@@ -88,21 +103,26 @@ export function HistoryOverviewPage() {
               <p className="eyebrow">Memory constellation</p>
               <h2>See how moments connect</h2>
             </div>
-            <div className="field memory-domain-filter">
-              <label htmlFor="memory-domain">Entertainment domain</label>
-              <select
-                id="memory-domain"
-                value={graphDomain}
-                onChange={(event) => setGraphDomain(event.target.value)}
-              >
-                <option value="">All domains</option>
+            <Select
+              className="field memory-domain-filter"
+              selectedKey={graphDomain || "all"}
+              onSelectionChange={(key) =>
+                setGraphDomain(key === null || key === "all" ? "" : String(key))
+              }
+            >
+              <Label>Entertainment domain</Label>
+              <SelectTrigger id="memory-domain">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem id="all">All domains</SelectItem>
                 {domains.map((domain) => (
-                  <option key={domain} value={domain}>
+                  <SelectItem key={domain} id={domain}>
                     {domain}
-                  </option>
+                  </SelectItem>
                 ))}
-              </select>
-            </div>
+              </SelectContent>
+            </Select>
           </div>
           <ContextGraphPanel
             options={{

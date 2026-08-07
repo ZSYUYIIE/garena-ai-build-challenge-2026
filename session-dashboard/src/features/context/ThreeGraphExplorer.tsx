@@ -3,6 +3,17 @@ import { Link } from "react-router-dom";
 
 import type { GraphEdge, GraphNode } from "../../api/contracts";
 import {
+  Button,
+  Label,
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/StreamSenseUi";
+import {
   formatElapsedTime,
   formatPercent,
   humanizeEventType,
@@ -134,70 +145,108 @@ export function ThreeGraphExplorer({
             {summary}
           </p>
           <p id="graph-layout-explanation" className="graph-layout-explanation">
-            This is a relationship map, not an XYZ chart. Entertainment domains
-            form labeled constellations, sessions anchor each cluster, and
-            events follow a time-ordered arc. Depth only separates overlaps.
+            This is a memory hierarchy, not an XYZ chart. Horizontal placement
+            separates entertainment domains; each session anchors a system,
+            moments run clockwise in time, and entities and topics form the
+            outer context. Depth only helps separate overlapping spheres.
           </p>
         </div>
       </div>
 
+      <ol className="graph-hierarchy" aria-label="Relationship map hierarchy">
+        <li>
+          <span>1</span>
+          <strong>Domain island</strong>
+          <small>Sports, esports, and other entertainment stay distinct.</small>
+        </li>
+        <li>
+          <span>2</span>
+          <strong>Session anchor</strong>
+          <small>The largest sphere is one captured viewing session.</small>
+        </li>
+        <li>
+          <span>3</span>
+          <strong>Moment ring</strong>
+          <small>Events progress clockwise in timestamp order.</small>
+        </li>
+        <li>
+          <span>4</span>
+          <strong>Context shell</strong>
+          <small>Entities and topics sit outside the moments they connect.</small>
+        </li>
+      </ol>
+
       <div className="graph-camera-controls" aria-label="3D map camera controls">
-        <button
-          className="button graph-control-button"
+        <Button
+          className="graph-control-button"
+          variant="outline"
+          size="sm"
           type="button"
           onClick={() => controllerRef.current?.rotateCamera(-0.24, 0)}
-          disabled={renderStatus === "unavailable"}
+          isDisabled={renderStatus === "unavailable"}
         >
           Rotate left
-        </button>
-        <button
-          className="button graph-control-button"
+        </Button>
+        <Button
+          className="graph-control-button"
+          variant="outline"
+          size="sm"
           type="button"
           onClick={() => controllerRef.current?.rotateCamera(0.24, 0)}
-          disabled={renderStatus === "unavailable"}
+          isDisabled={renderStatus === "unavailable"}
         >
           Rotate right
-        </button>
-        <button
-          className="button graph-control-button"
+        </Button>
+        <Button
+          className="graph-control-button"
+          variant="outline"
+          size="sm"
           type="button"
           onClick={() => controllerRef.current?.rotateCamera(0, -0.18)}
-          disabled={renderStatus === "unavailable"}
+          isDisabled={renderStatus === "unavailable"}
         >
           Tilt up
-        </button>
-        <button
-          className="button graph-control-button"
+        </Button>
+        <Button
+          className="graph-control-button"
+          variant="outline"
+          size="sm"
           type="button"
           onClick={() => controllerRef.current?.rotateCamera(0, 0.18)}
-          disabled={renderStatus === "unavailable"}
+          isDisabled={renderStatus === "unavailable"}
         >
           Tilt down
-        </button>
-        <button
-          className="button graph-control-button"
+        </Button>
+        <Button
+          className="graph-control-button"
+          variant="outline"
+          size="sm"
           type="button"
           onClick={() => controllerRef.current?.zoomCamera(0.82)}
-          disabled={renderStatus === "unavailable"}
+          isDisabled={renderStatus === "unavailable"}
         >
           Zoom in
-        </button>
-        <button
-          className="button graph-control-button"
+        </Button>
+        <Button
+          className="graph-control-button"
+          variant="outline"
+          size="sm"
           type="button"
           onClick={() => controllerRef.current?.zoomCamera(1.22)}
-          disabled={renderStatus === "unavailable"}
+          isDisabled={renderStatus === "unavailable"}
         >
           Zoom out
-        </button>
-        <button
-          className="button graph-control-button"
+        </Button>
+        <Button
+          className="graph-control-button"
+          variant="outline"
+          size="sm"
           type="button"
           onClick={resetView}
-          disabled={renderStatus === "unavailable"}
+          isDisabled={renderStatus === "unavailable"}
         >
           Reset view
-        </button>
+        </Button>
       </div>
 
       <div className="graph-visual-layout">
@@ -226,32 +275,43 @@ export function ThreeGraphExplorer({
 
         <aside className="graph-details" aria-labelledby="graph-details-heading">
           <h3 id="graph-details-heading">Inspect a node</h3>
-          <div className="field graph-node-selector">
-            <label htmlFor="graph-node-select">Labeled graph node</label>
-            <select
+          <Select
+            className="field graph-node-selector"
+            selectedKey={selectedNodeId}
+            placeholder="Choose a node"
+            onSelectionChange={(key) => selectNode(key === null ? null : String(key))}
+          >
+            <Label>Labeled graph node</Label>
+            <SelectTrigger
               id="graph-node-select"
               data-graph-node-selector
-              value={selectedNodeId ?? ""}
-              onChange={(event) => selectNode(event.target.value || null)}
+              aria-describedby="graph-node-select-hint"
             >
-              <option value="">Choose a node</option>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="graph-node-select-content">
               {groupedNodes.map(([domainLabel, domainNodes]) => (
-                <optgroup key={domainLabel} label={domainLabel}>
+                <SelectGroup key={domainLabel}>
+                  <SelectLabel>{domainLabel}</SelectLabel>
                   {domainNodes.map((node) => (
-                    <option key={node.id} value={node.id}>
+                    <SelectItem
+                      key={node.id}
+                      id={node.id}
+                      textValue={`${humanizeEventType(node.type)}: ${node.label}`}
+                    >
                       {humanizeEventType(node.type)}: {node.label}
-                    </option>
+                    </SelectItem>
                   ))}
-                </optgroup>
+                </SelectGroup>
               ))}
-            </select>
-            <p className="field-hint">
-              This native selector is the keyboard alternative to choosing a
-              sphere in the canvas.
+            </SelectContent>
+            <p id="graph-node-select-hint" className="field-hint">
+              This labeled selector is the keyboard alternative to choosing a
+              sphere in the canvas. Arrow keys move through every node.
             </p>
-          </div>
+          </Select>
 
-          <div className="graph-selection" aria-live="polite">
+          <div className="graph-selection">
             {selectedNode ? (
               <>
                 <span

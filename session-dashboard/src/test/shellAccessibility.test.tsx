@@ -98,6 +98,10 @@ describe("dashboard shell accessibility", () => {
       "data-contrast",
       "high",
     );
+    expect(document.documentElement).toHaveAttribute(
+      "data-streamsense-dashboard-contrast",
+      "high",
+    );
     expect(window.localStorage.getItem(highContrastStorageKey)).toBe("true");
 
     fireEvent.keyDown(window, { altKey: true, key: "/" });

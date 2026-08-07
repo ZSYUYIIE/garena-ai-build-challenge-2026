@@ -12,6 +12,7 @@ import {
 } from "../../components/AsyncState";
 import { DemoDataBanner } from "../../components/DemoDataBanner";
 import { PaginationControls } from "../../components/PaginationControls";
+import { buttonVariants } from "../../components/StreamSenseUi";
 import { TagList } from "../../components/TagList";
 import { ContextGraphPanel } from "../context/ContextGraphPanel";
 import { formatDateTime, formatDuration } from "../../lib/format";
@@ -156,7 +157,7 @@ export function SessionDetailPage() {
           <p className="lede">{session.sourceLabel}</p>
         </div>
         <a
-          className="button button-secondary"
+          className={buttonVariants({ variant: "outline", size: "lg" })}
           href="#relationships"
         >
           Jump to relationships

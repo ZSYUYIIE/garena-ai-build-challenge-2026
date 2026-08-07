@@ -135,21 +135,21 @@ describe("history overview", () => {
     ).toBe(true);
 
     await user.keyboard("{Alt>}g{/Alt}");
-    expect(
-      screen.getByRole("combobox", { name: "Labeled graph node" }),
-    ).toHaveFocus();
+    expect(screen.getByLabelText("Labeled graph node")).toHaveFocus();
 
-    const domainSelector = screen.getByRole("combobox", {
-      name: "Entertainment domain",
-    });
+    const domainSelector = screen.getByLabelText("Entertainment domain");
+    await user.click(domainSelector);
+    const domainList = await screen.findByRole("listbox");
     expect(
-      within(domainSelector).getByRole("option", { name: "Football" }),
+      within(domainList).getByRole("option", { name: "Football" }),
     ).toBeInTheDocument();
     expect(
-      within(domainSelector).getByRole("option", { name: "Esports" }),
+      within(domainList).getByRole("option", { name: "Esports" }),
     ).toBeInTheDocument();
 
-    await user.selectOptions(domainSelector, "Football");
+    await user.click(
+      within(domainList).getByRole("option", { name: "Football" }),
+    );
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input]) => {

@@ -1,3 +1,5 @@
+import { Button } from "./StreamSenseUi";
+
 export function PaginationControls({
   canGoBack,
   canGoForward,
@@ -15,22 +17,24 @@ export function PaginationControls({
 
   return (
     <nav className="pagination" aria-label={label}>
-      <button
-        className="button button-secondary"
+      <Button
+        variant="outline"
+        size="lg"
         type="button"
-        disabled={!canGoBack}
+        isDisabled={!canGoBack}
         onClick={onBack}
       >
         Previous
-      </button>
-      <button
-        className="button button-secondary"
+      </Button>
+      <Button
+        variant="outline"
+        size="lg"
         type="button"
-        disabled={!canGoForward}
+        isDisabled={!canGoForward}
         onClick={onForward}
       >
         Next
-      </button>
+      </Button>
     </nav>
   );
 }

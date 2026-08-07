@@ -6,6 +6,7 @@ import {
 } from "three/addons/renderers/CSS2DRenderer.js";
 
 import type {
+  GraphDomainCluster,
   GraphSceneModel,
   PositionedGraphEdge,
   PositionedGraphNode,
@@ -33,6 +34,95 @@ export type GraphRendererFactory = (
   options: GraphRendererOptions,
 ) => GraphRendererController;
 
+export type GraphLabelCollisionCandidate = {
+  id: string;
+  priority: number;
+  bounds: {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+  };
+};
+
+const DEFAULT_GRAPH_BACKGROUND = 0x07111f;
+const HIGH_CONTRAST_GRAPH_BACKGROUND = 0x000000;
+
+export function graphBackgroundColor(highContrast: boolean): number {
+  return highContrast
+    ? HIGH_CONTRAST_GRAPH_BACKGROUND
+    : DEFAULT_GRAPH_BACKGROUND;
+}
+
+export function graphEdgePresentation(
+  type: PositionedGraphEdge["type"],
+  highContrast: boolean,
+): { color: number; opacity: number } {
+  return {
+    color: edgeColor(type),
+    // At 0.6, every supplied edge color clears 3:1 against the default
+    // scene background. High contrast deliberately removes most blending.
+    opacity: highContrast ? 0.92 : 0.6,
+  };
+}
+
+export function resolveGraphRenderSize(
+  measuredWidth: number,
+  measuredHeight: number,
+  fallbackWidth = 720,
+  fallbackHeight = 500,
+): { width: number; height: number } {
+  const width = measuredWidth > 0 ? measuredWidth : fallbackWidth;
+  const height = measuredHeight > 0 ? measuredHeight : fallbackHeight;
+  return {
+    width: Math.max(1, Math.floor(width)),
+    height: Math.max(1, Math.floor(height)),
+  };
+}
+
+export function shouldDimGraphNode({
+  focusNodeId,
+  nodeId,
+  connected,
+  hovered,
+}: {
+  focusNodeId: string | null;
+  nodeId: string;
+  connected: boolean;
+  hovered: boolean;
+}): boolean {
+  return Boolean(focusNodeId) && nodeId !== focusNodeId && !connected && !hovered;
+}
+
+export function graphDomainLabelY(
+  domain: Pick<GraphDomainCluster, "position" | "radius">,
+): number {
+  return domain.position.y + domain.radius + 1.25;
+}
+
+export function selectNonOverlappingGraphLabelIds(
+  candidates: GraphLabelCollisionCandidate[],
+  minimumGap = 6,
+): Set<string> {
+  const visibleIds = new Set<string>();
+  const accepted: GraphLabelCollisionCandidate[] = [];
+  const ordered = [...candidates].sort(
+    (left, right) =>
+      right.priority - left.priority || left.id.localeCompare(right.id),
+  );
+
+  for (const candidate of ordered) {
+    const overlaps = accepted.some((other) =>
+      rectanglesOverlap(candidate.bounds, other.bounds, minimumGap),
+    );
+    if (overlaps) continue;
+    accepted.push(candidate);
+    visibleIds.add(candidate.id);
+  }
+
+  return visibleIds;
+}
+
 type NodeVisual = {
   mesh: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
   label: HTMLElement;
@@ -55,6 +145,8 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
     throw new Error("WebGL is unavailable.");
   }
 
+  const contrastRoot = container.closest<HTMLElement>(".app-shell");
+  let highContrast = contrastRoot?.dataset.contrast === "high";
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: true,
@@ -70,11 +162,26 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   container.append(labelRenderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x07111f);
-  scene.fog = new THREE.FogExp2(0x07111f, 0.008);
+  scene.background = new THREE.Color(graphBackgroundColor(highContrast));
+  scene.fog = new THREE.FogExp2(
+    graphBackgroundColor(highContrast),
+    highContrast ? 0 : 0.008,
+  );
 
-  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
-  const home = cameraHome(model);
+  const initialRectangle = container.getBoundingClientRect();
+  const initialSize = resolveGraphRenderSize(
+    initialRectangle.width || container.clientWidth,
+    initialRectangle.height || container.clientHeight,
+  );
+  const initialAspect = initialSize.width / initialSize.height;
+  let home = graphCameraHome(model, initialAspect);
+  let cameraAtHome = true;
+  const camera = new THREE.PerspectiveCamera(
+    45,
+    initialAspect,
+    0.1,
+    Math.max(500, home.distance * 4),
+  );
   camera.position.copy(home.position);
 
   const controls = new OrbitControls(camera, canvas);
@@ -121,7 +228,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
     const labelObject = new CSS2DObject(label);
     labelObject.position.set(
       domain.position.x,
-      domain.position.y + 4.8,
+      graphDomainLabelY(domain),
       domain.position.z,
     );
     graphRoot.add(labelObject);
@@ -194,7 +301,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
       vectorForNode(source),
       vectorForNode(target),
     ]);
-    const material = createEdgeMaterial(edge);
+    const material = createEdgeMaterial(edge, highContrast);
     const line = new THREE.Line(geometry, material);
     if (material instanceof THREE.LineDashedMaterial) line.computeLineDistances();
     line.renderOrder = edge.semanticBridge ? 3 : 1;
@@ -215,11 +322,75 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   let disposed = false;
   let frameRequest: number | null = null;
   let settlingFrames = 0;
+  let contrastObserver: MutationObserver | null = null;
+
+  const suppressOverlappingLabels = () => {
+    const elementsById = new Map<string, HTMLElement>();
+    const candidates: GraphLabelCollisionCandidate[] = [];
+
+    for (const [domainKey, label] of domainLabels) {
+      label.style.visibility = "";
+      elementsById.set(`domain:${domainKey}`, label);
+    }
+    for (const [nodeId, visual] of nodeVisuals) {
+      visual.label.style.visibility = "";
+      elementsById.set(`node:${nodeId}`, visual.label);
+    }
+
+    for (const [id, element] of elementsById) {
+      const style = window.getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        Number(style.opacity) <= 0 ||
+        bounds.width <= 0 ||
+        bounds.height <= 0
+      ) {
+        continue;
+      }
+
+      const nodeId = id.startsWith("node:") ? id.slice(5) : null;
+      const node = nodeId ? nodeById.get(nodeId) : null;
+      const priority = element.classList.contains("is-selected")
+        ? 1_000
+        : element.classList.contains("is-hovered")
+          ? 950
+          : id.startsWith("domain:")
+            ? element.classList.contains("is-dimmed")
+              ? 420
+              : 850
+            : node?.type === "session"
+              ? 800
+              : element.classList.contains("is-default-visible")
+                ? 650
+                : 500;
+      candidates.push({
+        id,
+        priority,
+        bounds: {
+          left: bounds.left,
+          right: bounds.right,
+          top: bounds.top,
+          bottom: bounds.bottom,
+        },
+      });
+    }
+
+    const visibleIds = selectNonOverlappingGraphLabelIds(candidates);
+    for (const candidate of candidates) {
+      const element = elementsById.get(candidate.id);
+      if (element && !visibleIds.has(candidate.id)) {
+        element.style.visibility = "hidden";
+      }
+    }
+  };
 
   const render = () => {
     if (disposed) return;
     renderer.render(scene, camera);
     labelRenderer.render(scene, camera);
+    suppressOverlappingLabels();
   };
 
   const requestRender = (frames = 1) => {
@@ -252,9 +423,15 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
       const baseRadius = Number(visual.mesh.userData.baseRadius) || 1;
       const selected = nodeId === selectedNodeId;
       const hovered = nodeId === hoveredNodeId;
-      const focused = nodeId === focusNodeId;
       const connected = connectedNodeIds.has(nodeId);
-      const unrelated = Boolean(focusNodeId) && !focused && !connected;
+      // Pointer exploration stays visible even when a different node is
+      // selected. The selected branch still controls relationship emphasis.
+      const unrelated = shouldDimGraphNode({
+        focusNodeId,
+        nodeId,
+        connected,
+        hovered,
+      });
       visual.mesh.scale.setScalar(
         baseRadius *
           (selected ? 1.34 : hovered ? 1.18 : connected ? 1.08 : unrelated ? 0.86 : 1),
@@ -279,7 +456,6 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
 
       visual.label.classList.toggle("is-selected", selected);
       visual.label.classList.toggle("is-hovered", hovered);
-      visual.label.classList.toggle("is-connected", connected);
       visual.label.classList.toggle("is-dimmed", unrelated);
     }
 
@@ -291,8 +467,12 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
         (edge.source === focusNodeId || edge.target === focusNodeId);
       material.opacity = focusNodeId
         ? connected
-          ? 0.94
-          : 0.025
+          ? highContrast
+            ? 1
+            : 0.96
+          : highContrast
+            ? 0.08
+            : 0.05
         : edgeBaseOpacity.get(edge.id) ?? 0.14;
       material.needsUpdate = true;
     }
@@ -304,6 +484,39 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
     }
     requestRender(paused || reducedMotion ? 1 : 10);
   };
+
+  const applyContrastMode = (nextHighContrast: boolean) => {
+    if (nextHighContrast === highContrast) return;
+    highContrast = nextHighContrast;
+    const background = graphBackgroundColor(highContrast);
+    if (scene.background instanceof THREE.Color) {
+      scene.background.setHex(background);
+    } else {
+      scene.background = new THREE.Color(background);
+    }
+    if (scene.fog instanceof THREE.FogExp2) {
+      scene.fog.color.setHex(background);
+      scene.fog.density = highContrast ? 0 : 0.008;
+    }
+    for (const edge of model.edges) {
+      const material = edgeMaterials.get(edge.id);
+      if (!material) continue;
+      const presentation = graphEdgePresentation(edge.type, highContrast);
+      material.color.setHex(presentation.color);
+      edgeBaseOpacity.set(edge.id, presentation.opacity);
+    }
+    updateGraphAppearance();
+  };
+
+  if (contrastRoot && typeof MutationObserver === "function") {
+    contrastObserver = new MutationObserver(() => {
+      applyContrastMode(contrastRoot.dataset.contrast === "high");
+    });
+    contrastObserver.observe(contrastRoot, {
+      attributes: true,
+      attributeFilter: ["data-contrast"],
+    });
+  }
 
   const hitTest = (event: PointerEvent): string | null => {
     const rectangle = canvas.getBoundingClientRect();
@@ -348,6 +561,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   canvas.addEventListener("click", handleClick);
 
   const handleControlStart = () => {
+    cameraAtHome = false;
     controlsMoved = false;
     requestRender(reducedMotion || paused ? 1 : 80);
   };
@@ -366,16 +580,22 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   const resize = () => {
     if (disposed) return;
     const rectangle = container.getBoundingClientRect();
-    const width = Math.max(
-      320,
-      Math.floor(rectangle.width || container.clientWidth || 720),
+    const { width, height } = resolveGraphRenderSize(
+      rectangle.width || container.clientWidth,
+      rectangle.height || container.clientHeight,
     );
-    const height = Math.max(
-      320,
-      Math.floor(rectangle.height || container.clientHeight || 500),
-    );
-    camera.aspect = width / height;
+    const nextAspect = width / height;
+    home = graphCameraHome(model, nextAspect);
+    camera.aspect = nextAspect;
+    camera.far = Math.max(500, home.distance * 4);
     camera.updateProjectionMatrix();
+    controls.maxDistance = Math.max(48, home.distance * 2.6);
+    if (cameraAtHome) {
+      camera.position.copy(home.position);
+      controls.target.copy(home.target);
+      controls.update();
+      cameraAtHome = true;
+    }
     renderer.setSize(width, height, false);
     labelRenderer.setSize(width, height);
     render();
@@ -389,6 +609,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   requestRender(1);
 
   const rotateCamera = (horizontalRadians: number, verticalRadians: number) => {
+    cameraAtHome = false;
     const offset = camera.position.clone().sub(controls.target);
     const spherical = new THREE.Spherical().setFromVector3(offset);
     spherical.theta += horizontalRadians;
@@ -404,6 +625,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   };
 
   const zoomCamera = (factor: number) => {
+    cameraAtHome = false;
     const offset = camera.position.clone().sub(controls.target);
     const distance = THREE.MathUtils.clamp(
       offset.length() * factor,
@@ -421,6 +643,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
       camera.position.copy(home.position);
       controls.target.copy(home.target);
       controls.update();
+      cameraAtHome = true;
       requestRender(reducedMotion || paused ? 1 : 24);
     },
     rotateCamera,
@@ -450,6 +673,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
       controls.removeEventListener("change", handleControlChange);
       controls.removeEventListener("end", handleControlEnd);
       controls.dispose();
+      contrastObserver?.disconnect();
       resizeObserver?.disconnect();
       if (!resizeObserver) window.removeEventListener("resize", resize);
       disposableGeometries.forEach((geometry) => geometry.dispose());
@@ -489,11 +713,14 @@ function haloScales(node: PositionedGraphNode): number[] {
   return [];
 }
 
-function createEdgeMaterial(edge: PositionedGraphEdge): THREE.LineBasicMaterial {
-  const opacity = edge.type === "same_session" ? 0.34 : 0.22;
+function createEdgeMaterial(
+  edge: PositionedGraphEdge,
+  highContrast: boolean,
+): THREE.LineBasicMaterial {
+  const { color, opacity } = graphEdgePresentation(edge.type, highContrast);
   if (edge.type === "semantic_similarity") {
     return new THREE.LineDashedMaterial({
-      color: 0xff8fd8,
+      color,
       dashSize: 0.36,
       gapSize: 0.24,
       opacity,
@@ -503,7 +730,7 @@ function createEdgeMaterial(edge: PositionedGraphEdge): THREE.LineBasicMaterial 
   }
   if (edge.type === "shared_topic") {
     return new THREE.LineDashedMaterial({
-      color: edgeColor(edge.type),
+      color,
       dashSize: 0.16,
       gapSize: 0.2,
       opacity,
@@ -512,14 +739,14 @@ function createEdgeMaterial(edge: PositionedGraphEdge): THREE.LineBasicMaterial 
     });
   }
   return new THREE.LineBasicMaterial({
-    color: edgeColor(edge.type),
+    color,
     opacity,
     transparent: true,
     depthWrite: false,
   });
 }
 
-function edgeColor(type: string): number {
+function edgeColor(type: PositionedGraphEdge["type"]): number {
   switch (type) {
     case "same_session":
       return 0x5ce4d3;
@@ -549,7 +776,10 @@ function vectorForNode(node: PositionedGraphNode): THREE.Vector3 {
   return new THREE.Vector3(node.position.x, node.position.y, node.position.z);
 }
 
-function cameraHome(model: GraphSceneModel): {
+export function graphCameraHome(
+  model: GraphSceneModel,
+  aspect = 1,
+): {
   position: THREE.Vector3;
   target: THREE.Vector3;
   distance: number;
@@ -563,14 +793,45 @@ function cameraHome(model: GraphSceneModel): {
   }
 
   const bounds = new THREE.Box3();
-  model.nodes.forEach((node) => bounds.expandByPoint(vectorForNode(node)));
+  model.nodes.forEach((node) => {
+    const center = new THREE.Vector3(
+      node.position.x,
+      node.position.y,
+      node.position.z,
+    );
+    const extent = new THREE.Vector3(node.radius, node.radius, node.radius);
+    bounds.expandByPoint(center.clone().sub(extent));
+    bounds.expandByPoint(center.clone().add(extent));
+  });
+  model.domains.forEach((domain) => {
+    bounds.expandByPoint(
+      new THREE.Vector3(
+        domain.position.x - domain.radius,
+        domain.position.y - domain.radius,
+        domain.position.z - domain.radius,
+      ),
+    );
+    bounds.expandByPoint(
+      new THREE.Vector3(
+        domain.position.x + domain.radius,
+        graphDomainLabelY(domain) + 0.8,
+        domain.position.z + domain.radius,
+      ),
+    );
+  });
   const target = bounds.getCenter(new THREE.Vector3());
-  const size = bounds.getSize(new THREE.Vector3());
-  const largestDimension = Math.max(size.x, size.y, size.z, 8);
-  const fieldOfViewRadians = THREE.MathUtils.degToRad(45);
+  const boundingSphere = bounds.getBoundingSphere(new THREE.Sphere());
+  const verticalFieldOfView = THREE.MathUtils.degToRad(45);
+  const safeAspect = Math.max(0.1, aspect);
+  const horizontalFieldOfView =
+    2 * Math.atan(Math.tan(verticalFieldOfView / 2) * safeAspect);
+  const limitingFieldOfView = Math.min(
+    verticalFieldOfView,
+    horizontalFieldOfView,
+  );
   const distance = Math.max(
     12,
-    (largestDimension / (2 * Math.tan(fieldOfViewRadians / 2))) * 1.2,
+    (boundingSphere.radius / Math.sin(limitingFieldOfView / 2)) * 1.18,
   );
   const cameraDirection = new THREE.Vector3(0, 0.28, 1).normalize();
   return {
@@ -578,4 +839,17 @@ function cameraHome(model: GraphSceneModel): {
     target,
     distance,
   };
+}
+
+function rectanglesOverlap(
+  left: GraphLabelCollisionCandidate["bounds"],
+  right: GraphLabelCollisionCandidate["bounds"],
+  minimumGap: number,
+): boolean {
+  return !(
+    left.right + minimumGap <= right.left ||
+    right.right + minimumGap <= left.left ||
+    left.bottom + minimumGap <= right.top ||
+    right.bottom + minimumGap <= left.top
+  );
 }

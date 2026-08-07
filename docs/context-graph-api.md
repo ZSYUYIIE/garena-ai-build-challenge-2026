@@ -124,21 +124,25 @@ After Zod validation, the dashboard builds a deterministic scene model from the
 supplied arrays. It deduplicates IDs, omits dangling edges whose endpoint is not
 present, and preserves stable ordering.
 
-### Position is layout, not an XYZ measurement
+### Position is a memory hierarchy, not an XYZ measurement
 
-The scene is a relationship constellation, not a three-axis chart. Session
-domain metadata is mapped into labeled entertainment groups: Sports, Esports
-and games, Concerts, Product launches, Creator livestreams, and Other
-entertainment. Domain centers are deterministic layout anchors, not points on
-an ordinal entertainment scale.
+The scene follows one stable order: entertainment domain, session, event, then
+entity/topic context. Session domain metadata maps into labeled entertainment
+islands: Sports, Esports and games, Concerts, Product launches, Creator
+livestreams, and Other entertainment. Island and session-system spacing is
+derived from their bounded footprints so sibling systems do not intersect.
 
-Sessions orbit within their domain. Events form a time-ordered arc around their
-session, using `timestampSeconds` when available and stable chronological order
-as the fallback. Entity and topic nodes are positioned near the supplied nodes
-to which they connect; a context node shared by multiple domains becomes a
-pearl cross-domain bridge. Depth is only a small deterministic separation used
-to reduce overlap. Absolute X, Y, and Z coordinates are not quantities, and
-visual proximity without a supplied edge is not a relationship.
+Each session is an anchor. Events form a deterministic clockwise arc around it,
+using timestamp order with stable ID tie-breakers. Single-session entities and
+topics occupy successive outer shells. Arc and shell radii account for bounded
+node count and maximum sphere size so dense siblings do not intersect. Context
+shared by several sessions in one domain uses packed rings outside that island.
+Multi-domain context becomes a pearl bridge in a dedicated lane above all
+islands; it is never positioned by an average that can land inside an unrelated
+domain. Reset framing includes sphere extents, island-label positions, and the
+current viewport aspect. Depth is only a small deterministic separation used to
+reduce overlap. Absolute X, Y, and Z coordinates are not quantities, and visual
+proximity without a supplied edge is not a relationship.
 
 ### All-sphere node semantics
 
@@ -163,18 +167,26 @@ omits that edge, the client does not calculate or fabricate one. Selecting a
 sphere brightens only that node and its first-hop supplied relationships while
 unrelated content dims.
 
+Projected labels are priority-bounded and collision checked after every CSS2D
+render. Selected and hovered labels win, followed by domain, session, and the
+single default event label allowed per session. First-hop spheres and edges
+still brighten on selection, but connected labels are not all forced onscreen.
+This prevents a dense session from replacing the graph with overlapping text.
+
 The canvas supports pointer orbit, zoom, and sphere selection, with visible
 rotate, tilt, zoom, and reset buttons. It is never the only access path. A
-native grouped node selector, semantic detail panel, first-hop relationship
+labeled grouped node selector, semantic detail panel, first-hop relationship
 sentences, session/event links, legends, and status text expose the supplied
 information to keyboard and assistive-technology users. Session pages continue
 with complete readable node and relationship lists.
 
-`Alt+G` focuses the native selector, and the dashboard also exposes visible
+`Alt+G` focuses the labeled selector, and the dashboard also exposes visible
 shortcut help and a persistent high-contrast option. `prefers-reduced-motion`
 disables camera easing and minimizes CSS motion. If WebGL initialization fails,
 the dashboard reports the optional view as unavailable and leaves the DOM path
-usable. Forced-colors styles preserve visible focus and graph legends.
+usable. High contrast reaches portaled menus and updates the WebGL scene and
+edge presentation live. Forced-colors styles preserve visible focus and graph
+legends.
 
 The renderer schedules bounded frames only for initialization, interaction,
 selection, and resize. Replacing graph data or leaving the route cancels the

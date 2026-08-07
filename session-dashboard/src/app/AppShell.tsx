@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
+import { Button, buttonVariants } from "../components/StreamSenseUi";
+
 const HIGH_CONTRAST_STORAGE_KEY = "streamsense.dashboard.highContrast";
 const FOCUS_WAIT_MILLISECONDS = 5_000;
 
@@ -44,6 +46,18 @@ export function AppShell() {
     } catch {
       // The control remains effective for this tab when storage is unavailable.
     }
+  }, [highContrast]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (highContrast) {
+      root.dataset.streamsenseDashboardContrast = "high";
+    } else {
+      delete root.dataset.streamsenseDashboardContrast;
+    }
+    return () => {
+      delete root.dataset.streamsenseDashboardContrast;
+    };
   }, [highContrast]);
 
   useEffect(() => {
@@ -247,12 +261,31 @@ export function AppShell() {
           <nav aria-label="StreamSense navigation">
             <ul className="primary-navigation">
               <li>
-                <NavLink to="/" end aria-keyshortcuts="Alt+H">
+                <NavLink
+                  to="/"
+                  end
+                  aria-keyshortcuts="Alt+H"
+                  className={({ isActive }) =>
+                    buttonVariants({
+                      variant: isActive ? "secondary" : "ghost",
+                      size: "lg",
+                    })
+                  }
+                >
                   Memory
                 </NavLink>
               </li>
               <li>
-                <NavLink to="/search" aria-keyshortcuts="Control+K">
+                <NavLink
+                  to="/search"
+                  aria-keyshortcuts="Control+K"
+                  className={({ isActive }) =>
+                    buttonVariants({
+                      variant: isActive ? "secondary" : "ghost",
+                      size: "lg",
+                    })
+                  }
+                >
                   Search
                 </NavLink>
               </li>
@@ -264,7 +297,11 @@ export function AppShell() {
             aria-label="Dashboard tools"
           >
             <button
-              className="shell-control"
+              className={buttonVariants({
+                variant: "outline",
+                size: "lg",
+                className: "shell-control",
+              })}
               type="button"
               onClick={focusGraph}
               aria-keyshortcuts="Alt+G"
@@ -272,7 +309,11 @@ export function AppShell() {
               Focus map
             </button>
             <button
-              className="shell-control shell-contrast-toggle"
+              className={buttonVariants({
+                variant: "outline",
+                size: "lg",
+                className: "shell-control shell-contrast-toggle",
+              })}
               type="button"
               onClick={toggleHighContrast}
               aria-keyshortcuts="Alt+C"
@@ -285,7 +326,11 @@ export function AppShell() {
             </button>
             <button
               ref={shortcutHelpButtonRef}
-              className="shell-control"
+              className={buttonVariants({
+                variant: "outline",
+                size: "lg",
+                className: "shell-control",
+              })}
               type="button"
               onClick={() => toggleShortcutHelp(false)}
               aria-keyshortcuts="Alt+/"
@@ -325,13 +370,14 @@ export function AppShell() {
                   Keyboard shortcuts
                 </h2>
               </div>
-              <button
-                className="button button-secondary"
+              <Button
+                variant="outline"
+                size="lg"
                 type="button"
                 onClick={() => closeShortcutHelp(true)}
               >
                 Close help
-              </button>
+              </Button>
             </div>
             <dl className="shortcut-list">
               <div>

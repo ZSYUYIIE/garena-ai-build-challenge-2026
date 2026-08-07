@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { SearchPage } from "../features/search/SearchPage";
 import { HistoryOverviewPage } from "../features/sessions/HistoryOverviewPage";
 import { SessionDetailPage } from "../features/sessions/SessionDetailPage";
+import { buttonVariants } from "../components/StreamSenseUi";
 import { AppShell } from "./AppShell";
 
 const UUID_PATTERN =
@@ -53,7 +54,10 @@ function NotFoundPage() {
         The link may be out of date. Return to StreamSense Memory to choose a
         saved session or relationship.
       </p>
-      <a className="button button-primary" href="/dashboard/">
+      <a
+        className={buttonVariants({ variant: "default", size: "lg" })}
+        href="/dashboard/"
+      >
         Return to Memory
       </a>
     </section>

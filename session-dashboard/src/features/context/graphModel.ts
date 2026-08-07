@@ -14,6 +14,7 @@ export type GraphDomainCluster = {
   label: string;
   color: number;
   position: GraphVector;
+  radius: number;
   sessionCount: number;
   eventCount: number;
   nodeCount: number;
@@ -54,6 +55,25 @@ type DomainStyle = {
   color: number;
 };
 
+type SessionLayoutMetrics = {
+  eventRingRadius: number;
+  entityShellRadius: number;
+  topicShellRadius: number;
+  footprintRadius: number;
+};
+
+type SharedContextRingMetrics = {
+  entityRingRadius: number;
+  topicRingRadius: number;
+  footprintRadius: number;
+};
+
+type DomainLayout = {
+  centerByKey: Map<string, GraphVector>;
+  radiusByKey: Map<string, number>;
+  sharedContextRingMetricsByKey: Map<string, SharedContextRingMetrics>;
+};
+
 const DOMAIN_STYLES: DomainStyle[] = [
   { key: "sports", label: "Sports", color: 0x2dd4bf },
   { key: "esports", label: "Esports and games", color: 0xa78bfa },
@@ -79,9 +99,16 @@ const TYPE_ORDER: Record<GraphNode["type"], number> = {
   topic: 3,
 };
 
-const DEFAULT_SESSION_LABEL_LIMIT = 8;
-const DEFAULT_EVENT_LABEL_LIMIT = 3;
-const DEFAULT_CONTEXT_LABEL_LIMIT = 1;
+const SESSION_SYSTEM_GAP = 3.2;
+const DOMAIN_ISLAND_GAP = 7.5;
+const EVENT_ARC_START = Math.PI * 0.82;
+const EVENT_ARC_SWEEP = Math.PI * 1.64;
+const NODE_GAP = 0.32;
+const SHELL_GAP = 0.65;
+const EVENT_MAX_RADIUS = 0.94;
+const ENTITY_MAX_RADIUS = 0.7;
+const TOPIC_MAX_RADIUS = 0.58;
+const CROSS_DOMAIN_LANE_GAP = 3.2;
 
 export function buildGraphSceneModel(
   inputNodes: GraphNode[],
@@ -123,24 +150,6 @@ export function buildGraphSceneModel(
     if (linkedSession) sessionNodeIdByNodeId.set(eventNode.id, linkedSession.id);
   }
 
-  const domainStyles = uniqueDomainStyles([
-    ...sessionNodes.map((node) => domainStyleBySessionNodeId.get(node.id)!),
-    ...(sessionNodes.length === 0 && nodes.length > 0
-      ? [DOMAIN_STYLE_BY_KEY.get("unclassified")!]
-      : []),
-  ]);
-  const domainCenterByKey = createDomainCenters(domainStyles);
-  const sessionAnchorByNodeId = createSessionAnchors(
-    sessionNodes,
-    domainStyleBySessionNodeId,
-    domainCenterByKey,
-  );
-  const positionByNodeId = new Map<string, GraphVector>(sessionAnchorByNodeId);
-  const chronologyByNodeId = new Map<
-    string,
-    { index: number; progress: number }
-  >();
-
   const eventGroups = new Map<string, GraphNode[]>();
   for (const eventNode of eventNodes) {
     const sessionNodeId = sessionNodeIdByNodeId.get(eventNode.id);
@@ -154,6 +163,85 @@ export function buildGraphSceneModel(
     eventGroups.set(groupKey, group);
   }
 
+  const domainKeysByNodeId = new Map<string, string[]>();
+  for (const sessionNode of sessionNodes) {
+    domainKeysByNodeId.set(sessionNode.id, [
+      domainStyleBySessionNodeId.get(sessionNode.id)!.key,
+    ]);
+  }
+  for (const eventNode of eventNodes) {
+    const sessionNodeId = sessionNodeIdByNodeId.get(eventNode.id);
+    const style = sessionNodeId
+      ? domainStyleBySessionNodeId.get(sessionNodeId)
+      : DOMAIN_STYLE_BY_KEY.get("unclassified");
+    domainKeysByNodeId.set(eventNode.id, [style!.key]);
+  }
+
+  const contextualNodes = nodes.filter(
+    (node) => node.type === "entity" || node.type === "topic",
+  );
+  const connectedSessionNodeIdsByContextId = new Map<string, Set<string>>();
+  for (const node of contextualNodes) {
+    const connectedNodeIds = connectedNodeIdsByNodeId.get(node.id) ?? [];
+    const connectedDomainKeys = uniqueStrings(
+      connectedNodeIds.flatMap((nodeId) => domainKeysByNodeId.get(nodeId) ?? []),
+    ).sort(compareDomainKeys);
+    domainKeysByNodeId.set(
+      node.id,
+      connectedDomainKeys.length > 0 ? connectedDomainKeys : ["unclassified"],
+    );
+
+    const connectedSessionNodeIds = findConnectedSessionNodeIds(
+      node.id,
+      edges,
+      sessionNodeIdByNodeId,
+    );
+    connectedSessionNodeIdsByContextId.set(node.id, connectedSessionNodeIds);
+    if (connectedSessionNodeIds.size === 1) {
+      sessionNodeIdByNodeId.set(node.id, [...connectedSessionNodeIds][0]!);
+    }
+  }
+
+  const needsUnclassifiedDomain = nodes.some((node) =>
+    domainKeysByNodeId.get(node.id)?.includes("unclassified"),
+  );
+  const domainStyles = uniqueDomainStyles([
+    ...sessionNodes.map((node) => domainStyleBySessionNodeId.get(node.id)!),
+    ...(needsUnclassifiedDomain
+      ? [DOMAIN_STYLE_BY_KEY.get("unclassified")!]
+      : []),
+  ]);
+  const sessionLayoutMetricsByNodeId = createSessionLayoutMetrics(
+    sessionNodes,
+    eventGroups,
+    contextualNodes,
+    sessionNodeIdByNodeId,
+  );
+  const sharedContextNodesByDomainKey = groupSharedContextNodesByDomain(
+    contextualNodes,
+    connectedSessionNodeIdsByContextId,
+    domainKeysByNodeId,
+  );
+  const domainLayout = createDomainLayout(
+    domainStyles,
+    sessionNodes,
+    domainStyleBySessionNodeId,
+    sessionLayoutMetricsByNodeId,
+    sharedContextNodesByDomainKey,
+  );
+  const domainCenterByKey = domainLayout.centerByKey;
+  const sessionAnchorByNodeId = createSessionAnchors(
+    sessionNodes,
+    domainStyleBySessionNodeId,
+    domainCenterByKey,
+    sessionLayoutMetricsByNodeId,
+  );
+  const positionByNodeId = new Map<string, GraphVector>(sessionAnchorByNodeId);
+  const chronologyByNodeId = new Map<
+    string,
+    { index: number; progress: number }
+  >();
+
   for (const [groupKey, group] of [...eventGroups].sort(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -162,7 +250,9 @@ export function buildGraphSceneModel(
       domainCenterByKey.get("unclassified") ??
       unanchoredClusterPosition(groupKey);
     const sortedEvents = [...group].sort(compareEvents);
-    const arcRadius = 2.85 + Math.min(sortedEvents.length, 18) * 0.045;
+    const arcRadius =
+      sessionLayoutMetricsByNodeId.get(groupKey)?.eventRingRadius ??
+      eventRingRadiusForCount(sortedEvents.length);
     const suppliedDuration = nodeById.get(groupKey)
       ? metadataNumber(nodeById.get(groupKey)!, "durationSeconds")
       : null;
@@ -189,80 +279,39 @@ export function buildGraphSceneModel(
           : fallbackProgress;
       // Time advances along a stable screen-plane arc. Z is only a small,
       // deterministic separation offset and never represents a measurement.
-      const angle = Math.PI * 0.82 - progress * Math.PI * 1.64;
+      // Events are evenly spaced in chronological order. Timestamp progress
+      // remains available as metadata, but distance is not presented as a
+      // quantitative time axis.
+      const angle = eventAngle(fallbackProgress);
       positionByNodeId.set(eventNode.id, {
         x: anchor.x + Math.cos(angle) * arcRadius,
-        y: anchor.y + Math.sin(angle) * arcRadius * 0.72,
-        z: anchor.z + stableSignedValue(eventNode.id) * 0.72,
+        y: anchor.y + Math.sin(angle) * arcRadius,
+        z: anchor.z + stableSignedValue(eventNode.id) * 0.46,
       });
       chronologyByNodeId.set(eventNode.id, { index, progress });
     });
   }
 
-  const domainKeysByNodeId = new Map<string, string[]>();
-  for (const sessionNode of sessionNodes) {
-    domainKeysByNodeId.set(sessionNode.id, [
-      domainStyleBySessionNodeId.get(sessionNode.id)!.key,
-    ]);
-  }
-  for (const eventNode of eventNodes) {
-    const sessionNodeId = sessionNodeIdByNodeId.get(eventNode.id);
-    const style = sessionNodeId
-      ? domainStyleBySessionNodeId.get(sessionNodeId)
-      : DOMAIN_STYLE_BY_KEY.get("unclassified");
-    domainKeysByNodeId.set(eventNode.id, [style!.key]);
-  }
-
-  const contextualNodes = nodes.filter(
-    (node) => node.type === "entity" || node.type === "topic",
-  );
-  for (const node of contextualNodes) {
-    const connectedNodeIds = connectedNodeIdsByNodeId.get(node.id) ?? [];
-    const connectedPositions = connectedNodeIds
-      .map((nodeId) => positionByNodeId.get(nodeId))
-      .filter((position): position is GraphVector => Boolean(position));
-    const connectedDomainKeys = uniqueStrings(
-      connectedNodeIds.flatMap((nodeId) => domainKeysByNodeId.get(nodeId) ?? []),
-    ).sort(compareDomainKeys);
-    const domainKeys =
-      connectedDomainKeys.length > 0 ? connectedDomainKeys : ["unclassified"];
-    domainKeysByNodeId.set(node.id, domainKeys);
-
-    const base = connectedPositions.length
-      ? averagePosition(connectedPositions)
-      : averagePosition(
-          domainKeys
-            .map((domainKey) => domainCenterByKey.get(domainKey))
-            .filter((position): position is GraphVector => Boolean(position)),
-        );
-    const angle = stableAngle(node.id);
-    const offset = connectedPositions.length
-      ? node.type === "entity"
-        ? 0.78
-        : 1.02
-      : 3.8;
-    positionByNodeId.set(node.id, {
-      x: base.x + Math.cos(angle) * offset,
-      y: base.y + Math.sin(angle) * offset,
-      z: base.z + stableSignedValue(`${node.id}:depth`) * 1.05,
-    });
-
-    const connectedSessionNodeIds = findConnectedSessionNodeIds(
-      node.id,
-      edges,
-      sessionNodeIdByNodeId,
-    );
-    if (connectedSessionNodeIds.size === 1) {
-      sessionNodeIdByNodeId.set(node.id, [...connectedSessionNodeIds][0]!);
-    }
-  }
+  positionContextNodes({
+    contextualNodes,
+    connectedNodeIdsByNodeId,
+    connectedSessionNodeIdsByContextId,
+    domainKeysByNodeId,
+    domainCenterByKey,
+    domainRadiusByKey: domainLayout.radiusByKey,
+    sharedContextNodesByDomainKey,
+    sharedContextRingMetricsByKey:
+      domainLayout.sharedContextRingMetricsByKey,
+    sessionAnchorByNodeId,
+    sessionLayoutMetricsByNodeId,
+    chronologyByNodeId,
+    positionByNodeId,
+  });
 
   const defaultLabelNodeIds = selectDefaultLabelNodeIds(
     sessionNodes,
     eventNodes,
-    contextualNodes,
-    connectedNodeIdsByNodeId,
-    domainKeysByNodeId,
+    sessionNodeIdByNodeId,
   );
 
   const positionedNodes = nodes.map((node) => {
@@ -309,6 +358,7 @@ export function buildGraphSceneModel(
     ...style,
     position:
       domainCenterByKey.get(style.key) ?? unanchoredClusterPosition(style.key),
+    radius: domainLayout.radiusByKey.get(style.key) ?? 4.5,
     sessionCount: positionedNodes.filter(
       (node) => node.type === "session" && node.domainKeys.includes(style.key),
     ).length,
@@ -363,38 +413,338 @@ function sizeMeaningForNode(type: GraphNode["type"]): string {
 function selectDefaultLabelNodeIds(
   sessionNodes: GraphNode[],
   eventNodes: GraphNode[],
-  contextualNodes: GraphNode[],
-  adjacency: Map<string, string[]>,
-  domainKeysByNodeId: Map<string, string[]>,
+  sessionNodeIdByNodeId: Map<string, string>,
 ): Set<string> {
-  const selected = new Set(
-    sessionNodes
-      .slice(0, DEFAULT_SESSION_LABEL_LIMIT)
-      .map((node) => node.id),
-  );
+  const selected = new Set(sessionNodes.map((node) => node.id));
+  const eventsBySession = new Map<string, GraphNode[]>();
 
-  [...eventNodes]
-    .sort(
+  for (const node of eventNodes) {
+    const groupKey =
+      sessionNodeIdByNodeId.get(node.id) ??
+      (node.sessionId ? `unanchored:${node.sessionId}` : "unanchored:events");
+    const group = eventsBySession.get(groupKey) ?? [];
+    group.push(node);
+    eventsBySession.set(groupKey, group);
+  }
+
+  for (const [, events] of [...eventsBySession].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const mostImportant = [...events].sort(
       (left, right) =>
         (right.importance ?? -1) - (left.importance ?? -1) ||
         compareEvents(left, right),
-    )
-    .slice(0, DEFAULT_EVENT_LABEL_LIMIT)
-    .forEach((node) => selected.add(node.id));
-
-  [...contextualNodes]
-    .sort(
-      (left, right) =>
-        (domainKeysByNodeId.get(right.id)?.length ?? 0) -
-          (domainKeysByNodeId.get(left.id)?.length ?? 0) ||
-        (adjacency.get(right.id)?.length ?? 0) -
-          (adjacency.get(left.id)?.length ?? 0) ||
-        left.id.localeCompare(right.id),
-    )
-    .slice(0, DEFAULT_CONTEXT_LABEL_LIMIT)
-    .forEach((node) => selected.add(node.id));
+    )[0];
+    if (mostImportant) selected.add(mostImportant.id);
+  }
 
   return selected;
+}
+
+function createSessionLayoutMetrics(
+  sessionNodes: GraphNode[],
+  eventGroups: Map<string, GraphNode[]>,
+  contextualNodes: GraphNode[],
+  sessionNodeIdByNodeId: Map<string, string>,
+): Map<string, SessionLayoutMetrics> {
+  const contextCountsBySessionNodeId = new Map<
+    string,
+    { entity: number; topic: number }
+  >();
+
+  for (const node of contextualNodes) {
+    const sessionNodeId = sessionNodeIdByNodeId.get(node.id);
+    if (!sessionNodeId) continue;
+    const counts = contextCountsBySessionNodeId.get(sessionNodeId) ?? {
+      entity: 0,
+      topic: 0,
+    };
+    if (node.type === "entity") counts.entity += 1;
+    if (node.type === "topic") counts.topic += 1;
+    contextCountsBySessionNodeId.set(sessionNodeId, counts);
+  }
+
+  return new Map(
+    sessionNodes.map((sessionNode) => {
+      const eventCount = eventGroups.get(sessionNode.id)?.length ?? 0;
+      const counts = contextCountsBySessionNodeId.get(sessionNode.id) ?? {
+        entity: 0,
+        topic: 0,
+      };
+      const eventRingRadius = eventRingRadiusForCount(eventCount);
+      const entityShellRadius = packedRingRadius(
+        counts.entity,
+        eventRingRadius + EVENT_MAX_RADIUS + ENTITY_MAX_RADIUS + SHELL_GAP,
+        ENTITY_MAX_RADIUS,
+      );
+      const topicShellRadius = packedRingRadius(
+        counts.topic,
+        entityShellRadius + ENTITY_MAX_RADIUS + TOPIC_MAX_RADIUS + SHELL_GAP,
+        TOPIC_MAX_RADIUS,
+      );
+      const contentExtent = Math.max(
+        1.22,
+        eventCount > 0 ? eventRingRadius + 0.98 : 0,
+        counts.entity > 0 ? entityShellRadius + 0.76 : 0,
+        counts.topic > 0 ? topicShellRadius + 0.66 : 0,
+      );
+
+      return [
+        sessionNode.id,
+        {
+          eventRingRadius,
+          entityShellRadius,
+          topicShellRadius,
+          footprintRadius: contentExtent + 0.45,
+        },
+      ];
+    }),
+  );
+}
+
+function eventRingRadiusForCount(eventCount: number): number {
+  if (eventCount <= 1) return 3.6;
+  const angularStep = EVENT_ARC_SWEEP / (eventCount - 1);
+  const chordFactor = 2 * Math.sin(angularStep / 2);
+  return Math.max(
+    3.6,
+    (EVENT_MAX_RADIUS * 2 + NODE_GAP) / chordFactor,
+  );
+}
+
+function packedRingRadius(
+  nodeCount: number,
+  minimumRadius: number,
+  maximumNodeRadius: number,
+): number {
+  if (nodeCount <= 1) return minimumRadius;
+  const chordFactor = 2 * Math.sin(Math.PI / nodeCount);
+  return Math.max(
+    minimumRadius,
+    (maximumNodeRadius * 2 + NODE_GAP) / chordFactor,
+  );
+}
+
+function eventAngle(progress: number): number {
+  return EVENT_ARC_START - progress * EVENT_ARC_SWEEP;
+}
+
+function groupSharedContextNodesByDomain(
+  contextualNodes: GraphNode[],
+  connectedSessionNodeIdsByContextId: Map<string, Set<string>>,
+  domainKeysByNodeId: Map<string, string[]>,
+): Map<string, GraphNode[]> {
+  const nodesByDomainKey = new Map<string, GraphNode[]>();
+
+  for (const node of contextualNodes) {
+    const connectedSessionNodeIds =
+      connectedSessionNodeIdsByContextId.get(node.id) ?? new Set<string>();
+    if (connectedSessionNodeIds.size === 1) continue;
+    const domainKeys = domainKeysByNodeId.get(node.id) ?? ["unclassified"];
+    if (domainKeys.length !== 1) continue;
+    const domainKey = domainKeys[0]!;
+    const group = nodesByDomainKey.get(domainKey) ?? [];
+    group.push(node);
+    nodesByDomainKey.set(domainKey, group);
+  }
+
+  return nodesByDomainKey;
+}
+
+function positionContextNodes({
+  contextualNodes,
+  connectedNodeIdsByNodeId,
+  connectedSessionNodeIdsByContextId,
+  domainKeysByNodeId,
+  domainCenterByKey,
+  domainRadiusByKey,
+  sharedContextNodesByDomainKey,
+  sharedContextRingMetricsByKey,
+  sessionAnchorByNodeId,
+  sessionLayoutMetricsByNodeId,
+  chronologyByNodeId,
+  positionByNodeId,
+}: {
+  contextualNodes: GraphNode[];
+  connectedNodeIdsByNodeId: Map<string, string[]>;
+  connectedSessionNodeIdsByContextId: Map<string, Set<string>>;
+  domainKeysByNodeId: Map<string, string[]>;
+  domainCenterByKey: Map<string, GraphVector>;
+  domainRadiusByKey: Map<string, number>;
+  sharedContextNodesByDomainKey: Map<string, GraphNode[]>;
+  sharedContextRingMetricsByKey: Map<string, SharedContextRingMetrics>;
+  sessionAnchorByNodeId: Map<string, GraphVector>;
+  sessionLayoutMetricsByNodeId: Map<string, SessionLayoutMetrics>;
+  chronologyByNodeId: Map<string, { index: number; progress: number }>;
+  positionByNodeId: Map<string, GraphVector>;
+}): void {
+  const nodesBySessionAndType = new Map<string, GraphNode[]>();
+
+  for (const node of contextualNodes) {
+    const connectedSessionNodeIds =
+      connectedSessionNodeIdsByContextId.get(node.id) ?? new Set<string>();
+    if (connectedSessionNodeIds.size !== 1) continue;
+    const sessionNodeId = [...connectedSessionNodeIds][0]!;
+    if (!sessionAnchorByNodeId.has(sessionNodeId)) continue;
+    const groupKey = `${sessionNodeId}:${node.type}`;
+    const group = nodesBySessionAndType.get(groupKey) ?? [];
+    group.push(node);
+    nodesBySessionAndType.set(groupKey, group);
+  }
+
+  for (const [groupKey, group] of [...nodesBySessionAndType].sort(
+    ([left], [right]) => left.localeCompare(right),
+  )) {
+    const separatorIndex = groupKey.lastIndexOf(":");
+    const sessionNodeId = groupKey.slice(0, separatorIndex);
+    const type = groupKey.slice(separatorIndex + 1) as "entity" | "topic";
+    const anchor = sessionAnchorByNodeId.get(sessionNodeId)!;
+    const metrics = sessionLayoutMetricsByNodeId.get(sessionNodeId)!;
+    const shellRadius =
+      type === "entity"
+        ? metrics.entityShellRadius
+        : metrics.topicShellRadius;
+    const sortedNodes = [...group].sort(
+      (left, right) =>
+        contextChronologyScore(
+          left,
+          connectedNodeIdsByNodeId,
+          chronologyByNodeId,
+        ) -
+          contextChronologyScore(
+            right,
+            connectedNodeIdsByNodeId,
+            chronologyByNodeId,
+          ) ||
+        left.id.localeCompare(right.id),
+    );
+
+    sortedNodes.forEach((node, index) => {
+      const angle =
+        sortedNodes.length === 1
+          ? eventAngle(
+              contextChronologyScore(
+                node,
+                connectedNodeIdsByNodeId,
+                chronologyByNodeId,
+              ),
+            )
+          : EVENT_ARC_START - (index / sortedNodes.length) * Math.PI * 2;
+      positionByNodeId.set(node.id, {
+        x: anchor.x + Math.cos(angle) * shellRadius,
+        y: anchor.y + Math.sin(angle) * shellRadius,
+        z: anchor.z + stableSignedValue(`${node.id}:depth`) * 0.54,
+      });
+    });
+  }
+
+  const crossDomainNodes = contextualNodes
+    .filter(
+      (node) =>
+        !positionByNodeId.has(node.id) &&
+        (domainKeysByNodeId.get(node.id)?.length ?? 0) > 1,
+    )
+    .sort((left, right) => {
+      const leftCenter = averagePosition(
+        (domainKeysByNodeId.get(left.id) ?? [])
+          .map((key) => domainCenterByKey.get(key))
+          .filter((position): position is GraphVector => Boolean(position)),
+      );
+      const rightCenter = averagePosition(
+        (domainKeysByNodeId.get(right.id) ?? [])
+          .map((key) => domainCenterByKey.get(key))
+          .filter((position): position is GraphVector => Boolean(position)),
+      );
+      return leftCenter.x - rightCenter.x || left.id.localeCompare(right.id);
+    });
+
+  if (crossDomainNodes.length > 0) {
+    const domainBounds = [...domainCenterByKey].map(([key, center]) => ({
+      center,
+      radius: domainRadiusByKey.get(key) ?? 4,
+    }));
+    const left = Math.min(
+      ...domainBounds.map(({ center, radius }) => center.x - radius),
+    );
+    const right = Math.max(
+      ...domainBounds.map(({ center, radius }) => center.x + radius),
+    );
+    const top = Math.max(
+      ...domainBounds.map(({ center, radius }) => center.y + radius),
+    );
+    const spacing = ENTITY_MAX_RADIUS * 2 + NODE_GAP;
+    const columnCount = Math.max(1, Math.floor((right - left) / spacing) + 1);
+    const laneCenter = (left + right) / 2;
+
+    crossDomainNodes.forEach((node, index) => {
+      const row = Math.floor(index / columnCount);
+      const rowStartIndex = row * columnCount;
+      const nodesInRow = Math.min(
+        columnCount,
+        crossDomainNodes.length - rowStartIndex,
+      );
+      const column = index - rowStartIndex;
+      positionByNodeId.set(node.id, {
+        x: laneCenter + (column - (nodesInRow - 1) / 2) * spacing,
+        y: top + CROSS_DOMAIN_LANE_GAP + row * spacing,
+        z: stableSignedValue(`${node.id}:depth`) * 0.62,
+      });
+    });
+  }
+
+  for (const [domainKey, group] of [...sharedContextNodesByDomainKey].sort(
+    ([left], [right]) => compareDomainKeys(left, right),
+  )) {
+    if (!domainCenterByKey.has(domainKey)) continue;
+    const center = domainCenterByKey.get(domainKey)!;
+    const entities = group
+      .filter((node) => node.type === "entity")
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const topics = group
+      .filter((node) => node.type === "topic")
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const ringMetrics = sharedContextRingMetricsByKey.get(domainKey);
+    if (!ringMetrics) continue;
+
+    for (const [type, nodes, ringRadius] of [
+      ["entity", entities, ringMetrics.entityRingRadius],
+      ["topic", topics, ringMetrics.topicRingRadius],
+    ] as const) {
+      nodes.forEach((node, index) => {
+        const angle =
+          nodes.length === 1
+            ? stableAngle(node.id)
+            : EVENT_ARC_START - (index / nodes.length) * Math.PI * 2;
+        positionByNodeId.set(node.id, {
+          x: center.x + Math.cos(angle) * ringRadius,
+          y: center.y + Math.sin(angle) * ringRadius,
+          z:
+            center.z +
+            stableSignedValue(`${domainKey}:${type}:${node.id}:depth`) * 0.62,
+        });
+      });
+    }
+  }
+
+  for (const node of contextualNodes) {
+    if (positionByNodeId.has(node.id)) continue;
+    positionByNodeId.set(node.id, unanchoredClusterPosition(node.id));
+  }
+}
+
+function contextChronologyScore(
+  node: GraphNode,
+  connectedNodeIdsByNodeId: Map<string, string[]>,
+  chronologyByNodeId: Map<string, { index: number; progress: number }>,
+): number {
+  const progresses = (connectedNodeIdsByNodeId.get(node.id) ?? [])
+    .map((nodeId) => chronologyByNodeId.get(nodeId)?.progress)
+    .filter((progress): progress is number => typeof progress === "number");
+  if (progresses.length === 0) return stableUnitValue(node.id);
+  return (
+    progresses.reduce((sum, progress) => sum + progress, 0) /
+    progresses.length
+  );
 }
 
 function createAdjacency(
@@ -450,33 +800,133 @@ function compareEvents(left: GraphNode, right: GraphNode): number {
   return left.id.localeCompare(right.id);
 }
 
-function createDomainCenters(
+function createDomainLayout(
   styles: DomainStyle[],
-): Map<string, GraphVector> {
-  const centers = new Map<string, GraphVector>();
-  if (styles.length === 1) {
-    centers.set(styles[0]!.key, { x: 0, y: 0, z: 0 });
-    return centers;
+  sessionNodes: GraphNode[],
+  domainStyleBySessionNodeId: Map<string, DomainStyle>,
+  sessionLayoutMetricsByNodeId: Map<string, SessionLayoutMetrics>,
+  sharedContextNodesByDomainKey: Map<string, GraphNode[]>,
+): DomainLayout {
+  const sessionsByDomain = groupSessionsByDomain(
+    sessionNodes,
+    domainStyleBySessionNodeId,
+  );
+  const radiusByKey = new Map<string, number>();
+  const sharedContextRingMetricsByKey = new Map<
+    string,
+    SharedContextRingMetrics
+  >();
+
+  for (const style of styles) {
+    const sessions = sessionsByDomain.get(style.key) ?? [];
+    const maxFootprint = Math.max(
+      4.5,
+      ...sessions.map(
+        (session) =>
+          sessionLayoutMetricsByNodeId.get(session.id)?.footprintRadius ?? 4.5,
+      ),
+    );
+    const orbitRadius = sessionOrbitRadius(sessions.length, maxFootprint);
+    const sessionFootprintRadius = orbitRadius + maxFootprint;
+    const ringMetrics = createSharedContextRingMetrics(
+      sharedContextNodesByDomainKey.get(style.key) ?? [],
+      sessionFootprintRadius,
+    );
+    sharedContextRingMetricsByKey.set(style.key, ringMetrics);
+    radiusByKey.set(style.key, ringMetrics.footprintRadius);
   }
 
-  const radius = Math.max(9.5, styles.length * 3.7);
-  styles.forEach((style, index) => {
-    const angle = (index / styles.length) * Math.PI * 2;
-    centers.set(style.key, {
-      x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius * 0.62,
-      z: Math.sin(angle * 2) * 1.5,
-    });
-  });
-  return centers;
+  const centerByKey = new Map<string, GraphVector>();
+  let cursor = 0;
+  for (const style of styles) {
+    const radius = radiusByKey.get(style.key) ?? 4.5;
+    centerByKey.set(style.key, { x: cursor + radius, y: 0, z: 0 });
+    cursor += radius * 2 + DOMAIN_ISLAND_GAP;
+  }
+  const totalWidth = Math.max(0, cursor - DOMAIN_ISLAND_GAP);
+  for (const [key, center] of centerByKey) {
+    centerByKey.set(key, { ...center, x: center.x - totalWidth / 2 });
+  }
+
+  return { centerByKey, radiusByKey, sharedContextRingMetricsByKey };
+}
+
+function createSharedContextRingMetrics(
+  nodes: GraphNode[],
+  sessionFootprintRadius: number,
+): SharedContextRingMetrics {
+  const entityCount = nodes.filter((node) => node.type === "entity").length;
+  const topicCount = nodes.filter((node) => node.type === "topic").length;
+  const entityRingRadius = packedRingRadius(
+    entityCount,
+    sessionFootprintRadius + ENTITY_MAX_RADIUS + SHELL_GAP,
+    ENTITY_MAX_RADIUS,
+  );
+  const topicRingRadius = packedRingRadius(
+    topicCount,
+    entityRingRadius + ENTITY_MAX_RADIUS + TOPIC_MAX_RADIUS + SHELL_GAP,
+    TOPIC_MAX_RADIUS,
+  );
+  const sharedContextExtent = Math.max(
+    entityCount > 0 ? entityRingRadius + ENTITY_MAX_RADIUS : 0,
+    topicCount > 0 ? topicRingRadius + TOPIC_MAX_RADIUS : 0,
+  );
+
+  return {
+    entityRingRadius,
+    topicRingRadius,
+    footprintRadius:
+      sharedContextExtent > 0
+        ? Math.max(sessionFootprintRadius, sharedContextExtent + 0.45)
+        : sessionFootprintRadius,
+  };
 }
 
 function createSessionAnchors(
   sessionNodes: GraphNode[],
   domainStyleBySessionNodeId: Map<string, DomainStyle>,
   domainCenterByKey: Map<string, GraphVector>,
+  sessionLayoutMetricsByNodeId: Map<string, SessionLayoutMetrics>,
 ): Map<string, GraphVector> {
   const anchors = new Map<string, GraphVector>();
+  const sessionsByDomain = groupSessionsByDomain(
+    sessionNodes,
+    domainStyleBySessionNodeId,
+  );
+
+  for (const [domainKey, sessions] of [...sessionsByDomain].sort(
+    ([left], [right]) => compareDomainKeys(left, right),
+  )) {
+    const center = domainCenterByKey.get(domainKey) ?? { x: 0, y: 0, z: 0 };
+    const sortedSessions = [...sessions].sort(compareSessions);
+    const maxFootprint = Math.max(
+      4.5,
+      ...sortedSessions.map(
+        (session) =>
+          sessionLayoutMetricsByNodeId.get(session.id)?.footprintRadius ?? 4.5,
+      ),
+    );
+    const orbitRadius = sessionOrbitRadius(
+      sortedSessions.length,
+      maxFootprint,
+    );
+    sortedSessions.forEach((session, index) => {
+      const angle = (index / sortedSessions.length) * Math.PI * 2 - Math.PI / 2;
+      anchors.set(session.id, {
+        x: center.x + Math.cos(angle) * orbitRadius,
+        y: center.y + Math.sin(angle) * orbitRadius,
+        z: center.z + stableSignedValue(session.id) * 0.34,
+      });
+    });
+  }
+
+  return anchors;
+}
+
+function groupSessionsByDomain(
+  sessionNodes: GraphNode[],
+  domainStyleBySessionNodeId: Map<string, DomainStyle>,
+): Map<string, GraphNode[]> {
   const sessionsByDomain = new Map<string, GraphNode[]>();
   for (const session of sessionNodes) {
     const domainKey = domainStyleBySessionNodeId.get(session.id)!.key;
@@ -484,24 +934,17 @@ function createSessionAnchors(
     sessions.push(session);
     sessionsByDomain.set(domainKey, sessions);
   }
+  return sessionsByDomain;
+}
 
-  for (const [domainKey, sessions] of [...sessionsByDomain].sort(([left], [right]) =>
-    compareDomainKeys(left, right),
-  )) {
-    const center = domainCenterByKey.get(domainKey) ?? { x: 0, y: 0, z: 0 };
-    const sortedSessions = [...sessions].sort(compareSessions);
-    const orbitRadius = sortedSessions.length <= 1 ? 0 : 2.55 + sortedSessions.length * 0.3;
-    sortedSessions.forEach((session, index) => {
-      const angle = (index / sortedSessions.length) * Math.PI * 2 - Math.PI / 2;
-      anchors.set(session.id, {
-        x: center.x + Math.cos(angle) * orbitRadius,
-        y: center.y + Math.sin(angle) * orbitRadius * 0.7,
-        z: center.z + stableSignedValue(session.id) * 0.55,
-      });
-    });
-  }
-
-  return anchors;
+function sessionOrbitRadius(
+  sessionCount: number,
+  maximumFootprintRadius: number,
+): number {
+  if (sessionCount <= 1) return 0;
+  const minimumCenterSpacing =
+    maximumFootprintRadius * 2 + SESSION_SYSTEM_GAP;
+  return minimumCenterSpacing / (2 * Math.sin(Math.PI / sessionCount));
 }
 
 function compareSessions(left: GraphNode, right: GraphNode): number {

@@ -335,19 +335,34 @@ backend meanings for session membership, chronological adjacency, shared
 entities, shared topics, and optional backend-supplied semantic similarity.
 The client never invents a missing relationship.
 
-This is a relationship layout, not an XYZ chart. Domain clusters and
-time-ordered event arcs make the scene understandable, while depth only
-separates overlaps; absolute X, Y, and Z coordinates are not measurements.
-The native labeled-node selector and semantic details are the keyboard and
-screen-reader path on every map. Session pages also include complete readable
-node and relationship lists. WebGL failure preserves those DOM alternatives.
+This is a memory hierarchy, not an XYZ chart: separated entertainment-domain
+islands contain non-overlapping session systems, chronological event arcs, and
+outer entity/topic context shells. Multi-domain context occupies a dedicated
+bridge lane above the islands so it cannot be mistaken for an unrelated domain.
+Context shared by multiple sessions in one domain uses packed rings outside the
+island. All ring radii are derived from node count and sphere size to prevent
+dense nodes from intersecting. Depth only separates overlaps; absolute X, Y,
+and Z coordinates are not measurements. Reset framing includes sphere extents,
+island labels, and narrow-viewport aspect. Priority-based screen-space label
+collision handling keeps dense selections readable without hiding their DOM
+relationship list. The labeled-node selector and semantic details are the
+keyboard and screen-reader path on every map. Session pages also include
+complete readable node and relationship lists. WebGL failure preserves those
+DOM alternatives.
+
+The Memory dashboard imports the extension's actual design tokens and shared
+button, input, label, and select primitives. Wider-page layout and WebGL styles
+remain dashboard-specific; the extension source and its visual design are not
+modified.
 
 Dashboard shortcuts have visible equivalents: `Ctrl+K` opens and focuses
 Memory search; `Alt+H` opens Memory; `Alt+G` focuses the graph selector;
 `Alt+C` toggles the persistent high-contrast mode; and `Alt+/` opens shortcut
 help (`Escape` closes it). The dashboard also provides a skip link, visible
 focus, route-focus management, forced-colors support, and reduced-motion
-behavior that disables camera easing and minimizes CSS motion.
+behavior that disables camera easing and minimizes CSS motion. High contrast
+also reaches portaled select menus and updates the WebGL background, fog, and
+relationship-line presentation live.
 
 For an inspectable copy of the deterministic fixture, run the package-scoped
 utility:

@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { Button } from "./StreamSenseUi";
+
 type StateProps = {
   title: string;
   children: ReactNode;
@@ -28,9 +30,9 @@ export function ErrorState({
       <h2>{title}</h2>
       <p>{message}</p>
       {onRetry ? (
-        <button className="button button-secondary" type="button" onClick={onRetry}>
+        <Button variant="outline" size="lg" type="button" onClick={onRetry}>
           Try again
-        </button>
+        </Button>
       ) : null}
     </section>
   );

@@ -98,11 +98,18 @@ session repeats the same component with that session ID. The client validates,
 deduplicates, and renders only supplied nodes and edges; it does not infer
 missing relationships or semantic scores.
 
-This is a relationship map, not an XYZ chart. Entertainment domains form
-deterministic labeled constellations, sessions anchor their domain cluster, and
-events follow a time-ordered arc around their session. Context nodes sit near
-the supplied nodes they connect. Depth is a deterministic overlap separator,
-not a measurement, and absolute X, Y, and Z values have no domain meaning.
+This is a memory hierarchy, not an XYZ chart. The deterministic layout reads as
+`entertainment domain -> session -> chronological event -> entity/topic`.
+Entertainment domains occupy separated islands. Each session anchors a
+non-overlapping system, its events progress clockwise in timestamp order, and
+single-session entities and topics occupy successive outer shells. Shared
+multi-domain context occupies a dedicated bridge lane above every domain island
+so averaging cannot place it inside an unrelated island. Context shared by
+several sessions in one domain uses packed rings outside that island. Arc and
+shell radii are derived from bounded node count and maximum sphere size, keeping
+dense siblings separated. Reset framing includes sphere radii, island labels,
+and the current viewport aspect. Depth is only a small deterministic overlap
+separator; absolute X, Y, and Z values are not data.
 
 Every node uses sphere geometry. Meaning is deliberately not color-only:
 
@@ -122,8 +129,30 @@ Edges preserve the API contract: session membership, next event in time,
 shared entity, shared topic, and optional backend-supplied semantic similarity.
 Topic and semantic links use distinct dashed treatments; selection brightens
 the selected sphere and its first-hop supplied connections while unrelated
-content dims. Edge weight retains the API meaning and is never presented as
-confidence unless the backend contract explicitly says so.
+content dims. Connected labels are not forced onscreen. A screen-space
+collision pass keeps the selected and hovered labels first, then domain,
+session, and bounded default labels. The readable inspector retains every
+first-hop relationship. Edge weight retains the API meaning and is never
+presented as confidence unless the backend contract explicitly says so.
+
+The hierarchy and focus behavior are informed by the
+[Cone Trees hierarchy research](https://doi.org/10.1145/108844.108883), the
+empirical priority of
+[reducing edge crossings](https://doi.org/10.1007/3-540-63938-1_67), and
+[3D network perception research](https://scholars.unh.edu/ccom/182/). The
+adjacent summary, inspector, and relationship lists follow the W3C guidance for
+[complex-image text alternatives](https://www.w3.org/WAI/tutorials/images/complex/).
+
+## Shared extension design system
+
+The dashboard imports the Chrome extension's real Tailwind theme and UI
+primitives through `src/components/StreamSenseUi.ts`. Buttons, inputs, labels,
+selects, typography, color tokens, focus states, and high-contrast overrides
+therefore have one source of truth. Dashboard CSS is limited to the wider page
+layout, content-specific cards, accessibility states, and the WebGL canvas.
+Extension feature components are not imported because they own Chrome capture
+and realtime state. No extension source or visual design is modified by the
+dashboard integration.
 
 ## Accessibility controls and alternatives
 
@@ -145,20 +174,21 @@ The dashboard exposes these shortcuts and matching visible controls:
 
 High contrast is a user-controlled mode persisted in local storage; it removes
 decorative shadows, strengthens borders and text, and keeps an explicit focus
-color. The stylesheet also includes forced-colors handling. Shortcuts never
-replace standard Tab navigation.
+color. The state reaches portaled select menus and updates the WebGL background,
+fog, and relationship-line presentation live. The stylesheet also includes
+forced-colors handling. Shortcuts never replace standard Tab navigation.
 
 Pointer users can orbit, zoom, and select spheres, and visible buttons provide
 rotate, tilt, zoom, and reset operations. Keyboard and assistive-technology
-users can select every labeled node in a native grouped control, inspect its
+users can select every labeled node in a labeled, grouped control, inspect its
 role, domain, size meaning, and first-hop relationships, and follow its
 session/event link. Session pages continue with full readable node and
-relationship lists. On the overview, the native selector, details, status, and
+relationship lists. On the overview, the selector, details, status, and
 legends provide the non-canvas inspection path.
 
 `prefers-reduced-motion` disables camera easing and minimizes CSS animation and
 transitions. If WebGL cannot start, the app reports the optional visual view as
-unavailable while preserving the native selector and DOM information.
+unavailable while preserving the selector and DOM information.
 
 Rendering is on demand rather than an unbounded animation loop. Changing graph
 data or leaving the route cancels pending animation, removes listeners and

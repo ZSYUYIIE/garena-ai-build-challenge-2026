@@ -21,3 +21,26 @@ Object.defineProperty(window, "matchMedia", {
     dispatchEvent: vi.fn(),
   })),
 });
+
+if (typeof window.PointerEvent !== "function") {
+  Object.defineProperty(window, "PointerEvent", {
+    writable: true,
+    value: MouseEvent,
+  });
+}
+
+if (typeof window.ResizeObserver !== "function") {
+  class TestResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  Object.defineProperty(window, "ResizeObserver", {
+    writable: true,
+    value: TestResizeObserver,
+  });
+}
+
+if (typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = vi.fn();
+}
