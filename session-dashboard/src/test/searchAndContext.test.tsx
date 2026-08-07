@@ -84,6 +84,11 @@ describe("history intelligence surfaces", () => {
 
     expect(
       await screen.findByRole("heading", {
+        name: "3D relationship map",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", {
         name: "People, topics, sessions, and moments",
       }),
     ).toBeInTheDocument();

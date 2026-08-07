@@ -16,6 +16,7 @@ import {
 } from "../../components/AsyncState";
 import { DemoDataBanner } from "../../components/DemoDataBanner";
 import { RelationshipList } from "./RelationshipList";
+import { ThreeGraphExplorer } from "./ThreeGraphExplorer";
 
 export function ContextEntryPage() {
   const [searchParameters] = useSearchParams();
@@ -53,8 +54,8 @@ export function ContextEntryPage() {
         </h1>
         <p className="lede">
           Inspect how sessions, significant moments, entities, and topics are
-          connected. This readable list remains the primary representation even
-          when an optional visual graph is added later.
+          connected in an optional 3D map. The readable relationship lists
+          remain the primary representation for every viewer.
         </p>
       </header>
 
@@ -118,10 +119,16 @@ export function ContextEntryPage() {
           <p>Try removing a filter or explore another saved session.</p>
         </EmptyState>
       ) : (
-        <RelationshipList
-          nodes={graphQuery.data.nodes}
-          edges={graphQuery.data.edges}
-        />
+        <div className="context-explorer-stack">
+          <ThreeGraphExplorer
+            nodes={graphQuery.data.nodes}
+            edges={graphQuery.data.edges}
+          />
+          <RelationshipList
+            nodes={graphQuery.data.nodes}
+            edges={graphQuery.data.edges}
+          />
+        </div>
       )}
     </div>
   );
