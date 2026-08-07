@@ -10,6 +10,7 @@ import {
   isMicrophonePermissionGrantedMessage,
   microphonePermissionPageUrl,
 } from "../../services/microphonePermission";
+import { configuredBackendWebSocketUrl } from "../../services/backendUrls";
 import type { NarrationMode } from "../context/ConfigurationContext";
 import {
   calculateFrameDimensions,
@@ -75,7 +76,6 @@ const VIDEO_FRAME_INTERVAL_MS = 1_000;
 const FORCED_FRAME_DEADLINE_MS = 150;
 const MAX_PENDING_MICROPHONE_BYTES = 32 * 1024;
 const LATE_TRANSCRIPT_SETTLEMENT_MS = 15_000;
-const DEFAULT_WEBSOCKET_URL = "ws://127.0.0.1:8000/ws";
 
 type PendingPcm = { pcm: Int16Array; timestampMs: number };
 type VoiceTurn = {
@@ -608,7 +608,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       if (!isCurrent()) { video.pause(); video.srcObject = null; for (const track of mediaStream.getTracks()) track.stop(); return; }
       captureStartedAtRef.current = performance.now();
       capturedTabIdRef.current = targetSnapshot.target.tabId;
-      const websocket = new WebSocket(import.meta.env.VITE_STREAMSENSE_WS_URL || DEFAULT_WEBSOCKET_URL);
+      const websocket = new WebSocket(configuredBackendWebSocketUrl());
       sessionWebsocket = websocket;
       websocketRef.current = websocket;
       resourceLifecycle.register(() => {
