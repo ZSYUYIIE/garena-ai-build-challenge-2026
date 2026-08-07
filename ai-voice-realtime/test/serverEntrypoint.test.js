@@ -110,7 +110,7 @@ function readStartupLine(child) {
     let stderr = "";
     const timeout = setTimeout(() => {
       reject(new Error(`Server startup timed out. stderr: ${stderr}`));
-    }, 2_000);
+    }, 5_000);
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");

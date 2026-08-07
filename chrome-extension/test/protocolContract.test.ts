@@ -221,7 +221,6 @@ test("parses a strict fixture for every advertised server message type", () => {
   const turnId = "123e4567-e89b-42d3-a456-426614174000";
   const fixtures = [
     { type: "analysis_error", text: "provider unavailable" },
-    { type: "answer", text: "legacy answer" },
     {
       type: "answer_update",
       turnId,
@@ -241,7 +240,6 @@ test("parses a strict fixture for every advertised server message type", () => {
     },
     { type: "playback_clear", turnId, mode: "answer" },
     { type: "provider_health", provider: "tab_stt", state: "degraded", message: "gap" },
-    { type: "narration", text: "legacy narration" },
     { type: "narration_update", turnId, mode: "narration", text: "live narration", finished: true, languageCode: "en-US" },
     { type: "status", mode: "narrating" },
     { type: "status_text", text: "connected" },
@@ -304,5 +302,17 @@ test("rejects malformed strict server messages", () => {
   for (const message of invalid) {
     assert.throws(() => parseServerOutput(message));
     assert.throws(() => parseServerMessage(JSON.stringify(message)), /invalid server message/i);
+  }
+});
+
+test("rejects legacy text messages that bypass turn and event ownership", () => {
+  for (const message of [
+    { type: "answer", text: "legacy answer" },
+    { type: "narration", text: "legacy narration" },
+  ]) {
+    assert.throws(
+      () => parseServerMessage(JSON.stringify(message)),
+      /invalid server message/i,
+    );
   }
 });

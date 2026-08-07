@@ -133,12 +133,14 @@ test("coalesces sustained admitted frames behind a slow atomic analysis without 
   const first = deferred();
   const second = deferred();
   const inputs = [];
+  const speechPolicy = new FakeSpeechPolicy();
   const fixture = createFixture({
     now: () => now,
     analyzeFrame(input) {
       inputs.push(input);
       return inputs.length === 1 ? first.promise : second.promise;
     },
+    speechPolicy,
     liveSessionFactory: () => new FakeLiveSession(),
   });
   t.after(() => fixture.eventStore.close());
@@ -156,13 +158,16 @@ test("coalesces sustained admitted frames behind a slow atomic analysis without 
 
   assert.equal(inputs.length, 1);
   assert.equal(inputs[0].signal.aborted, false);
-  first.resolve(approvedAnalysis({ semanticKey: "first", event: null }));
+  first.resolve(semanticAnalysis("first", "An older frame shows the opening score."));
   await flushAsyncWork();
   assert.equal(inputs.length, 2);
   assert.equal(inputs[1].timestampSeconds, 2);
-  second.resolve(approvedAnalysis({ semanticKey: "latest", event: null }));
+  assert.equal(speechPolicy.offers.length, 0);
+  assert.equal(fixture.session.lastGroundedDescription, "");
+  second.resolve(semanticAnalysis("latest", "The latest frame shows a changed score."));
   await flushAsyncWork();
-  assert.equal(fixture.session.lastGroundedDescription, approvedAnalysis({ semanticKey: "latest", event: null }).description);
+  assert.equal(fixture.session.lastGroundedDescription, "The latest frame shows a changed score.");
+  assert.deepEqual(speechPolicy.offers.map((offer) => offer.semanticKey), ["latest"]);
 });
 
 test("keeps ready captured-tab narration eligibility through a microphone-only media update", async (t) => {
@@ -575,7 +580,7 @@ test("starts a reserved narration after silence and cancels it when Live degrade
   callbacks.onHealth({ state: "degraded", message: "do not expose this" });
 
   assert.equal(live.narrations.length, 1);
-  assert.equal(fixture.browser.messages.some((message) => message.type === "narration_update" && message.turnId === narration.turnId), true);
+  assert.equal(fixture.browser.messages.some((message) => message.type === "narration_update" && message.turnId === narration.turnId), false);
   assert.deepEqual(live.discarded, [narration.turnId]);
   assert.equal(fixture.browser.messages.some((message) => message.type === "provider_health" && Object.hasOwn(message, "message")), false);
 });
@@ -1631,13 +1636,16 @@ test("advances visual state for a valid suppressed analysis without queueing spe
 test("offers only fresh uncovered important semantic narration candidates", async (t) => {
   const speechPolicy = new FakeSpeechPolicy();
   const analyses = [
-    approvedAnalysis({ shouldNarrate: false, description: "", semanticKey: null }),
-    approvedAnalysis({ isNew: false }),
-    approvedAnalysis({ coveredByTabSpeech: true }),
-    approvedAnalysis({ importance: 0.59 }),
-    approvedAnalysis({ description: "", semanticKey: null }),
+    approvedAnalysis({ shouldNarrate: false, description: "", semanticKey: null, event: null }),
+    semanticAnalysis("score:old", "An already-seen score remains visible."),
+    semanticAnalysis("score:covered", "Commentary already covers this score."),
+    semanticAnalysis("score:low", "A low-importance score detail is visible."),
+    approvedAnalysis({ description: "", semanticKey: null, event: null }),
     approvedAnalysis(),
   ];
+  analyses[1].isNew = false;
+  analyses[2].coveredByTabSpeech = true;
+  analyses[3].importance = 0.59;
   const fixture = createFixture({
     speechPolicy,
     async analyzeFrame() {
@@ -1836,6 +1844,72 @@ test("records and publishes a fallback event before speech policy starts", async
   fixture.session.close();
 });
 
+test("archives accepted events and session lifecycle without owning realtime failure", async (t) => {
+  const historyCalls = [];
+  const historyArchive = {
+    startSession(input) {
+      historyCalls.push(["start", input]);
+      return Promise.reject(new Error("history start unavailable"));
+    },
+    archiveEvent(input) {
+      historyCalls.push(["event", input]);
+      return Promise.reject(new Error("history archive unavailable"));
+    },
+    finishSession(input) {
+      historyCalls.push(["finish", input]);
+      throw new Error("history finish unavailable");
+    },
+  };
+  const fixture = createFixture({
+    historyArchive,
+    liveSessionFactory: () => new FakeLiveSession(),
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  await flushAsyncWork();
+
+  assert.doesNotThrow(() => fixture.session.recordVisionEvent({
+    eventType: "goal",
+    entities: ["Team A"],
+    description: "Team A scores from close range.",
+    importance: 0.95,
+    confidence: 0.94,
+  }, 42));
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 1);
+  assert.equal(
+    fixture.browser.messages.filter((message) => message.type === "event").length,
+    1,
+  );
+  await fixture.session.close();
+  await fixture.session.close();
+
+  assert.deepEqual(historyCalls.map(([kind]) => kind), ["start", "event", "finish"]);
+  assert.equal(historyCalls[1][1].sessionId, fixture.session.sessionId);
+  assert.equal(historyCalls[1][1].createdAt.endsWith("Z"), true);
+});
+
+test("archives only EventStore-recorded events, never duplicates", (t) => {
+  const archived = [];
+  const fixture = createFixture({
+    historyArchive: { archiveEvent: (event) => archived.push(event) },
+  });
+  t.after(() => fixture.eventStore.close());
+  const candidate = {
+    eventType: "shot_saved",
+    entities: ["Goalkeeper"],
+    description: "The goalkeeper saves a close-range shot.",
+    importance: 0.9,
+    confidence: 0.94,
+  };
+
+  fixture.session.recordVisionEvent(candidate, 10);
+  fixture.session.recordVisionEvent(candidate, 15);
+
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 1);
+  assert.equal(archived.length, 1);
+});
+
 test("does not record a fallback event for a self-description", async (t) => {
   const speechPolicy = new FakeSpeechPolicy();
   const fixture = createFixture({
@@ -1853,8 +1927,36 @@ test("does not record a fallback event for a self-description", async (t) => {
   await flushAsyncWork();
 
   assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 0);
-  assert.equal(speechPolicy.offers.length, 1);
+  assert.equal(speechPolicy.offers.length, 0);
+  assert.equal(fixture.session.lastGroundedDescription, "");
   fixture.session.close();
+});
+
+test("skips speech and reports a visible warning when timeline persistence fails", async () => {
+  const browser = new FakeBrowser();
+  const speechPolicy = new FakeSpeechPolicy();
+  const session = new ClientSession(browser, {
+    record() { throw new Error("database unavailable"); },
+  }, {
+    speechPolicy,
+    async analyzeFrame() {
+      return semanticAnalysis("document:brief", "A project brief is visible.");
+    },
+  });
+  await session.start();
+  session.sendVideo(Buffer.from("project brief"), "image/jpeg", 1);
+  session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.equal(speechPolicy.offers.length, 0);
+  assert.equal(
+    browser.messages.some((message) => (
+      message.type === "analysis_error"
+      && /timeline.*narration was skipped/i.test(message.text)
+    )),
+    true,
+  );
+  await session.close();
 });
 
 test("records a late atomic result but never offers it after a newer user turn", async (t) => {
@@ -1891,6 +1993,7 @@ function createFixture({
   liveSessionFactory,
   transcriberFactory,
   timers,
+  historyArchive,
 } = {}) {
   const browser = new FakeBrowser();
   const eventStore = new EventStore();
@@ -1918,6 +2021,7 @@ function createFixture({
       return transcriber;
     }),
     timers,
+    historyArchive,
   });
   return { browser, eventStore, session };
 }

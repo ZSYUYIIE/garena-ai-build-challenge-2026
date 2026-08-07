@@ -69,6 +69,8 @@ function StreamSensePanel() {
           description={session.description}
           statusText={session.statusText}
           error={session.error}
+          isRunning={session.isRunning}
+          isSpeaking={session.voiceStatus === "gemini_speaking"}
         />
       </div>
       <div className="py-3">

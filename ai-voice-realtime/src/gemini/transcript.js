@@ -42,6 +42,29 @@ export function shouldSuppressVisualDescription(description) {
   return describesOwnInterface || infersUserInteraction;
 }
 
+export function isDescriptionCoveredByTranscript(description, transcript) {
+  const descriptionTokens = significantTokens(description);
+  if (descriptionTokens.length < 2) return false;
+  const transcriptTokens = new Set(significantTokens(transcript));
+  if (transcriptTokens.size < 2) return false;
+  const covered = descriptionTokens.filter((token) => transcriptTokens.has(token));
+  return covered.length >= 2 && covered.length / descriptionTokens.length >= 0.6;
+}
+
+const TRANSCRIPT_STOP_WORDS = new Set([
+  "about", "after", "again", "also", "been", "before", "being", "from",
+  "have", "into", "near", "only", "over", "that", "their", "there",
+  "these", "they", "this", "through", "under", "very", "while", "with",
+]);
+
+function significantTokens(value) {
+  return String(value ?? "")
+    .toLocaleLowerCase("en-US")
+    .match(/[\p{L}\p{N}]+/gu)
+    ?.filter((token) => token.length >= 3 && !TRANSCRIPT_STOP_WORDS.has(token))
+    ?? [];
+}
+
 function longestOverlap(left, right) {
   const limit = Math.min(left.length, right.length);
   for (let size = limit; size > 0; size -= 1) {

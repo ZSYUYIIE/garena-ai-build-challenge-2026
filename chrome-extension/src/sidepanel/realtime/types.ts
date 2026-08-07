@@ -170,6 +170,24 @@ export function descriptionTurnOwnsCompletion(
   return mode === "narration" && currentTurnId === completedTurnId;
 }
 
+export function mergeNarrationTranscript(current: string, incoming: string): string {
+  const left = current.trim();
+  const right = incoming.trim();
+  if (!left) return right;
+  if (!right || left === right || left.endsWith(right)) return left;
+  if (right.startsWith(left)) return right;
+
+  const overlapLimit = Math.min(left.length, right.length);
+  for (let size = overlapLimit; size > 0; size -= 1) {
+    if (left.slice(-size) === right.slice(0, size)) {
+      return `${left}${right.slice(size)}`;
+    }
+  }
+  return /^[,.;:!?)]/.test(right) || /[(]$/.test(left)
+    ? `${left}${right}`
+    : `${left} ${right}`;
+}
+
 export function updateTurnChatMessages(
   messages: RealtimeChatMessage[],
   update: {
@@ -194,7 +212,6 @@ export function updateTurnChatMessages(
 
 export const SUPPORTED_SERVER_MESSAGE_TYPES = Object.freeze([
   "analysis_error",
-  "answer",
   "answer_update",
   "connected",
   "error",
@@ -202,7 +219,6 @@ export const SUPPORTED_SERVER_MESSAGE_TYPES = Object.freeze([
   "model_audio",
   "playback_clear",
   "provider_health",
-  "narration",
   "narration_update",
   "status",
   "status_text",
@@ -218,9 +234,7 @@ export type LiveProviderState = "connecting" | "ready" | "degraded" | "closed";
 type TextServerMessage = {
   type:
     | "analysis_error"
-    | "answer"
     | "error"
-    | "narration"
     | "status_text"
     | "telemetry";
   text?: string;
@@ -372,9 +386,7 @@ export function parseServerMessage(rawText: string): ServerMessage {
 
   switch (value.type) {
     case "analysis_error":
-    case "answer":
     case "error":
-    case "narration":
     case "status_text":
     case "telemetry":
       requireExactKeys(value, ["type"], ["text"]);

@@ -55,6 +55,7 @@ import {
   descriptionAfterTurnComplete,
   descriptionTurnOwnsCompletion,
   finishTurnRole,
+  mergeNarrationTranscript,
   parseServerMessage,
   settlingTurnAfterComplete,
   speakingTurnAfterPlaybackIdle,
@@ -140,6 +141,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const settlingTurnRef = useRef<TurnRoleState | null>(null);
   const speakingTurnIdRef = useRef<string | null>(null);
   const descriptionTurnIdRef = useRef<string | null>(null);
+  const narrationTranscriptRef = useRef<{ turnId: string; text: string } | null>(null);
   const microphoneTurnOwnershipRef = useRef<MicrophoneTurnOwnership<VoiceTurn> | null>(null);
   const retireMicrophoneTurnRef = useRef<RetireMicrophoneTurn | null>(null);
   const nextVoiceTurnIdRef = useRef<string | null>(null);
@@ -180,6 +182,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     settlingTurnRef.current = null;
     speakingTurnIdRef.current = null;
     descriptionTurnIdRef.current = null;
+    narrationTranscriptRef.current = null;
     microphoneTurnOwnershipRef.current?.clear();
     microphoneTurnOwnershipRef.current = null;
     retireMicrophoneTurnRef.current = null;
@@ -707,6 +710,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
               && (descriptionTurnIdRef.current === null || descriptionTurnIdRef.current === message.turnId)
             ) {
               descriptionTurnIdRef.current = null;
+              narrationTranscriptRef.current = null;
               setDescription("");
             }
             break;
@@ -715,22 +719,20 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             settleTurnComplete(message);
             break;
           case "status_text": if (message.text) setStatusText(message.text); break;
-          case "narration":
-            if (message.text) {
-              descriptionTurnIdRef.current = null;
-              setDescription(message.text);
-            }
-            break;
           case "narration_update":
             if (message.text) {
               descriptionTurnIdRef.current = message.turnId;
-              setDescription(message.text);
+              const current = narrationTranscriptRef.current?.turnId === message.turnId
+                ? narrationTranscriptRef.current.text
+                : "";
+              const text = mergeNarrationTranscript(current, message.text);
+              narrationTranscriptRef.current = { turnId: message.turnId, text };
+              setDescription(text);
             }
             break;
           case "event": if (message.event) setEvents((current) => current.some((item) => item.id === message.event!.id) ? current : [message.event!, ...current].slice(0, 100)); break;
           case "error": setError(message.text ?? "The realtime session reported an error."); setStatus("error"); break;
           case "analysis_error": setError(message.text ?? "The current frame could not be analyzed."); break;
-          case "answer":
           case "status":
           case "telemetry":
           case "turn_started":
