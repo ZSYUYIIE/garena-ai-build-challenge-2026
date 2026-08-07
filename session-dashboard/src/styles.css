@@ -93,34 +93,43 @@ a {
 }
 
 .app-shell {
-  display: flex;
+  display: grid;
+  width: min(1500px, 100%);
   min-height: 100vh;
-  flex-direction: column;
+  margin: 0 auto;
+  padding: clamp(0.75rem, 1.5vw, 1.25rem);
+  grid-template-columns: minmax(12.5rem, 14rem) minmax(0, 1fr);
+  align-items: start;
+  gap: 1rem;
 }
 
 .site-header {
   position: sticky;
   z-index: 20;
-  top: 0;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in oklch, var(--background), transparent 4%);
-  backdrop-filter: blur(10px);
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 0.35rem);
+  background: var(--card);
+  box-shadow: var(--shadow);
 }
 
 .header-inner {
   display: flex;
-  width: min(1180px, calc(100% - 2rem));
-  min-height: 4.25rem;
-  margin: 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 2rem;
+  min-height: calc(100vh - 2rem - 2px);
+  padding: 1rem;
+  align-items: stretch;
+  flex-direction: column;
+  gap: 0.65rem;
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding: 0.15rem 0 1rem;
   gap: 0.75rem;
   color: var(--navy);
   text-decoration: none;
@@ -158,27 +167,50 @@ a {
   text-transform: uppercase;
 }
 
+.rail-section-label {
+  margin: 0.35rem 0 0.15rem;
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rail-tools-label {
+  margin-top: auto;
+  padding-top: 1rem;
+}
+
 .primary-navigation {
   display: flex;
   margin: 0;
   padding: 0;
-  align-items: center;
+  align-items: stretch;
+  flex-direction: column;
   gap: 0.25rem;
   list-style: none;
 }
 
+.primary-navigation li {
+  min-width: 0;
+}
+
 .primary-navigation a {
+  width: 100%;
+  justify-content: flex-start;
   text-decoration: none;
 }
 
 .shell-actions {
   display: flex;
   align-items: stretch;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 0.4rem;
 }
 
 .shell-control {
+  width: 100%;
+  justify-content: space-between;
   font-size: 0.78rem;
 }
 
@@ -198,11 +230,20 @@ a {
   text-align: center;
 }
 
+.dashboard-content {
+  display: grid;
+  min-width: 0;
+  gap: 0.75rem;
+}
+
 .main-content {
-  width: min(1280px, calc(100% - 2rem));
-  margin: 0 auto;
-  padding: 2rem 0 5rem;
-  flex: 1;
+  width: 100%;
+  min-height: calc(100vh - 2.5rem);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 0.35rem);
+  background: var(--card);
+  padding: clamp(1.1rem, 2.3vw, 2rem);
+  box-shadow: var(--shadow);
 }
 
 .surface-connection,
@@ -284,30 +325,28 @@ kbd {
 }
 
 .site-footer {
-  border-top: 1px solid var(--border);
   color: var(--muted-foreground);
 }
 
 .site-footer p {
-  width: min(1180px, calc(100% - 2rem));
-  margin: 0 auto;
-  padding: 1.5rem 0;
-  font-size: 0.85rem;
+  margin: 0;
+  padding: 0.35rem 0.6rem 0.75rem;
+  font-size: 0.78rem;
 }
 
 .page-stack {
   display: grid;
-  gap: 2.5rem;
+  gap: 1.75rem;
 }
 
 .memory-hero {
   display: grid;
-  gap: 0.75rem;
+  gap: 1rem;
 }
 
 .memory-hero-copy {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 2rem;
 }
@@ -318,10 +357,15 @@ kbd {
 
 .memory-hero-copy h1 {
   max-width: none;
+  font-size: clamp(1.8rem, 3vw, 2.5rem);
+  letter-spacing: -0.04em;
 }
 
 .memory-hero-copy .lede {
-  margin-top: 0.65rem;
+  max-width: 62ch;
+  margin-top: 0.4rem;
+  font-size: 1rem;
+  line-height: 1.55;
 }
 
 .hero-actions {
@@ -415,6 +459,33 @@ kbd {
   text-transform: uppercase;
 }
 
+.overview-strip {
+  display: grid;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+  padding: 0.75rem;
+  grid-template-columns: minmax(8.5rem, 0.6fr) minmax(0, 3.4fr);
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.overview-strip-heading {
+  min-width: 0;
+  padding: 0 0.4rem;
+}
+
+.overview-strip-heading .eyebrow,
+.overview-strip-heading h2 {
+  margin: 0;
+}
+
+.overview-strip-heading h2 {
+  margin-top: 0.2rem;
+  font-size: 1rem;
+}
+
 h1,
 h2,
 h3,
@@ -489,7 +560,7 @@ p {
   display: grid;
   margin: 0;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.9rem;
+  gap: 0.6rem;
 }
 
 .metric-card {
@@ -497,7 +568,7 @@ p {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  padding: 1.1rem;
+  padding: 0.75rem 0.85rem;
   box-shadow: none;
 }
 
@@ -508,9 +579,9 @@ p {
 }
 
 .metric-card dd {
-  margin: 0.45rem 0 0;
+  margin: 0.25rem 0 0;
   color: var(--navy);
-  font-size: clamp(1.45rem, 3vw, 2rem);
+  font-size: clamp(1.25rem, 2.4vw, 1.65rem);
   font-weight: 850;
   letter-spacing: -0.04em;
 }
@@ -935,6 +1006,8 @@ p {
 .context-explorer-stack {
   display: grid;
   gap: 2.25rem;
+  container-name: graph-stack;
+  container-type: inline-size;
 }
 
 .graph-explorer {
@@ -948,10 +1021,10 @@ p {
 
 .graph-explorer-heading {
   display: grid;
-  grid-template-columns: minmax(16rem, 0.75fr) minmax(0, 1.25fr);
+  grid-template-columns: minmax(14rem, 0.65fr) minmax(0, 1.35fr);
   align-items: start;
-  padding: 1.5rem 1.5rem 1.1rem;
-  gap: 2rem;
+  padding: 1rem 1.1rem 0.75rem;
+  gap: 1rem;
 }
 
 .graph-title-block,
@@ -968,7 +1041,7 @@ p {
 }
 
 .graph-explorer-heading h2 {
-  font-size: 0.95rem;
+  font-size: 1.05rem;
 }
 
 .graph-explorer-heading .eyebrow {
@@ -979,21 +1052,22 @@ p {
   max-width: 76ch;
   margin: 0;
   color: var(--muted-foreground);
-  line-height: 1.55;
+  font-size: 0.82rem;
+  line-height: 1.45;
 }
 
 .graph-explorer-heading .graph-layout-explanation {
-  margin-top: 0.55rem;
+  margin-top: 0.35rem;
   border-left: 3px solid var(--question);
   background: var(--muted);
-  padding: 0.7rem 0.85rem;
+  padding: 0.45rem 0.65rem;
   color: var(--foreground);
 }
 
 .graph-hierarchy {
   display: grid;
   margin: 0;
-  padding: 0 1.5rem 1rem;
+  padding: 0 1.1rem 0.65rem;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
   list-style: none;
@@ -1003,19 +1077,19 @@ p {
   display: grid;
   min-width: 0;
   border-top: 1px solid var(--border);
-  padding: 0.8rem 1rem 0 0;
-  grid-template-columns: 1.5rem minmax(0, 1fr);
+  padding: 0.55rem 0.75rem 0 0;
+  grid-template-columns: 1.35rem minmax(0, 1fr);
   gap: 0.15rem 0.55rem;
 }
 
 .graph-hierarchy li + li {
-  padding-left: 1rem;
+  padding-left: 0.75rem;
 }
 
 .graph-hierarchy span {
   display: grid;
-  width: 1.35rem;
-  height: 1.35rem;
+  width: 1.2rem;
+  height: 1.2rem;
   grid-row: 1 / span 2;
   place-items: center;
   border-radius: 50%;
@@ -1026,20 +1100,20 @@ p {
 }
 
 .graph-hierarchy strong {
-  font-size: 0.875rem;
+  font-size: 0.78rem;
   font-weight: 600;
 }
 
 .graph-hierarchy small {
   color: var(--muted-foreground);
-  font-size: 0.8rem;
-  line-height: 1.45;
+  font-size: 0.72rem;
+  line-height: 1.3;
 }
 
 .graph-camera-controls {
   display: flex;
   border-top: 1px solid var(--border);
-  padding: 0.8rem 1.5rem;
+  padding: 0.55rem 1.1rem;
   flex-wrap: wrap;
   gap: 0.45rem;
 }
@@ -1058,7 +1132,7 @@ p {
 .graph-viewport {
   position: relative;
   min-width: 0;
-  height: clamp(34rem, 58vw, 46rem);
+  height: clamp(28rem, 42vw, 32rem);
   overflow: hidden;
   background:
     radial-gradient(circle at 24% 30%, rgb(45 212 191 / 13%), transparent 34%),
@@ -1204,13 +1278,13 @@ p {
 .graph-details {
   display: flex;
   min-width: 0;
-  max-height: clamp(34rem, 58vw, 46rem);
+  max-height: clamp(28rem, 42vw, 32rem);
   overflow: auto;
   flex-direction: column;
   border-left: 1px solid var(--border);
   background: var(--card);
-  padding: 1.25rem;
-  gap: 1rem;
+  padding: 0.9rem;
+  gap: 0.75rem;
 }
 
 .graph-details > * {
@@ -1258,13 +1332,13 @@ p {
 
 .graph-selection {
   display: grid;
-  min-height: 10rem;
+  min-height: 7rem;
   align-content: start;
   border: 1px solid var(--border);
   border-radius: 0.85rem;
   background: var(--muted);
-  padding: 1rem;
-  gap: 0.75rem;
+  padding: 0.8rem;
+  gap: 0.55rem;
 }
 
 .graph-selection p {
@@ -1581,20 +1655,93 @@ html[data-streamsense-dashboard-contrast="high"] {
   background: #ffffff;
 }
 
+@container graph-stack (max-width: 62rem) {
+  .graph-explorer-heading,
+  .graph-visual-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .graph-explorer-heading {
+    gap: 0.7rem;
+  }
+
+  .graph-hierarchy {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .graph-details {
+    max-height: none;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+}
+
 @media (max-width: 900px) {
+  .app-shell {
+    display: block;
+    width: 100%;
+    padding: 0;
+  }
+
+  .site-header {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    border-width: 0 0 1px;
+    border-radius: 0;
+  }
+
   .header-inner {
+    width: min(1280px, calc(100% - 2rem));
+    min-height: 4.25rem;
+    margin: 0 auto;
+    padding: 0.65rem 0;
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
     gap: 0.75rem 1rem;
+  }
+
+  .brand {
+    margin: 0;
+    border-bottom: 0;
+    padding: 0;
+  }
+
+  .rail-section-label {
+    display: none;
+  }
+
+  .primary-navigation {
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .primary-navigation a {
+    width: auto;
   }
 
   .shell-actions {
     width: 100%;
     border-top: 1px solid var(--border);
     padding: 0.55rem 0;
+    flex-direction: row;
+    flex-wrap: wrap;
     order: 3;
   }
 
   .shell-control {
+    width: auto;
     flex: 1 1 9rem;
+  }
+
+  .dashboard-content {
+    width: min(1280px, calc(100% - 1.5rem));
+    margin: 0.75rem auto 0;
+  }
+
+  .main-content {
+    min-height: 0;
   }
 
   .shortcut-list {
@@ -1604,6 +1751,10 @@ html[data-streamsense-dashboard-contrast="high"] {
   .metric-grid,
   .detail-metadata {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-strip {
+    grid-template-columns: minmax(8.5rem, 0.65fr) minmax(0, 2fr);
   }
 
   .detail-metadata > div:nth-child(3) {
@@ -1644,6 +1795,7 @@ html[data-streamsense-dashboard-contrast="high"] {
 
   .header-inner {
     min-height: auto;
+    width: calc(100% - 1.25rem);
     padding: 0.75rem 0;
     align-items: flex-start;
     flex-direction: column;
@@ -1675,7 +1827,20 @@ html[data-streamsense-dashboard-contrast="high"] {
   }
 
   .main-content {
-    padding-top: 2.25rem;
+    padding: 1rem;
+  }
+
+  .dashboard-content {
+    width: calc(100% - 0.75rem);
+    margin-top: 0.375rem;
+  }
+
+  .overview-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-strip-heading {
+    padding: 0.15rem 0.1rem;
   }
 
   .hero-section,
@@ -1724,7 +1889,7 @@ html[data-streamsense-dashboard-contrast="high"] {
   }
 
   .graph-viewport {
-    height: 30rem;
+    height: 26rem;
   }
 
   .session-list,

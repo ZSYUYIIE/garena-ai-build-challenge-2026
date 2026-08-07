@@ -23,11 +23,13 @@ describe("dashboard shell accessibility", () => {
   it("presents StreamSense as one Live and Memory product without Explore navigation", () => {
     renderShell();
 
+    const rail = screen.getByRole("complementary", { name: "Dashboard rail" });
     expect(
-      screen.getByRole("link", { name: "StreamSense Memory home" }),
+      within(rail).getByRole("link", { name: "StreamSense Memory home" }),
     ).toHaveTextContent("StreamSenseLive + Memory");
+    expect(screen.getByRole("main")).toHaveClass("main-content");
 
-    const navigation = screen.getByRole("navigation", {
+    const navigation = within(rail).getByRole("navigation", {
       name: "StreamSense navigation",
     });
     expect(within(navigation).getByRole("link", { name: "Memory" })).toHaveAttribute(
@@ -129,6 +131,20 @@ describe("dashboard shell accessibility", () => {
     expect(handoff).toHaveTextContent("Opened from StreamSense Live");
     expect(handoff).toHaveTextContent("refreshes periodically from the shared backend");
     expect(handoff).toHaveTextContent("controls remain in the extension side panel");
+  });
+
+  it("keeps the extension handoff visible on the Memory overview", () => {
+    renderShell("/?source=extension");
+
+    const handoff = screen.getByLabelText("StreamSense extension handoff");
+    expect(handoff).toHaveTextContent("Opened from StreamSense Live");
+    expect(handoff).toHaveTextContent(
+      "Live capture and controls remain in the extension side panel",
+    );
+    expect(handoff).toHaveTextContent(
+      "reads saved sessions from the shared backend",
+    );
+    expect(handoff).not.toHaveTextContent("refreshes periodically");
   });
 });
 

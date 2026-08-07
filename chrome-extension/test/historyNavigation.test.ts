@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import react from "@vitejs/plugin-react";
@@ -116,12 +117,35 @@ test("opens the resolved dashboard in a normal Chrome tab", async () => {
   }]);
 });
 
-test("renders the active-session History handoff as a labeled native button", async () => {
+test("opens the dashboard root when there is no active session", async () => {
+  const calls: Array<{ url: string }> = [];
+
+  await openHistoryDashboard(
+    (properties) => {
+      calls.push(properties);
+    },
+    resolveHistoryDashboardUrl({
+      dashboardUrl: "http://127.0.0.1:5174/dashboard/",
+      webSocketUrl: "ws://127.0.0.1:8000/ws",
+    }),
+  );
+
+  assert.deepEqual(calls, [{
+    url: "http://127.0.0.1:5174/dashboard/?source=extension",
+  }]);
+});
+
+test("renders a prominent, labeled Memory Dashboard handoff", async () => {
   const vite = await createServer({
     configFile: false,
     root: process.cwd(),
     appType: "custom",
     plugins: [react()],
+    resolve: {
+      alias: {
+        "@": fileURLToPath(new URL("../src", import.meta.url)),
+      },
+    },
     server: { middlewareMode: true },
   });
 
@@ -138,19 +162,19 @@ test("renders the active-session History handoff as a labeled native button", as
     }));
 
     assert.match(markup, /<button\b[^>]*\btype="button"/);
-    assert.match(
-      markup,
-      /\baria-label="Open this StreamSense session memory in History in a new tab"/,
-    );
-    assert.match(markup, />Open this session in History</);
-    assert.match(markup, /shared StreamSense backend/);
+    assert.match(markup, /<nav\b[^>]*\baria-label="Memory dashboard"/);
+    assert.doesNotMatch(markup, /<button\b[^>]*\baria-label=/);
+    assert.match(markup, />Open Memory Dashboard</);
+    assert.match(markup, /Review this session’s memory in a new tab/);
+    assert.match(markup, /\bbg-primary\b/);
 
     const inactiveMarkup = renderToStaticMarkup(createElement(
       module.HistoryNavigation,
       { activeSessionId: null },
     ));
-    assert.match(inactiveMarkup, />Open StreamSense History</);
-    assert.match(inactiveMarkup, /saved session memory from the shared StreamSense backend/);
+    assert.doesNotMatch(inactiveMarkup, /<button\b[^>]*\baria-label=/);
+    assert.match(inactiveMarkup, />Open Memory Dashboard</);
+    assert.match(inactiveMarkup, /Review saved sessions in a new tab/);
   } finally {
     await vite.close();
   }

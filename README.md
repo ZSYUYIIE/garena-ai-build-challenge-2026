@@ -4,8 +4,9 @@ StreamSense is one local accessibility product with two user surfaces: a Chrome
 side panel for live assistance and a browser dashboard for saved history. The
 side panel watches an explicitly authorized tab, describes meaningful visual
 changes, builds a timestamped event timeline, and lets the user ask questions
-by text or voice. **Open this session in History** opens that session's Memory
-view in a normal Chrome tab.
+by text or voice. Clicking the toolbar always opens this Live side panel. Its
+**Open Memory Dashboard** action opens the current session's Memory view in a
+normal Chrome tab.
 
 Both surfaces use the same local backend. The extension uses its protocol-v2
 WebSocket for realtime work, while the dashboard uses bounded REST endpoints.
@@ -248,8 +249,9 @@ Then in Chrome:
    **Allow microphone**, then return to the captured tab.
 5. Let the video play. Meaningful visual changes appear in the timeline and may
    be narrated according to the selected narration level.
-6. Select **Open this session in History**. While a session is active, the
-   extension opens
+6. Select **Open Memory Dashboard** inside the side panel. The toolbar icon
+   itself always opens the side panel and never bypasses it to open Memory.
+   While a session is active, the extension opens
    `http://127.0.0.1:5174/dashboard/sessions/{sessionId}?source=extension`.
    Without an active session it opens
    `http://127.0.0.1:5174/dashboard/?source=extension` instead.
@@ -415,11 +417,12 @@ The backend is not running, exited after startup, or is using a different port.
 Run the appropriate root development command and keep that terminal open. The
 extension manifest and default WebSocket URL expect port `8000`.
 
-### Open this session in History opens a 404 page
+### Open Memory Dashboard opens a 404 page
 
 Use `npm run dev` when developing both surfaces; the full profile points the
-extension's History action to the dashboard Vite server on port `5174`. The
-`dev:realtime` profile deliberately omits that server and falls back to the
+side panel's Memory Dashboard action to the dashboard Vite server on port
+`5174`. The `dev:realtime` profile deliberately omits that server and falls
+back to the
 backend `/dashboard/` URL, which exists only when `session-dashboard/dist` has
 been built. Run `npm run build`, `npm run demo`, or the full `npm run dev`
 profile as appropriate.

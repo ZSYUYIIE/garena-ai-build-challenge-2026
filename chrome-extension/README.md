@@ -3,9 +3,10 @@
 The Manifest V3 extension is StreamSense's compact Live surface. It captures
 one explicitly authorized HTTP(S) tab, sends bounded JPEG frames and
 source-separated audio to the shared local backend, presents narration and
-questions, and shows the current-session timeline. **Open this session in
-History** opens the matching Memory page in a normal Chrome tab; the dashboard
-is part of the same product, not a replacement realtime client.
+questions, and shows the current-session timeline. A prominent **Open Memory
+Dashboard** action directly beneath the live controls opens the matching Memory
+page in a normal Chrome tab. The dashboard is part of the same product, not a
+replacement realtime client.
 
 ## Install, build, and load
 
@@ -24,7 +25,9 @@ extension after rebuilding.
 On an ordinary HTTP or HTTPS page, click the StreamSense toolbar icon to
 authorize that exact tab and open the side panel. Chrome internal pages and the
 Chrome Web Store cannot be captured. Use the side-panel switch to start or stop
-the session.
+the session. Use **Open Memory Dashboard** in that side panel when you want the
+larger session-history workspace; the toolbar intentionally does not bypass the
+live side panel.
 
 ## Development profiles
 
@@ -37,9 +40,9 @@ Run integrated commands from the repository root:
 | `npm run demo` | Builds both frontends and starts one demo-history backend on `8000`. |
 
 The extension always connects to `ws://127.0.0.1:8000/ws` unless a validated
-build-time WebSocket URL overrides it. In the full `dev` profile, the History
-action uses `http://127.0.0.1:5174/dashboard/` as its validated root. In
-`dev:realtime`, it falls back to `http://127.0.0.1:8000/dashboard/`, which
+build-time WebSocket URL overrides it. In the full `dev` profile, the Memory
+Dashboard action uses `http://127.0.0.1:5174/dashboard/` as its validated root.
+In `dev:realtime`, it falls back to `http://127.0.0.1:8000/dashboard/`, which
 requires a previously built `session-dashboard/dist`. The built `demo` serves
 that route directly from its single backend.
 
@@ -50,8 +53,8 @@ children. Do not run another backend on port `8000` beside a root profile.
 
 The strict protocol-v2 `connected` acknowledgement includes the backend's
 actual session UUID. The extension validates that UUID and keeps it only while
-the capture session is active. Its History row explains that Memory reads the
-same session archive from the shared StreamSense backend.
+the capture session is active. Its Memory Dashboard action continues that same
+session archive from the shared StreamSense backend.
 
 While active, the action opens:
 
@@ -72,7 +75,7 @@ relationship graph over REST every two seconds while the page remains open.
 That refresh is polling, not a WebSocket or live subscription. Capture,
 narration, questions, and interruption controls remain in the side panel.
 
-The default History projection is in memory. It can show new extension events
+The default Memory projection is in memory. It can show new extension events
 during the lifetime of the shared backend process, but it is not reconstructed
 from the SQLite event store after restart. Stopping or restarting the backend
 therefore clears Memory history. The dashboard's explicit demo profile instead

@@ -97,6 +97,24 @@ export function HistoryOverviewPage() {
 
         <DemoDataBanner dataOrigin={sessionsQuery.data?.meta.dataOrigin ?? null} />
 
+        {!sessionsQuery.isPending && !sessionsQuery.isError && sessions.length > 0 ? (
+          <section className="overview-strip" aria-labelledby="overview-heading">
+            <div className="overview-strip-heading">
+              <p className="eyebrow">At a glance</p>
+              <h2 id="overview-heading">This page of memory</h2>
+            </div>
+            <dl className="metric-grid">
+              <MetricCard label="Sessions" value={String(sessions.length)} />
+              <MetricCard label="Recorded moments" value={String(totalEvents)} />
+              <MetricCard
+                label="Viewing time"
+                value={formatDuration(totalDuration)}
+              />
+              <MetricCard label="Domains" value={String(domains.length)} />
+            </dl>
+          </section>
+        ) : null}
+
         <div className="memory-map-shell" id="memory-map">
           <div className="memory-map-heading">
             <div>
@@ -155,25 +173,6 @@ export function HistoryOverviewPage() {
         </EmptyState>
       ) : (
         <>
-          <section aria-labelledby="overview-heading">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">At a glance</p>
-                <h2 id="overview-heading">This page of memory</h2>
-              </div>
-              <p>{sessions.length} sessions shown</p>
-            </div>
-            <dl className="metric-grid">
-              <MetricCard label="Sessions" value={String(sessions.length)} />
-              <MetricCard label="Recorded moments" value={String(totalEvents)} />
-              <MetricCard
-                label="Viewing time"
-                value={formatDuration(totalDuration)}
-              />
-              <MetricCard label="Domains" value={String(domains.length)} />
-            </dl>
-          </section>
-
           <section id="recent-sessions" aria-labelledby="sessions-heading">
             <div className="section-heading">
               <div>

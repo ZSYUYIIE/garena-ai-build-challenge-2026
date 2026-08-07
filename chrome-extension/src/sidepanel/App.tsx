@@ -66,6 +66,9 @@ function StreamSensePanel() {
         />
       </div>
       <div className="py-3">
+        <HistoryNavigation activeSessionId={session.activeSessionId} />
+      </div>
+      <div className="py-3">
         <VideoDescriptionSection
           description={session.description}
           statusText={session.statusText}
@@ -76,9 +79,6 @@ function StreamSensePanel() {
       </div>
       <div className="py-3">
         <EventTimelineSection events={session.events} />
-      </div>
-      <div className="py-2">
-        <HistoryNavigation activeSessionId={session.activeSessionId} />
       </div>
       <div className="flex min-h-0 flex-1 flex-col pt-3">
         <QuestionSection

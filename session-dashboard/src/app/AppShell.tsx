@@ -247,7 +247,7 @@ export function AppShell() {
       <a className="skip-link" href="#main-content">
         Skip to main content
       </a>
-      <header className="site-header">
+      <aside className="site-header dashboard-rail" aria-label="Dashboard rail">
         <div className="header-inner">
           <NavLink className="brand" to="/" aria-label="StreamSense Memory home">
             <span className="brand-mark" aria-hidden="true">
@@ -258,6 +258,9 @@ export function AppShell() {
               <small>Live + Memory</small>
             </span>
           </NavLink>
+          <p className="rail-section-label" aria-hidden="true">
+            Workspace
+          </p>
           <nav aria-label="StreamSense navigation">
             <ul className="primary-navigation">
               <li>
@@ -291,6 +294,9 @@ export function AppShell() {
               </li>
             </ul>
           </nav>
+          <p className="rail-section-label rail-tools-label" aria-hidden="true">
+            Dashboard tools
+          </p>
           <div
             className="shell-actions shell-accessibility-controls"
             role="group"
@@ -341,86 +347,88 @@ export function AppShell() {
             </button>
           </div>
         </div>
-      </header>
-      <main id="main-content" className="main-content" tabIndex={-1}>
-        {fromExtension ? (
-          <aside
-            className="surface-connection extension-handoff"
-            aria-label="StreamSense extension handoff"
-          >
-            <strong>Opened from StreamSense Live.</strong>
-            <span>
-              {extensionSessionHandoff
-                ? " This saved session memory refreshes periodically from the shared backend while the page is open. Live capture and controls remain in the extension side panel."
-                : " Live capture and controls remain in the extension side panel; this Memory view reads saved sessions from the shared backend."}
-            </span>
-          </aside>
-        ) : null}
+      </aside>
+      <div className="dashboard-content">
+        <main id="main-content" className="main-content" tabIndex={-1}>
+          {fromExtension ? (
+            <aside
+              className="surface-connection extension-handoff"
+              aria-label="StreamSense extension handoff"
+            >
+              <strong>Opened from StreamSense Live.</strong>
+              <span>
+                {extensionSessionHandoff
+                  ? " This saved session memory refreshes periodically from the shared backend while the page is open. Live capture and controls remain in the extension side panel."
+                  : " Live capture and controls remain in the extension side panel; this Memory view reads saved sessions from the shared backend."}
+              </span>
+            </aside>
+          ) : null}
 
-        {shortcutHelpOpen ? (
-          <section
-            id="dashboard-shortcut-help"
-            className="shortcut-panel shortcut-help-panel"
-            aria-labelledby="dashboard-shortcuts-heading"
-          >
-            <div className="shortcut-help-heading">
-              <div>
-                <p className="eyebrow">Dashboard help</p>
-                <h2 id="dashboard-shortcuts-heading" tabIndex={-1}>
-                  Keyboard shortcuts
-                </h2>
+          {shortcutHelpOpen ? (
+            <section
+              id="dashboard-shortcut-help"
+              className="shortcut-panel shortcut-help-panel"
+              aria-labelledby="dashboard-shortcuts-heading"
+            >
+              <div className="shortcut-help-heading">
+                <div>
+                  <p className="eyebrow">Dashboard help</p>
+                  <h2 id="dashboard-shortcuts-heading" tabIndex={-1}>
+                    Keyboard shortcuts
+                  </h2>
+                </div>
+                <Button
+                  variant="outline"
+                  size="lg"
+                  type="button"
+                  onClick={() => closeShortcutHelp(true)}
+                >
+                  Close help
+                </Button>
               </div>
-              <Button
-                variant="outline"
-                size="lg"
-                type="button"
-                onClick={() => closeShortcutHelp(true)}
-              >
-                Close help
-              </Button>
-            </div>
-            <dl className="shortcut-list">
-              <div>
-                <dt><kbd>Ctrl</kbd> + <kbd>K</kbd></dt>
-                <dd>Open and focus Memory search</dd>
-              </div>
-              <div>
-                <dt><kbd>Alt</kbd> + <kbd>H</kbd></dt>
-                <dd>Open the Memory overview</dd>
-              </div>
-              <div>
-                <dt><kbd>Alt</kbd> + <kbd>G</kbd></dt>
-                <dd>Focus the relationship map selector</dd>
-              </div>
-              <div>
-                <dt><kbd>Alt</kbd> + <kbd>C</kbd></dt>
-                <dd>Toggle high contrast</dd>
-              </div>
-              <div>
-                <dt><kbd>Alt</kbd> + <kbd>/</kbd></dt>
-                <dd>Show or hide this help</dd>
-              </div>
-            </dl>
-            <p className="shortcut-help-note">
-              Every shortcut has a visible control. Shortcuts never replace
-              standard keyboard navigation.
+              <dl className="shortcut-list">
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>K</kbd></dt>
+                  <dd>Open and focus Memory search</dd>
+                </div>
+                <div>
+                  <dt><kbd>Alt</kbd> + <kbd>H</kbd></dt>
+                  <dd>Open the Memory overview</dd>
+                </div>
+                <div>
+                  <dt><kbd>Alt</kbd> + <kbd>G</kbd></dt>
+                  <dd>Focus the relationship map selector</dd>
+                </div>
+                <div>
+                  <dt><kbd>Alt</kbd> + <kbd>C</kbd></dt>
+                  <dd>Toggle high contrast</dd>
+                </div>
+                <div>
+                  <dt><kbd>Alt</kbd> + <kbd>/</kbd></dt>
+                  <dd>Show or hide this help</dd>
+                </div>
+              </dl>
+              <p className="shortcut-help-note">
+                Every shortcut has a visible control. Shortcuts never replace
+                standard keyboard navigation.
+              </p>
+            </section>
+          ) : null}
+
+          <Outlet />
+          {shortcutStatus ? (
+            <p className="visually-hidden" role="status" aria-live="polite">
+              {shortcutStatus}
             </p>
-          </section>
-        ) : null}
-
-        <Outlet />
-        {shortcutStatus ? (
-          <p className="visually-hidden" role="status" aria-live="polite">
-            {shortcutStatus}
+          ) : null}
+        </main>
+        <footer className="site-footer">
+          <p>
+            StreamSense Live describes the current stream. StreamSense Memory
+            keeps significant moments readable and searchable afterward.
           </p>
-        ) : null}
-      </main>
-      <footer className="site-footer">
-        <p>
-          StreamSense Live describes the current stream. StreamSense Memory
-          keeps significant moments readable and searchable afterward.
-        </p>
-      </footer>
+        </footer>
+      </div>
     </div>
   );
 }

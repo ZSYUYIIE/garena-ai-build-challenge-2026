@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { ExternalLink, LayoutDashboard } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { openConfiguredHistoryDashboard } from "../../services/historyNavigation";
 
 type HistoryNavigationProps = {
@@ -19,51 +21,34 @@ export function HistoryNavigation({ activeSessionId }: HistoryNavigationProps) {
   }
 
   return (
-    <div>
-      <button
+    <nav aria-label="Memory dashboard">
+      <Button
         type="button"
-        onClick={() => { void handleOpenHistory(); }}
-        aria-label={activeSessionId
-          ? "Open this StreamSense session memory in History in a new tab"
-          : "Open StreamSense session memory in History in a new tab"}
-        className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-2 text-left text-sm font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        onPress={() => { void handleOpenHistory(); }}
+        className="h-auto min-h-14 w-full justify-between gap-3 whitespace-normal px-3 py-2.5 text-left"
       >
-        <span className="min-w-0">
-          <span className="block">
-            {activeSessionId ? "Open this session in History" : "Open StreamSense History"}
-          </span>
-          <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
-            {activeSessionId
-              ? "Review this session memory from the shared StreamSense backend."
-              : "Review saved session memory from the shared StreamSense backend."}
+        <span className="flex min-w-0 items-start gap-2.5">
+          <LayoutDashboard
+            data-icon="inline-start"
+            aria-hidden="true"
+            className="mt-0.5"
+          />
+          <span className="min-w-0">
+            <span className="block font-semibold">Open Memory Dashboard</span>
+            <span className="mt-0.5 block text-xs font-normal">
+              {activeSessionId
+                ? "Review this session’s memory in a new tab."
+                : "Review saved sessions in a new tab."}
+            </span>
           </span>
         </span>
-        <OpenInNewTabIcon />
-      </button>
+        <ExternalLink data-icon="inline-end" aria-hidden="true" />
+      </Button>
       {openFailed ? (
-        <p role="alert" className="px-2 pt-1 text-xs text-destructive">
-          StreamSense could not open history in a new tab.
+        <p role="alert" className="px-1 pt-1.5 text-xs text-destructive">
+          StreamSense could not open the Memory Dashboard in a new tab.
         </p>
       ) : null}
-    </div>
-  );
-}
-
-function OpenInNewTabIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className="shrink-0 text-muted-foreground"
-    >
-      <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-    </svg>
+    </nav>
   );
 }

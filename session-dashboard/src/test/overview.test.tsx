@@ -107,7 +107,7 @@ describe("history overview", () => {
     ).toBeInTheDocument();
   });
 
-  it("puts the relationship map first and filters it by entertainment domain", async () => {
+  it("keeps metrics and the relationship map ahead of session history", async () => {
     const user = userEvent.setup();
     const fetchMock = createOverviewFetch();
     vi.stubGlobal("fetch", fetchMock);
@@ -124,9 +124,18 @@ describe("history overview", () => {
     const graphHeading = screen.getByRole("heading", {
       name: "3D relationship map",
     });
+    const overviewHeading = screen.getByRole("heading", {
+      name: "This page of memory",
+    });
     const sessionsHeading = screen.getByRole("heading", {
       name: "Recent sessions",
     });
+    expect(
+      Boolean(
+        overviewHeading.compareDocumentPosition(graphHeading) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
     expect(
       Boolean(
         graphHeading.compareDocumentPosition(sessionsHeading) &

@@ -1,13 +1,15 @@
 # StreamSense Memory Dashboard
 
-The dashboard is StreamSense's accessible Memory surface. The compact Chrome
-side panel remains the Live surface for capture, narration, questions, and
-interruptions. Both surfaces use the same local backend, but Memory consumes
-only bounded REST endpoints. It never calls Gemini, MongoDB, an embedding
-provider, Redis, Cloud Speech-to-Text, or the realtime WebSocket directly.
+The dashboard is StreamSense's accessible Memory surface. Clicking the Chrome
+toolbar icon always opens the compact Live side panel; it never opens Memory
+directly. Capture, narration, questions, and interruptions remain there. A
+separate **Open Memory Dashboard** option inside that panel starts the handoff.
+Both surfaces use the same local backend, but Memory consumes only bounded REST
+endpoints. It never calls Gemini, MongoDB, an embedding provider, Redis, Cloud
+Speech-to-Text, or the realtime WebSocket directly.
 
 After the protocol-v2 handshake, the backend gives Live the actual session
-UUID. **Open this session in History** then opens:
+UUID. **Open Memory Dashboard** then opens:
 
 ```text
 /dashboard/sessions/{sessionId}?source=extension
@@ -22,8 +24,8 @@ and a backend restart still clears the in-memory Memory projection.
 
 Use the repository-root npm workspace for installation and integrated commands.
 `npm run dev` starts the shared backend on `8000`, the Live extension process on
-`5173`, and this Memory application on `5174`; the extension's History action
-targets the latter. `npm run dev:dashboard` omits the extension and uses
+`5173`, and this Memory application on `5174`; the side panel's Memory Dashboard
+action targets the latter. `npm run dev:dashboard` omits the extension and uses
 deterministic demo history instead.
 
 ## Run the deterministic demo
