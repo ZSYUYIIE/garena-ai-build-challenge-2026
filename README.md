@@ -32,6 +32,7 @@ context and is never presented as the user's speech.
 - A Gemini API key with access to the configured vision and Live models.
 - A Google Cloud project with billing configured for Speech-to-Text V2.
 - The [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`).
+- MongoDB and Redis servers accessible remotely or running locally (view section on configuring the backend environment).
 
 ## 1. Install dependencies
 
@@ -189,6 +190,9 @@ STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=false
 
 HOST=127.0.0.1
 PORT=8000
+
+REDIS_URI=redis://localhost:6379
+MONGODB_URI=mongodb://username:password@localhost:27017/streamsense
 ```
 
 `STREAMSENSE_EXTENSION_ID` must be the actual ID from `chrome://extensions`;
@@ -199,6 +203,14 @@ Keep the Gemini API key in the backend only—never add it to extension code or 
 For isolated local debugging, `STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=true`
 temporarily relaxes the extension-origin check. Do not use that setting for a
 shared or production backend.
+
+**Note**: You can run MongoDB and Redis locally via Docker or install them directly. If you use Docker, you can start both services with:
+
+```bash
+docker compose up
+```
+create a directory named `data/mongodb_data` in the `ai-voice-realtime` folder to persist MongoDB data.
+
 
 ## 5. Start StreamSense
 
