@@ -5,20 +5,21 @@
 StreamSense is a local, backend-mediated realtime screen assistant built for a
 Chrome Manifest V3 side panel. It combines sampled tab frames, open-microphone
 questions, captured-tab speech context, Gemini native audio responses, and a
-grounded event timeline.
+grounded event timeline. An accessible React dashboard now provides a separate
+read surface for previous-session metadata, chronological events, search, and
+bounded context relationships.
 
-This document describes the current working tree on 2026-08-05:
+This document describes the `feat/session-dashboard` feature as verified on
+2026-08-07. The active realtime defaults remain:
 
-- branch: `ai-integration-v0`;
-- HEAD: `7e0856e`;
 - backend default vision model: `gemini-3.6-flash`;
 - backend default Live model: `gemini-3.1-flash-live-preview`;
 - active browser/backend protocol: version 2.
 
-The checkout had six pre-existing uncommitted Live/audio files when this
-document was created. The verification results below include those changes.
-Always recheck Git state and rerun the gates before using this as a release
-status report.
+The dashboard work adds history REST and static routes but does not change the
+Cloud Speech-to-Text lifecycle, source-separated audio routing, or realtime
+narration policy. Always recheck the working tree and rerun all package gates
+before treating this document as release status.
 
 ## System context
 
@@ -34,11 +35,20 @@ flowchart LR
     end
 
     subgraph Backend["Local StreamSense backend"]
-        WS["Express HTTP + /ws"]
+        WS["Express /ws"]
+        REST["Bounded history /api"]
         Session["ClientSession"]
         Policy["SpeechPolicy"]
         Events["Event validation + SQLite"]
         Transcript["Bounded tab transcript memory"]
+        Archive["Off-path history archive queue"]
+        History["HistoryService + repository"]
+    end
+
+    subgraph Dashboard["Session dashboard"]
+        React["Accessible React routes"]
+        Timeline["Previous-session timeline"]
+        Search["Search + context relationships"]
     end
 
     Vision["Gemini Interactions\ngemini-3.6-flash"]
@@ -63,13 +73,20 @@ flowchart LR
     Policy --> Live
     Vision --> Events
     Events --> Panel
+    Session -. "accepted lifecycle/events" .-> Archive
+    Archive --> History
+    React --> REST
+    REST --> History
+    React --> Timeline
+    React --> Search
     Live --> Player
     Player --> Panel
 ```
 
 The backend boundary is deliberate. API keys, Cloud identity, provider
 connections, validation, persistence, and narration policy never belong in the
-extension.
+extension or dashboard. The dashboard only understands validated HTTP
+envelopes; it has no database, embedding, Redis, or provider credentials.
 
 ## Deployment topology
 
@@ -86,6 +103,12 @@ Node/Express backend on 127.0.0.1:8000
           +-- Live SDK/WebSocket -> Gemini Live
           +-- gRPC streaming -> Google Cloud Speech-to-Text V2
           +-- file I/O -> data/streamsense.db
+
+Session dashboard
+  http://127.0.0.1:5174/dashboard/  (Vite development + /api proxy)
+  http://127.0.0.1:8000/dashboard/  (backend-served production build)
+          |
+          +-- HTTP /api -> HistoryService -> process-local memory repository
 ```
 
 The manifest grants `activeTab`, `sidePanel`, `storage`, and `tabCapture`, with
@@ -93,6 +116,9 @@ loopback host/CSP entries for port 8000. There is no content script and no broad
 page injection. Setting a different `VITE_STREAMSENSE_WS_URL` is not by itself a
 remote-deployment solution; the manifest host permissions and CSP would also
 need a deliberate security review and change.
+
+There is no root npm package. `chrome-extension`, `ai-voice-realtime`, and
+`session-dashboard` are installed, run, and verified independently.
 
 ## Runtime entry points
 
@@ -114,6 +140,19 @@ The toolbar action is the authorization gesture:
    separate media graphs, starts the local WebSocket, and sends protocol v2
    `session_hello` before other session commands.
 
+### Session dashboard
+
+`session-dashboard/src` is a separate Vite/React application with base path
+`/dashboard/`. During development, Vite listens on `127.0.0.1:5174` and proxies
+same-path `/api` calls to the backend on port `8000`. A production build is
+written to `session-dashboard/dist`; when that directory exists at backend
+startup, Express serves it at `/dashboard/` with an SPA fallback.
+
+The dashboard has overview, session detail/timeline, semantic-search, and
+context-exploration routes. It uses React Query for bounded request state and
+Zod to validate every response envelope. Its context relationships remain
+accessible DOM lists; there is no Three.js renderer.
+
 ### Backend
 
 `ai-voice-realtime/server.js` is a thin environment/process bootstrap. It reads
@@ -128,12 +167,21 @@ SIGINT/SIGTERM shutdown.
 - exact Chrome-extension origin validation;
 - the two-megabyte WebSocket payload cap;
 - one `ClientSession` per accepted browser socket;
-- idempotent server/session/EventStore shutdown.
+- the bounded history router at `/api`;
+- optional static dashboard serving at `/dashboard/`;
+- a `HistoryService`, repository, and off-path archive queue;
+- idempotent server/session/EventStore/history shutdown.
 
 `ClientSession` is the backend composition root for one browser connection. It
 does not represent a durable user account. It creates a new random session ID,
 provider adapters, in-memory transcript/state caches, rate limiters, speech
 policy, and per-session lifecycle state.
+
+`server.js` composes `STREAMSENSE_HISTORY_MODE=memory` by default. That creates
+an empty process-local repository and an unavailable semantic adapter. The
+explicit `npm run start:dashboard-demo` entry point selects `demo`, seeds fixed
+development sessions into memory, and supplies a deterministic mock semantic
+adapter. Demo mode is refused under `NODE_ENV=production`.
 
 ## Component responsibilities
 
@@ -148,7 +196,11 @@ policy, and per-session lifecycle state.
 | `GoogleSpeechTranscriber` | Tab STT stream lifecycle | User conversation |
 | `SpeechPolicy` | Automatic narration eligibility | Provider I/O |
 | `analyzeVisionFrame` | Atomic grounded structured analysis | Live voice answer lifecycle |
-| `EventStore` | Validation-adjacent persistence and deduplication | Cross-session UI history |
+| `EventStore` | Realtime SQLite event persistence and deduplication | Dashboard repository queries |
+| `HistoryArchiveQueue` | Bounded, serial, failure-contained off-path lifecycle/event archival | Realtime speech/provider decisions |
+| `HistoryService` | Session aggregates, bounded REST read models, semantic degradation, context graph | Provider-specific vectors or databases |
+| `HistoryRepository` | Session/event CRUD and stable cursor pagination contract | Semantic ranking |
+| `session-dashboard` | Accessible history navigation and validated API consumption | Providers, credentials, or storage implementation |
 
 ## Configuration and active providers
 
@@ -161,6 +213,7 @@ policy, and per-session lifecycle state.
 | `GOOGLE_CLOUD_SPEECH_LOCATION` | `us` | Regional STT endpoint/recognizer |
 | `STREAMSENSE_EXTENSION_ID` | none | Exact production WebSocket-origin allowlist |
 | `STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN` | false | Explicit local development override |
+| `STREAMSENSE_HISTORY_MODE` | `memory` | `memory` for empty process-local history; `demo` for explicit deterministic development data |
 | `EVENT_DB_PATH` | `data/streamsense.db` | SQLite event store |
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | Backend listener |
 
@@ -328,9 +381,8 @@ semantic cooldown begins only after dispatch is acknowledged.
 7. Provider completion marks generation complete, but tab gain restores only
    after local PCM playback becomes idle.
 
-In the current uncommitted working tree, typed/narration realtime text is sent
-without microphone activity start/end markers. Focused tests cover this provider
-contract, but it is not yet a committed release baseline.
+Typed/narration realtime text is sent without microphone activity start/end
+markers; those markers remain exclusive to an actual microphone turn.
 
 ### 5. Open-microphone question
 
@@ -391,7 +443,7 @@ ID, and mode before it becomes audible. `ModelAudioPlayback` schedules sources
 in AudioContext time, retains them for exact cancellation, and rejects stale
 turns.
 
-The current uncommitted working tree:
+The current playback boundary:
 
 - accepts at most 60 seconds of queued-ahead PCM per turn;
 - returns a distinct failure when the AudioContext is not running;
@@ -413,9 +465,51 @@ timestamp. `EventStore`:
 - publishes a session-ID-free public event to the extension.
 
 The extension prepends unique live events and keeps at most 100 in memory. The
-database can list by internal session ID, but there is no current public history
-endpoint or extension rehydration flow. Persistence therefore supports backend
-records, not user-visible cross-session history yet.
+same accepted session lifecycle and events are offered to a separate
+`HistoryArchiveQueue`. The queue is bounded to 256 jobs, serializes history
+writes, and contains repository failures so dashboard latency/storage cannot
+block or terminate the realtime session. Session start, accepted unique events,
+and session finish update the configured `HistoryRepository`.
+
+The current `server.js` repository is process-local memory in both normal and
+demo modes. It is not a durable projection of the SQLite file: restarting the
+backend clears normal history or recreates the fixed demo fixture. The Chrome
+extension still does not rehydrate previous sessions; the separate dashboard is
+the user-visible cross-session read surface.
+
+### 9. Historical dashboard reads
+
+Express mounts these bounded routes before the legacy static page:
+
+- `GET /api/sessions` (newest-first, opaque cursor, maximum 50);
+- `GET /api/sessions/:sessionId`;
+- `GET /api/sessions/:sessionId/events` (chronological, opaque cursor,
+  maximum 100, optional event-type or event-ID filter);
+- `POST /api/search` (strict JSON up to 16 KB, maximum 50 results);
+- `GET /api/context-graph` (maximum 200 nodes and 600 edges).
+
+Success envelopes include `meta.dataOrigin`. Errors use stable uppercase codes
+inside `{ "error": { "code", "message" } }`. Invalid cursors and filters are
+rejected rather than silently reset.
+
+Semantic search is an injected `SemanticHistoryService`. The normal memory mode
+uses an unavailable adapter and keeps list/detail/timeline reads healthy. Demo
+mode uses deterministic fixture matching and does not generate embeddings or
+exercise a vector database. MongoDB persistence, vector embeddings/search,
+Redis current context, and retrieval ranking remain Anson-owned and incomplete.
+The handoff is defined in `docs/semantic-history-integration.md`.
+
+The context graph is a bounded structural projection of session, event, entity,
+and topic records. Structural membership weights are exactly `1`; temporal
+weights use `round3(1 / (1 + elapsedSeconds / 60))`. The
+`semantic_similarity` type is reserved for a verified Anson-owned score and is
+currently omitted rather than fabricated. See `docs/context-graph-api.md` for
+the complete contract.
+
+History REST requests do not create a WebSocket `ClientSession`; therefore the
+dashboard can run without Gemini or Cloud Speech-to-Text credentials. This
+no-STT path is an independent development workflow, not a change to realtime
+STT behavior.
 
 ## Protocol v2
 
@@ -504,7 +598,11 @@ Provider failure is not automatically fatal to the whole capture session:
   are validated before use.
 - Raw microphone and tab audio are streamed and not stored by StreamSense.
 - Tab transcript is memory-only, bounded, and cleared on session close.
-- Timeline events are persisted, but public events omit internal session ID.
+- Live extension events omit internal session ID. Authenticated-hosting policy is
+  still required before exposing history APIs beyond loopback because dashboard
+  records include session/event IDs, descriptions, entities, and topics.
+- Demo and normal dashboard repositories are process-local; the exported demo
+  JSON is under the ignored backend `data/` directory.
 - Prompt text from the captured tab is untrusted and cannot authorize tools or
   act as user speech.
 - Logs, docs, tests, and acceptance artifacts must not contain keys, credential
@@ -520,7 +618,10 @@ Provider failure is not automatically fatal to the whole capture session:
 - Gemini Interactions for vision and event analysis;
 - Gemini Live for typed/mic Q&A and spoken narration;
 - Cloud STT V2 for captured-tab context;
-- SQLite timeline event writes.
+- SQLite timeline event writes;
+- bounded history REST routes and off-path in-memory archival;
+- the React previous-session dashboard under `session-dashboard/`;
+- deterministic, explicitly selected dashboard demo data.
 
 ### Legacy or compatibility-only
 
@@ -533,6 +634,9 @@ for the current backend:
 - it expects obsolete `answer` and `narration` streaming shapes;
 - it does not implement the source-separated mic/tab audio architecture.
 
+That legacy page is unrelated to the built session dashboard served at
+`/dashboard/`.
+
 `answerVisionQuestion()` and `ClientSession.answerTextQuestion()` are retained
 compatibility helpers, but active extension questions use Gemini Live, not an
 atomic Interactions answer path. Do not accidentally reintroduce two competing
@@ -544,17 +648,9 @@ Source plus fresh tests are authoritative.
 
 ## What works now
 
-Fresh automated verification on 2026-08-05 used Node `v24.15.0` and npm
-`12.0.2`:
-
-| Gate | Current result | What it establishes |
-| --- | --- | --- |
-| Backend `npm run check` | PASS: 232/232 tests | Syntax/imports, protocol, real loopback WebSockets, sessions, Interactions contract mocks, Live/STT state machines, events, and teardown |
-| Extension `npm test` | PASS: 134/134 tests | Manifest, authorization, frames, audio separation, VAD/echo gates, playback, protocol, UI state helpers, and lifecycle |
-| Extension `npm run build` | PASS | TypeScript and Vite production packaging; 3,122 modules transformed |
-
-Based on those automated gates, the following are implemented and locally
-verified at their test boundaries:
+The source and automated suites include these implemented boundaries. Run the
+release commands below for the current checkout; this documentation edit does
+not claim fresh physical-provider acceptance or freeze historical test counts.
 
 - exact-tab toolbar authorization and badge synchronization;
 - protocol-v2 origin/schema/payload/rate enforcement;
@@ -570,7 +666,12 @@ verified at their test boundaries:
   discontinuity handling;
 - answer/narration priority, ducking, playback cancellation, watchdogs, and
   exact-once teardown;
-- extension build/package generation.
+- extension build/package generation;
+- strict session/event schemas, stable cursor pagination, bounded archive
+  queue behavior, deterministic demo data, and history-router isolation;
+- accessible dashboard overview/detail/timeline/search/context routes with
+  loading, empty, degraded, and error states;
+- a production dashboard build served under `/dashboard/` when the build exists.
 
 ## What does not work yet or is not proven
 
@@ -609,18 +710,27 @@ current end-to-end proof.
   STT.
 - The project is loopback-only. There is no TLS, remote service deployment,
   multi-user authentication, or hosted extension/backend topology.
-- SQLite events are not reloaded into the extension across sessions.
+- Previous sessions are not reloaded into the extension; they are exposed by a
+  separate dashboard.
+- The dashboard's normal and demo repositories are in-memory and lose/reset
+  data at backend restart. The exported demo JSON is not a runtime datastore.
+- Durable MongoDB history, vector embedding/search, Redis current context,
+  retrieval ranking, and production score calibration remain Anson-owned and
+  incomplete. No physical integration with those services is claimed.
+- `semantic_similarity` context edges are reserved but not emitted until a
+  verified, normalized semantic score is supplied; structural edges are used
+  instead of fabricated similarity.
 - Provider usage/cost controls are indirect (frame/change/rate bounds); there is
   no user-facing budget dashboard or quota management.
-- The six pre-existing Live/audio edits pass tests but remain uncommitted, so
-  the working tree is not a clean release candidate.
 
 ## Structural assessment and evolution points
 
-The top-level split is appropriate: browser capabilities stay in the extension,
-provider credentials and policy stay in the backend, and validation/persistence
-have focused modules. Testable factories (`createExtensionManifest`,
-`createStreamSenseServer`) keep browser/process bootstraps thin.
+The top-level split is appropriate: realtime browser capabilities stay in the
+extension, provider credentials and policy stay in the backend, and the
+dashboard remains a provider-agnostic REST client. History repository and
+semantic interfaces provide focused seams for Anson-owned durable work.
+Testable factories (`createExtensionManifest`, `createStreamSenseServer`) keep
+browser/process bootstraps thin.
 
 The main maintainability risk is orchestration concentration:
 
@@ -647,6 +757,9 @@ npm run check
 cd ../chrome-extension
 npm test
 npm run build
+
+cd ../session-dashboard
+npm run check
 
 cd ..
 git diff --check

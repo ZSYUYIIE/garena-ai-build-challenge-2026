@@ -22,6 +22,10 @@ not as user speech.
   Default Credentials (ADC) available to the backend process.
 - Google Chrome for the extension demo.
 
+There is no repository-root `package.json`. Run backend commands from
+`ai-voice-realtime`, extension commands from `chrome-extension`, and dashboard
+commands from `session-dashboard`.
+
 ## Backend setup
 
 ```bash
@@ -40,6 +44,7 @@ Configure `.env` without committing the populated file:
 | `GOOGLE_CLOUD_PROJECT` | Google Cloud project that owns the Speech-to-Text V2 request. |
 | `GOOGLE_CLOUD_SPEECH_LOCATION` | Speech-to-Text recognizer location; defaults to `us`. |
 | `STREAMSENSE_EXTENSION_ID` | Exact 32-character Chrome extension ID allowed to open the production WebSocket. |
+| `STREAMSENSE_HISTORY_MODE` | Dashboard history mode: `memory` (default, empty at startup) or development-only `demo`. |
 | `HOST` / `PORT` | Local backend bind address and port; defaults to `127.0.0.1:8000`. |
 
 For local operator authentication, configure ADC outside the repository (for
@@ -77,6 +82,94 @@ npm run dev
 The backend listens on `http://127.0.0.1:8000` by default. Keep this terminal
 running while using the extension.
 
+Normal startup creates an empty `MemoryHistoryRepository`. Realtime sessions
+can add records to it, but those dashboard records are lost whenever the
+backend process restarts. The existing SQLite `EventStore` and the dashboard
+history repository are distinct persistence boundaries.
+
+## Run the session dashboard without STT
+
+The dashboard REST routes do not create a realtime `ClientSession` and do not
+start Gemini or Cloud Speech-to-Text providers. For deterministic dashboard
+development, use two terminals from the repository root. No API key, Google
+Cloud project, ADC, extension, or WebSocket connection is required for this
+workflow.
+
+Terminal 1:
+
+```bash
+cd ai-voice-realtime
+npm install
+npm run start:dashboard-demo
+```
+
+Terminal 2:
+
+```bash
+cd session-dashboard
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5174/dashboard/`. Vite proxies `/api` requests to this
+backend at `127.0.0.1:8000`.
+
+`start:dashboard-demo` sets `STREAMSENSE_HISTORY_MODE=demo`, loads a fixed set
+of development sessions into a fresh in-memory repository, and starts the
+server. It is rejected when `NODE_ENV=production`. Restarting the process resets
+the same deterministic fixture. `STREAMSENSE_HISTORY_MODE=memory` is the normal
+default and starts empty; both modes are process-local and non-durable.
+
+`npm run seed:dashboard` is different: it only exports the deterministic
+fixture to the Git-ignored `data/dashboard-demo.json` for inspection. It does
+not start the server, seed a running process, or make `npm start` load that file.
+
+Durable MongoDB session/event storage, vector embeddings and search, Redis
+current context, and production retrieval ranking remain Anson-owned work. The
+current branch supplies repository and semantic-adapter boundaries but does not
+implement or claim those integrations.
+
+### Serve the built dashboard
+
+Build before starting the backend, because the backend discovers
+`session-dashboard/dist` during startup:
+
+```bash
+cd session-dashboard
+npm install
+npm run build
+
+cd ../ai-voice-realtime
+npm install
+npm run start:dashboard-demo
+```
+
+Open `http://127.0.0.1:8000/dashboard/`. Use `npm start` instead of the final
+command for the default empty memory mode.
+
+### History REST surface
+
+The backend mounts bounded, same-origin history routes:
+
+- `GET /api/sessions?limit=&cursor=`
+- `GET /api/sessions/:sessionId`
+- `GET /api/sessions/:sessionId/events?limit=&cursor=&eventType=&eventId=`
+- `POST /api/search`
+- `GET /api/context-graph?sessionId=&query=&domain=&limit=`
+
+Every successful response includes `meta.dataOrigin`; list responses use
+`sessions` or `events` plus nullable `nextCursor`, detail uses `session`, search
+uses `results`, `retrievalMode`, and an optional `warning`, and the context graph
+uses `nodes` and `edges`. Errors have the stable uppercase envelope
+`{"error":{"code":"INVALID_REQUEST","message":"..."}}`. See
+[`../session-dashboard/README.md`](../session-dashboard/README.md) for request
+and response examples and [`../docs/context-graph-api.md`](../docs/context-graph-api.md)
+for graph semantics.
+
+The dashboard additions do not modify the Cloud Speech-to-Text architecture or
+its realtime availability rules. This documentation does not claim a physical
+Chrome, Gemini, or Cloud Speech-to-Text acceptance run.
+
 ## Build and load the Chrome extension
 
 In a second terminal:
@@ -113,6 +206,33 @@ Then:
 Chrome internal pages and the Chrome Web Store cannot be captured. If you
 change tabs before starting, click the toolbar icon on the new tab to authorize
 it.
+
+### Narration consistency and hallucination containment
+
+Visual-fact generation is frame-only. Previous model prose and captured-tab
+transcripts are no longer placed in the visual-analysis prompt, preventing one
+mistaken topic from becoming evidence for the next frame. Structurally valid
+prior visible states remain available only for exact identity-matched state
+transitions such as a verified score change.
+
+An atomic result from a superseded frame may still be archived at its original
+timestamp, but it cannot be spoken or become grounded context for a newer
+request. Self-descriptions and inferred user interactions are rejected before
+they reach the state cache or speech policy. Captured-tab transcript overlap is
+evaluated locally after the frame result exists; it can mark narration as
+already covered but cannot justify an unseen claim.
+
+Every automatic spoken candidate must first receive `status: recorded` from the
+SQLite `EventStore` and be published as an `event` message. A duplicate or
+failed write does not start speech. Failures emit a bounded user-facing
+`analysis_error`; the separate asynchronous dashboard archive remains
+best-effort and cannot block realtime publication.
+
+The backend no longer sends the canonical vision sentence as a premature
+`narration_update`. Only turn-owned Gemini Live output transcription is sent to
+the extension for the **Now describing** text, so the displayed sentence tracks
+the audio output rather than the prompt submitted to the generative voice
+model.
 
 ## Audio, privacy, and playback behavior
 
@@ -166,9 +286,19 @@ npm test
 npm run build
 ```
 
+Dashboard:
+
+```bash
+cd session-dashboard
+npm run check
+```
+
 The backend suite covers strict protocol validation, independent mic/tab audio
 routing, request-rate and payload bounds, exact extension-origin enforcement,
 Gemini Live resumption, STT rotation, speech policy, teardown races, and real
 WebSocket isolation. Automated checks do not replace the real Chrome/provider
 acceptance matrix in
 `docs/verification/2026-08-04-gemini-live-voice-acceptance.md`.
+
+The durable semantic-history handoff is documented in
+[`../docs/semantic-history-integration.md`](../docs/semantic-history-integration.md).

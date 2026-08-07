@@ -4,13 +4,16 @@ StreamSense is a Chrome side-panel extension that watches an authorized browser
 tab, describes meaningful visual changes, builds a timestamped event timeline,
 and lets the user ask Gemini questions by text or push-to-talk voice.
 
-The project has two processes:
+The project has three main runtime pieces: the extension, the local backend,
+and the session dashboard.
 
 ```text
 Chrome extension
   ├─ JPEG screen frames ────────────────┐
   ├─ user microphone PCM ───────────────┼─> Express/WebSocket backend ─> Gemini
   └─ captured-tab PCM ─> backend ─> Cloud Speech-to-Text V2
+
+Session dashboard ── REST `/api` ──> in-memory history service
 ```
 
 Microphone audio and captured-tab audio remain separate. Only microphone audio
@@ -23,7 +26,11 @@ context and is never presented as the user's speech.
 | --- | --- |
 | `chrome-extension/` | Manifest V3 extension, side-panel UI, tab capture, push-to-talk, and Gemini audio playback. |
 | `ai-voice-realtime/` | Express and WebSocket backend, Gemini Interactions/Live clients, Cloud Speech-to-Text, and event storage. |
+| `session-dashboard/` | Accessible React dashboard for previous sessions, timeline search, and context exploration. |
 | `docs/` | Design notes and verification material. |
+
+There is deliberately no repository-root `package.json`. Install and run each
+package from its own directory.
 
 ## Prerequisites
 
@@ -32,6 +39,9 @@ context and is never presented as the user's speech.
 - A Gemini API key with access to the configured vision and Live models.
 - A Google Cloud project with billing configured for Speech-to-Text V2.
 - The [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`).
+
+The Gemini and Google Cloud requirements apply to the realtime extension. The
+deterministic session-dashboard workflow below requires only Node.js and npm.
 
 ## 1. Install dependencies
 
@@ -44,6 +54,9 @@ npm install
 cd ../chrome-extension
 npm install
 npm run build
+
+cd ../session-dashboard
+npm install
 ```
 
 The extension build is written to `chrome-extension/dist`.
@@ -186,6 +199,7 @@ GOOGLE_CLOUD_SPEECH_LOCATION=us
 
 STREAMSENSE_EXTENSION_ID=the_exact_32_character_id_from_chrome
 STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=false
+STREAMSENSE_HISTORY_MODE=memory
 
 HOST=127.0.0.1
 PORT=8000
@@ -244,6 +258,92 @@ hears the user rather than the computer. On release it returns to 30% while
 Gemini replies, then to 100% after playback finishes. Muting playback does not
 stop screen capture or the separate captured-tab transcription stream.
 
+## Grounded narration and timeline behavior
+
+Automatic narration now follows one fail-closed path:
+
+1. Gemini Interactions analyzes the current admitted frame without receiving a
+   previous generated description or captured-tab transcript as visual
+   evidence.
+2. StreamSense rejects self-descriptions, inferred user actions, and results
+   from a frame that has already been superseded.
+3. The accepted moment must be recorded and published to the current-session
+   timeline before it can be offered for speech. If local event persistence
+   fails, the panel shows a warning and skips that narration.
+4. Captured-tab transcript is compared only after the visual fact is grounded,
+   so it may suppress a redundant description but cannot create one.
+
+The panel builds its displayed description from Gemini Live's turn-bound output
+transcript, which follows the audio actually generated, rather than displaying
+the earlier visual-analysis sentence as if it had already been spoken. The
+label reads **Now describing** only during model playback, **Latest
+description** while the session is otherwise running, and **Video description**
+when stopped. Reload the unpacked extension after rebuilding; legacy unowned
+`answer` and `narration` WebSocket messages are rejected by the current panel.
+
+## Session dashboard development without Speech-to-Text
+
+The history dashboard can run from deterministic demo data without opening the
+extension, connecting a WebSocket, configuring Gemini, or starting Cloud
+Speech-to-Text. Use two terminals from the repository root.
+
+Terminal 1:
+
+```bash
+cd ai-voice-realtime
+npm install
+npm run start:dashboard-demo
+```
+
+Terminal 2:
+
+```bash
+cd session-dashboard
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5174/dashboard/`. Vite serves the React application on
+port `5174` and proxies `/api` to the backend on port `8000`.
+
+`start:dashboard-demo` is an explicit development-only mode. It seeds a fresh
+in-memory repository every time the backend starts and is refused when
+`NODE_ENV=production`. Normal `npm start` uses an empty in-memory history
+repository. Neither mode is durable: dashboard history is lost at process
+restart. Durable MongoDB storage, vector embeddings/search, Redis current
+context, and retrieval ranking remain Anson-owned integration work and are not
+implemented on this branch.
+
+For an inspectable copy of the deterministic fixture, run:
+
+```bash
+cd ai-voice-realtime
+npm run seed:dashboard
+```
+
+That command writes the Git-ignored
+`ai-voice-realtime/data/dashboard-demo.json`. It does not start the backend,
+populate a running process, or change what `npm start` loads.
+
+### Serve a production build locally
+
+Build the dashboard before starting the backend so the static route is present:
+
+```bash
+cd session-dashboard
+npm install
+npm run build
+
+cd ../ai-voice-realtime
+npm install
+npm run start:dashboard-demo
+```
+
+Open `http://127.0.0.1:8000/dashboard/`. Replace
+`npm run start:dashboard-demo` with `npm start` to inspect the empty/default
+memory mode. This local build workflow does not prove physical Chrome, Gemini,
+or Cloud Speech-to-Text behavior.
+
 ## Development
 
 Run the extension build in watch mode:
@@ -273,6 +373,9 @@ npm run check
 cd ../chrome-extension
 npm test
 npm run build
+
+cd ../session-dashboard
+npm run check
 ```
 
 ## Troubleshooting
@@ -343,6 +446,13 @@ Reload the current extension build. The chat is a scrollable area above the
 fixed input row. Gemini Live output transcription must also be available for the
 configured Live model/session.
 
+### Narration is skipped and the timeline reports a persistence warning
+
+StreamSense intentionally does not speak an automatic visual description when
+the same moment could not be written to the current-session timeline. Check the
+backend terminal for a sanitized history warning, restart the local backend if
+its data directory is unavailable, and try the moment again.
+
 ## Security and privacy
 
 - `.env`, local ADC, event databases, build output, and `node_modules` are
@@ -358,4 +468,8 @@ configured Live model/session.
 
 More implementation detail is available in
 [`ai-voice-realtime/README.md`](ai-voice-realtime/README.md) and
-[`chrome-extension/README.md`](chrome-extension/README.md).
+[`chrome-extension/README.md`](chrome-extension/README.md). Dashboard-specific
+contracts are documented in
+[`session-dashboard/README.md`](session-dashboard/README.md),
+[`docs/context-graph-api.md`](docs/context-graph-api.md), and
+[`docs/semantic-history-integration.md`](docs/semantic-history-integration.md).
