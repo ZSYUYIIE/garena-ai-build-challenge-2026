@@ -97,7 +97,7 @@ export class EventStore {
       timestamp: formatTimestamp(candidate.timestampSeconds),
     };
 
-    saveContextData(event).catch((error) => {
+    saveContextData({ ...event }).catch((error) => {
       console.error("Failed to save context data for event:", event.id, error);
     });
 

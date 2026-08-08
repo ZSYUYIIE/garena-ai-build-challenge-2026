@@ -5,7 +5,7 @@ import {
 import { getContextDataFromMongo, saveContextDataToMongo } from "./mongo.js";
 
 /**
- * Saves context data for a given event and session metadata. This function generates an embedding for the event description, saves the context data to Redis, and conditionally saves important events to MongoDB.
+ * Saves context data for a given event and session metadata. This function generates an embedding for the event description if needed.
  * @param {ContextSchema} ctxData context data to insert
  */
 export async function saveContextData(ctxData) {
@@ -37,14 +37,5 @@ export async function getContextData(sessionId, searchString, limit = 10) {
     limit,
   );
 
-  console.log(
-    `Retrieved ${contextData.length} context data entries for session ${sessionId}`,
-    contextData.map((ctx) => ({
-      eventType: ctx.eventType,
-      description: ctx.description,
-      importance: ctx.importance,
-      confidence: ctx.confidence,
-    })),
-  );
   return contextData;
 }

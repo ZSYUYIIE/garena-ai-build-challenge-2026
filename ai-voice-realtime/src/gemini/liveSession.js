@@ -489,7 +489,6 @@ export class GeminiLiveSession {
   }
 
   async #sendRealtime(payload, expectedGeneration = this.generation) {
-    console.log("Gemini Live sendRealtime payload:", payload);
     if (!this.session || this.closing || expectedGeneration !== this.generation)
       return;
     await this.session.sendRealtimeInput(payload);

@@ -192,7 +192,7 @@ HOST=127.0.0.1
 PORT=8000
 
 MONGODB_URI=mongodb://username:password@localhost:27017/?directConnection=true
-MONGODB_DB=streamsense
+MONGODB_NAME=streamsense
 ```
 
 `STREAMSENSE_EXTENSION_ID` must be the actual ID from `chrome://extensions`;

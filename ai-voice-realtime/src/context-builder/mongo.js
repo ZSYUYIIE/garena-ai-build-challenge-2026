@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import { Collection, MongoClient } from "mongodb";
+import { exit } from "node:process";
 
 dotenv.config();
 
@@ -38,6 +39,7 @@ async function initVectorIndex(db) {
   await db.createCollection("events").catch((error) => {
     if (error.codeName !== "NamespaceExists") {
       console.error("Failed to create MongoDB collection 'events':", error);
+      exit(1);
     }
   });
   /** @type {Collection} */

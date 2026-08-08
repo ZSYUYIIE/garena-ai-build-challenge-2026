@@ -186,7 +186,6 @@ export class ClientSession {
   }
 
   handleBrowserJson(message) {
-    console.log("Received browser message:", message);
     switch (message.type) {
       case "session_hello":
         if (this.helloReceived)
@@ -211,7 +210,6 @@ export class ClientSession {
         );
         return;
       case "typed_question":
-        console.log();
         return this.beginAnswerTurn({
           turnId: message.turnId,
           source: "typed",
@@ -282,7 +280,11 @@ export class ClientSession {
       getPromptContext: async ({ text }) => {
         const matches = await getContextData(this.sessionId, text, 5);
         if (this.onEmbeddingRetrieved) {
-          await this.onEmbeddingRetrieved({ text, matches });
+          try {
+            this.onEmbeddingRetrieved({ text, matches });
+          } catch (error) {
+            console.error("Error occurred while retrieving embedding:", error);
+          }
         }
         return matches;
       },
