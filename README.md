@@ -191,8 +191,8 @@ STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=false
 HOST=127.0.0.1
 PORT=8000
 
-REDIS_URI=redis://localhost:6379
-MONGODB_URI=mongodb://username:password@localhost:27017/streamsense
+MONGODB_URI=mongodb://username:password@localhost:27017/?directConnection=true
+MONGODB_DB=streamsense
 ```
 
 `STREAMSENSE_EXTENSION_ID` must be the actual ID from `chrome://extensions`;
@@ -204,7 +204,7 @@ For isolated local debugging, `STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=true`
 temporarily relaxes the extension-origin check. Do not use that setting for a
 shared or production backend.
 
-**Note**: You can run MongoDB and Redis locally via Docker or install them directly. If you use Docker, you can start both services with:
+**Note**: You can run MongoDB locally via Docker or install them directly. If you use Docker, you can start the services with:
 
 ```bash
 docker compose up
