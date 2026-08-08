@@ -8,6 +8,8 @@ let mongoClient;
 /** @type {Promise<void> | undefined} */
 let vectorIndexInitPromise;
 
+const SIMILARITY_SCORE_THRESHOLD = 0.0;
+
 export async function getMongoClient() {
   if (!mongoClient) {
     const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017";
@@ -111,6 +113,7 @@ export async function getContextDataFromMongo(
     {
       $addFields: { score: { $meta: "vectorSearchScore" } },
     },
+    { $match: { score: { $gte: SIMILARITY_SCORE_THRESHOLD } } },
     {
       $project: {
         sessionId: 1,
