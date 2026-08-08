@@ -7,13 +7,17 @@ how to work on it safely.
 
 ## Start here
 
-There is no root `package.json`. The repository contains two Node projects with
-separate lockfiles and commands:
+The repository root is an npm workspace for three cooperating packages:
 
 ```text
-chrome-extension/   Manifest V3 React/TypeScript client
-ai-voice-realtime/  Express/WebSocket backend and provider adapters
+chrome-extension/   Live Manifest V3 React/TypeScript side panel
+ai-voice-realtime/  Shared Express/WebSocket/REST backend and provider adapters
+session-dashboard/  History React application served under /dashboard/
 ```
+
+Use the root lockfile and root scripts for normal setup, development, builds,
+demos, and full checks. Package-scoped commands remain useful for focused
+iteration, but do not start a second backend beside a root dev profile.
 
 Before making any claim or edit, run:
 
@@ -28,15 +32,15 @@ The repository may contain another checkout under
 test status, or acceptance status from that worktree. Always inspect the files
 and Git state in the checkout you were asked to change.
 
-As of the 2026-08-05 documentation pass, this checkout is
-`ai-integration-v0` at `7e0856e` and already contains
-uncommitted realtime audio/Live changes. Treat all pre-existing changes as
-user-owned. Do not discard, rewrite, stage, or commit them unless explicitly
-asked.
+Treat all pre-existing changes as user-owned. Do not discard, rewrite, stage,
+or commit them unless explicitly asked. Documentation and historical plans do
+not establish the current branch or verification state; inspect Git and run
+the relevant gates in the active checkout.
 
 ## Product intent
 
-StreamSense is a local Chrome side-panel assistant that:
+StreamSense is one local product with a Live Chrome side panel, a History
+dashboard, and one shared backend. It:
 
 - captures one explicitly authorized HTTP(S) tab;
 - samples meaningful visual changes as bounded JPEG frames;
@@ -45,7 +49,9 @@ StreamSense is a local Chrome side-panel assistant that:
   context;
 - suppresses automatic narration while the tab is speaking;
 - records grounded, deduplicated visual events in SQLite and shows them in a
-  timeline.
+  live timeline;
+- archives bounded session/event read models for the History dashboard; and
+- opens that dashboard from the side panel's **View History** button.
 
 The core trust rule is source separation:
 
@@ -62,10 +68,13 @@ as user speech, and never put provider credentials in the extension.
 
 | Path | Responsibility |
 | --- | --- |
+| `package.json`, `scripts/dev-*.js`, `scripts/process-supervisor.js` | Root workspace commands, fixed-port process plans, preflight, and coordinated shutdown. |
 | `chrome-extension/extensionManifest.ts` | Testable MV3 manifest: permissions, entry points, loopback hosts, and CSP. |
 | `chrome-extension/src/services/background.ts` | Toolbar authorization, side-panel opening, and capture badge updates. |
 | `chrome-extension/src/services/captureTarget.ts` | Per-window authorized-tab state and capture startup guards. |
 | `chrome-extension/src/sidepanel/App.tsx` | Side-panel composition. |
+| `chrome-extension/src/services/backendUrls.ts` | Validated WebSocket/dashboard URL configuration and safe loopback fallback. |
+| `chrome-extension/src/sidepanel/components/HistoryNavigation.tsx` | Accessible **View History** navigation into the dashboard. |
 | `chrome-extension/src/sidepanel/realtime/useRealtimeSession.ts` | Browser orchestration for capture, WebSocket, frames, audio, UI state, and teardown. |
 | `chrome-extension/src/sidepanel/realtime/mediaAudio.ts` | Separate tab/mic Web Audio graphs, worklets, resampling, activity, and gain control. |
 | `chrome-extension/src/sidepanel/realtime/frameCapture.ts` | Frame sizing, luminance signatures, change detection, JPEG budget, and single-flight capture. |
@@ -81,7 +90,12 @@ as user speech, and never put provider credentials in the extension.
 | `ai-voice-realtime/src/stt/googleSpeechTranscriber.js` | Cloud Speech-to-Text V2 streaming, rotation, retry, and transcript timestamps. |
 | `ai-voice-realtime/src/session/speechPolicy.js` | Provider-free automatic-narration state machine. |
 | `ai-voice-realtime/src/events/` | Event validation, five-second deduplication, and SQLite persistence. |
+| `ai-voice-realtime/src/history/` | Bounded history repository/service, archive queue, REST contracts, demo data, and graph read model. |
 | `ai-voice-realtime/src/protocol/` | JSON/binary schemas, origin policy, payload limits, and rate limits. |
+| `session-dashboard/src/` | History overview, session timeline, search, and accessible context exploration. |
+| `session-dashboard/src/features/context/ThreeGraphExplorer.tsx` | Optional Three.js view with DOM selector/list alternatives and WebGL fallback. |
+| `docs/context-graph-api.md` | Renderer-neutral graph API, bounds, and exact edge semantics. |
+| `docs/semantic-history-integration.md` | Durable repository and semantic retrieval handoff boundary. |
 | `docs/superpowers/specs/` | Historical design decisions; useful context, not proof of current behavior. |
 | `docs/superpowers/plans/` | Historical implementation plans; unchecked boxes do not mean code is absent. Verify source and tests. |
 | `docs/verification/2026-08-04-gemini-live-voice-acceptance.md` | Manual Chrome/provider acceptance ledger. Keep unobserved cases pending. |
@@ -93,7 +107,7 @@ its message shapes into active code.
 
 ## Active runtime and models
 
-The supported startup path is:
+The supported Live path is:
 
 ```text
 Chrome toolbar click
@@ -103,6 +117,28 @@ Chrome toolbar click
   -> createStreamSenseServer()
   -> one ClientSession per browser socket
 ```
+
+The History path is:
+
+```text
+Side-panel View History
+  -> validated loopback /dashboard/ URL in a normal Chrome tab
+  -> React dashboard
+  -> same-origin /api requests
+  -> the same backend process and HistoryService
+```
+
+Root development profiles have fixed topology and exactly one backend:
+
+| Command | Ports |
+| --- | --- |
+| `npm run dev` | backend `8000`, extension `5173`, dashboard `5174` |
+| `npm run dev:realtime` | backend `8000`, extension `5173` |
+| `npm run dev:dashboard` | demo backend `8000`, dashboard `5174` |
+
+`npm run demo` builds both frontends and starts one demo-history backend serving
+the dashboard at `http://127.0.0.1:8000/dashboard/`. Do not combine that command
+with another backend process.
 
 Current defaults, all overridable in backend environment configuration:
 
@@ -145,6 +181,14 @@ tests together. The current Interactions request uses API revision
     tracks, nodes, worklets, timers, provider sessions, queued playback, and
     in-memory transcript context exactly once.
 12. Automated tests are not physical Chrome/provider acceptance.
+13. The context renderer visualizes only validated API nodes and edges. Layout,
+    shapes, and colors must not invent semantic relationships or confidence.
+14. The Three.js canvas is optional. The labeled selector and readable DOM
+    relationships remain available to keyboard and assistive-technology users,
+    and WebGL failure must degrade without breaking History.
+15. Replacing graph data or leaving the route must cancel pending animation,
+    disconnect observers/listeners, remove labels, and dispose controls,
+    geometries, materials, and the WebGL renderer.
 
 ## Protocol-change checklist
 
@@ -173,67 +217,61 @@ limits. Do not change it on only one side.
 7. For Chrome/provider behavior, update the acceptance record only with an
    actual sanitized observation. Leave every unobserved case `PENDING`.
 
-Prefer `npm start` for a stable backend run and `npm run dev` only when automatic
-Node restart is useful.
+Prefer root profiles for integrated work. A package-scoped backend `npm start`
+is still appropriate for an intentionally backend-only stable run, but first
+confirm port `8000` is not owned by a root profile.
 
 ## Setup and commands
 
-Backend:
+Install once from the repository root:
 
 ```bash
-cd ai-voice-realtime
-npm install
-cp .env.example .env
-npm start
-```
-
-Required or relevant backend settings are documented in `.env.example` and the
-backend README. Never print or commit the populated `.env`, API keys, ADC paths,
-service-account JSON, private transcripts, or signed-in account data.
-
-Extension:
-
-```bash
-cd chrome-extension
 npm install
 npm run build
+```
+
+Copy `ai-voice-realtime/.env.example` to `ai-voice-realtime/.env` when working
+on the Live provider path. Required settings are documented in that file and
+the backend README. Never print or commit the populated `.env`, API keys, ADC
+paths, service-account JSON, private transcripts, or signed-in account data.
+
+Integrated commands:
+
+```bash
+npm run dev
+npm run dev:dashboard
+npm run dev:realtime
+npm run demo
 ```
 
 Load `chrome-extension/dist` as unpacked in `chrome://extensions`, copy the
 generated extension ID to `STREAMSENSE_EXTENSION_ID`, restart the backend, and
-click the toolbar action on the exact tab to authorize it.
+click the toolbar action on the exact tab to authorize it. In the full dev
+profile, **View History** targets `http://127.0.0.1:5174/dashboard/`. In the
+realtime-only profile it falls back to the backend `/dashboard/` route, which
+requires a previously built `session-dashboard/dist`.
 
 Full automated gates:
 
 ```bash
-cd ai-voice-realtime
 npm run check
-
-cd ../chrome-extension
-npm test
-npm run build
-
-cd ..
 git diff --check
 git status --short
 ```
+
+The root check runs orchestration tests, backend checks, extension tests and
+build, plus dashboard tests, type checking, and build. It does not replace
+physical Chrome/provider acceptance.
 
 Backend integration tests bind temporary loopback ports. A restricted sandbox
 may return `listen EPERM`; rerun with loopback permission before treating that
 as a project failure.
 
-## Current evidence and known gaps
+## Evidence and known gaps
 
-Fresh verification on 2026-08-05, Node `v24.15.0` and npm `12.0.2`, against the
-current working tree:
-
-- backend `npm run check`: 232 tests passed;
-- extension `npm test`: 134 tests passed;
-- extension `npm run build`: passed with TypeScript and Vite 8.2.0.
-
-These results include the pre-existing uncommitted Live transcript-ownership
-and model-audio playback changes. They are automated evidence, not a committed
-release baseline.
+Do not freeze historical test counts or another branch's provider observation
+into a completion claim. Run `npm run check` and the relevant manual acceptance
+against the active checkout, then report the exact commands and observations.
 
 Do not claim the following as working yet:
 
@@ -245,9 +283,16 @@ Do not claim the following as working yet:
 - graceful frontend handling of the backend's 500-character typed-question cap
   and one-question-per-two-seconds limit—the UI currently does not enforce
   either, so the backend can close the socket for a violating client;
-- persistent timeline history across sessions—the backend stores events, but
-  the active extension has no history/replay API and shows only events published
-  during the current session;
+- durable history across backend restarts: the extension shows current-session
+  events and opens the History dashboard for archived reads, but the current
+  normal/demo dashboard repositories are process-local memory;
+- production semantic retrieval: the built-in demo adapter is deterministic,
+  while the realtime backend's best-effort MongoDB embeddings only support
+  session-scoped Live prompt context. Durable dashboard storage, Redis current
+  context, and calibrated semantic scoring remain integration boundaries;
+- physical accessibility and GPU acceptance for the optional Three.js view:
+  automated tests do not replace keyboard, contrast, reduced-motion, WebGL
+  fallback, and cleanup inspection in a real browser;
 - a remote or production deployment—the manifest, CSP, and defaults are
   intentionally loopback-only.
 
@@ -272,7 +317,7 @@ A change is complete only when:
 - the active runtime path, not a legacy helper, contains the change;
 - cross-boundary schemas and contract tests agree;
 - source separation, turn ownership, and teardown invariants still hold;
-- relevant focused tests and both full project gates pass freshly;
+- relevant focused tests and the root `npm run check` gate pass freshly;
 - `git diff --check` passes and user-owned changes remain intact;
 - real-world claims are limited to actually observed acceptance evidence;
 - remaining risks and unverified behavior are stated plainly.

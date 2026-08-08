@@ -1,8 +1,11 @@
 # StreamSense Realtime Voice Backend
 
-StreamSense connects the Chrome extension to Gemini Interactions for grounded
-screen-change analysis, Gemini Live for push-to-talk questions and native
-voice replies, and Google Cloud Speech-to-Text V2 for captured-tab context.
+This is the shared local backend for both StreamSense surfaces: the Live Chrome
+side panel uses `/ws`, and the History dashboard uses `/api` plus the optional
+built `/dashboard/` route. For realtime sessions it connects to Gemini
+Interactions for grounded screen-change analysis, Gemini Live for questions
+and native voice replies, and Google Cloud Speech-to-Text V2 for captured-tab
+context.
 
 ```text
 screen frames + user microphone -> StreamSense backend -> Gemini
@@ -22,12 +25,14 @@ not as user speech.
   Default Credentials (ADC) available to the backend process.
 - Google Chrome for the extension demo.
 
+The repository root is an npm workspace. Use its lockfile and root scripts for
+normal installation, integrated development, builds, demos, and full checks.
+
 ## Backend setup
 
 ```bash
-cd ai-voice-realtime
 npm install
-cp .env.example .env
+cp ai-voice-realtime/.env.example ai-voice-realtime/.env
 ```
 
 Configure `.env` without committing the populated file:
@@ -40,6 +45,9 @@ Configure `.env` without committing the populated file:
 | `GOOGLE_CLOUD_PROJECT` | Google Cloud project that owns the Speech-to-Text V2 request. |
 | `GOOGLE_CLOUD_SPEECH_LOCATION` | Speech-to-Text recognizer location; defaults to `us`. |
 | `STREAMSENSE_EXTENSION_ID` | Exact 32-character Chrome extension ID allowed to open the production WebSocket. |
+| `STREAMSENSE_HISTORY_MODE` | Dashboard history mode: `memory` (default, empty at startup) or development-only `demo`. |
+| `MONGODB_URI` | MongoDB Atlas Drivers connection string for dashboard profiles; keep the populated URI only in `.env` or a secret manager. |
+| `MONGODB_DB_NAME` | Database containing the `dashboard_accounts` profile collection; defaults to `streamsense`. |
 | `HOST` / `PORT` | Local backend bind address and port; defaults to `127.0.0.1:8000`. |
 
 For local operator authentication, configure ADC outside the repository (for
@@ -62,28 +70,150 @@ Keep the backend bound to loopback and restore exact-ID matching after the test.
 
 ## Run the backend
 
-Use the stable command for normal runs:
+For integrated development, run one of these commands from the repository root:
+
+| Command | Supervised processes |
+| --- | --- |
+| `npm run dev` | Demo-history backend `8000`, extension `5173`, dashboard `5174`. |
+| `npm run dev:realtime` | Empty-history backend `8000`, extension `5173`. |
+| `npm run dev:dashboard` | Demo-history backend `8000`, dashboard `5174`. |
+
+Every profile preflights its fixed ports and starts exactly one backend. Do not
+start a package-scoped server at the same time.
+
+Before using the dashboard Account route, configure a MongoDB Atlas cluster:
+
+1. In Atlas, create a dedicated database user. This is not the email or
+   password used to sign in to MongoDB Cloud.
+2. Add only the backend operator's current public IP to the Atlas network
+   access list. Avoid an unrestricted `0.0.0.0/0` rule.
+3. Choose **Connect > Drivers > Node.js**, copy the SRV connection string, and
+   replace its username and password placeholders. URL-encode special
+   characters in the database password.
+4. Put that value in `MONGODB_URI` inside this package's ignored `.env`, keep
+   `MONGODB_DB_NAME=streamsense`, and restart the backend. Never put the
+   populated URI in source, documentation, browser storage, or frontend code.
+
+MongoDB does not issue a separate StreamSense key: the Drivers URI itself
+contains database credentials. Teammates must use their own Atlas project
+invitation, narrowly scoped IP access, and personal database user. Follow
+[`../docs/mongodb-atlas-handoff.md`](../docs/mongodb-atlas-handoff.md) rather
+than sharing an existing URI.
+
+For offline development only, the repository still provides a loopback Docker
+service. Start it with `docker compose up -d mongodb` and use
+`MONGODB_URI=mongodb://localhost:27017` instead of the Atlas SRV URI.
+
+Profiles are stored in `dashboard_accounts` with unique account ID and
+normalized-email indexes. Atlas is the primary persistence path; the local
+container is an optional offline substitute using the same repository
+contract. The backend exposes create/read/update operations at `/api/accounts`;
+it never stores passwords or provider credentials. Without a MongoDB URI, or
+when Atlas cannot be reached, those endpoints return `503` while history and
+realtime routes remain available.
+
+For an intentionally backend-only stable run:
 
 ```bash
-npm start
+npm start --workspace ai-voice-realtime
 ```
 
-Use the development command only when automatic Node reload is useful:
+For backend-only automatic Node reload:
 
 ```bash
-npm run dev
+npm run dev --workspace ai-voice-realtime
 ```
 
 The backend listens on `http://127.0.0.1:8000` by default. Keep this terminal
 running while using the extension.
 
-## Build and load the Chrome extension
+Normal package startup and the root `dev:realtime` profile create an empty
+`MemoryHistoryRepository`. The root `dev` and `dev:dashboard` profiles instead
+load the development-only deterministic seed. Realtime sessions can add records
+to either repository, but those dashboard records are lost whenever the backend
+process restarts. The existing SQLite `EventStore` and the dashboard history
+repository are distinct persistence boundaries.
 
-In a second terminal:
+## Run the session dashboard without STT
+
+The dashboard REST routes do not create a realtime `ClientSession` and do not
+start Gemini or Cloud Speech-to-Text providers. For deterministic dashboard
+development, use the root profile. No API key, Google Cloud project, ADC,
+extension, or WebSocket connection is required merely to browse its fixture.
 
 ```bash
-cd chrome-extension
-npm install
+npm run dev:dashboard
+```
+
+Open `http://127.0.0.1:5174/dashboard/`. Vite proxies `/api` requests to this
+single demo backend at `127.0.0.1:8000`.
+
+`start:dashboard-demo` sets `STREAMSENSE_HISTORY_MODE=demo`, loads five named
+judge-facing sessions with five events each into a fresh in-memory repository,
+and starts the server. The root `dev` and `dev:dashboard` profiles both use this
+entry point so the relationship graph is meaningful on first load. It is
+rejected when `NODE_ENV=production`. Restarting the process resets the same
+deterministic fixture. `STREAMSENSE_HISTORY_MODE=memory` remains the normal
+package and production default and starts empty; both modes are process-local
+and non-durable.
+
+`npm run seed:dashboard --workspace ai-voice-realtime` is different: it only
+exports the deterministic
+fixture to the Git-ignored `data/dashboard-demo.json` for inspection. It does
+not start the server, seed a running process, or make `npm start` load that file.
+
+MongoDB profile persistence is implemented independently and does not make
+dashboard session history durable. When MongoDB is configured, each accepted
+event is also copied on a best-effort basis with a 768-dimensional embedding;
+Live typed prompts can retrieve up to five matches from the current session.
+That prototype path is not the dashboard's semantic-search adapter. Durable
+per-user history, Redis current context, and production retrieval ranking remain
+separate integration work.
+
+### Serve the built one-backend demo
+
+```bash
+npm run demo
+```
+
+The root command builds both frontends, then starts exactly one demo-history
+backend. Open `http://127.0.0.1:8000/dashboard/`; no Vite server is involved.
+Load the generated `chrome-extension/dist` if you also want the Live surface.
+Dashboard-only browsing does not initialize provider sessions, but it is not
+physical Gemini or Cloud Speech-to-Text acceptance.
+
+### History REST surface
+
+The backend mounts bounded, same-origin history routes:
+
+- `GET /api/sessions?limit=&cursor=`
+- `GET /api/sessions/:sessionId`
+- `GET /api/sessions/:sessionId/events?limit=&cursor=&eventType=&eventId=`
+- `POST /api/search`
+- `GET /api/context-graph?sessionId=&query=&domain=&limit=`
+
+Sessions with no archived events remain available from the session endpoints,
+but are omitted from the context graph until their first event is recorded.
+This prevents generic zero-information nodes while preserving session history.
+
+Every successful response includes `meta.dataOrigin`; list responses use
+`sessions` or `events` plus nullable `nextCursor`, detail uses `session`, search
+uses `results`, `retrievalMode`, and an optional `warning`, and the context graph
+uses `nodes` and `edges`. Errors have the stable uppercase envelope
+`{"error":{"code":"INVALID_REQUEST","message":"..."}}`. See
+[`../session-dashboard/README.md`](../session-dashboard/README.md) for request
+and response examples and [`../docs/context-graph-api.md`](../docs/context-graph-api.md)
+for graph semantics.
+
+The dashboard additions do not modify the Cloud Speech-to-Text architecture or
+its realtime availability rules. This documentation does not claim a physical
+Chrome, Gemini, or Cloud Speech-to-Text acceptance run.
+
+## Build and load the Chrome extension
+
+From the repository root:
+
+```bash
 npm run build
 ```
 
@@ -109,10 +239,40 @@ Then:
    meaningful visual change only while the tab is not speaking.
 5. Disable the switch to stop. The captured-tab badge returns from `ON` to
    `OFF` after Chrome reports capture has ended.
+6. Select **View History** to open the dashboard. The full `npm run dev`
+   profile targets port `5174`; the built demo uses the backend route on port
+   `8000`.
 
 Chrome internal pages and the Chrome Web Store cannot be captured. If you
 change tabs before starting, click the toolbar icon on the new tab to authorize
 it.
+
+### Narration consistency and hallucination containment
+
+Visual-fact generation is frame-only. Previous model prose and captured-tab
+transcripts are no longer placed in the visual-analysis prompt, preventing one
+mistaken topic from becoming evidence for the next frame. Structurally valid
+prior visible states remain available only for exact identity-matched state
+transitions such as a verified score change.
+
+An atomic result from a superseded frame may still be archived at its original
+timestamp, but it cannot be spoken or become grounded context for a newer
+request. Self-descriptions and inferred user interactions are rejected before
+they reach the state cache or speech policy. Captured-tab transcript overlap is
+evaluated locally after the frame result exists; it can mark narration as
+already covered but cannot justify an unseen claim.
+
+Every automatic spoken candidate must first receive `status: recorded` from the
+SQLite `EventStore` and be published as an `event` message. A duplicate or
+failed write does not start speech. Failures emit a bounded user-facing
+`analysis_error`; the separate asynchronous dashboard archive remains
+best-effort and cannot block realtime publication.
+
+The backend no longer sends the canonical vision sentence as a premature
+`narration_update`. Only turn-owned Gemini Live output transcription is sent to
+the extension for the **Now describing** text, so the displayed sentence tracks
+the audio output rather than the prompt submitted to the generative voice
+model.
 
 ## Audio, privacy, and playback behavior
 
@@ -150,21 +310,13 @@ it.
 
 ## Verification
 
-Backend:
-
 ```bash
-cd ai-voice-realtime
-npm test
 npm run check
 ```
 
-Extension:
-
-```bash
-cd chrome-extension
-npm test
-npm run build
-```
+The root gate runs orchestration tests, backend checks, extension tests/build,
+and dashboard tests/typecheck/build. Focused backend iteration can use
+`npm run check --workspace ai-voice-realtime`.
 
 The backend suite covers strict protocol validation, independent mic/tab audio
 routing, request-rate and payload bounds, exact extension-origin enforcement,
@@ -172,3 +324,6 @@ Gemini Live resumption, STT rotation, speech policy, teardown races, and real
 WebSocket isolation. Automated checks do not replace the real Chrome/provider
 acceptance matrix in
 `docs/verification/2026-08-04-gemini-live-voice-acceptance.md`.
+
+The durable semantic-history handoff is documented in
+[`../docs/semantic-history-integration.md`](../docs/semantic-history-integration.md).

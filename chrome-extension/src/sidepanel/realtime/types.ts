@@ -1,3 +1,5 @@
+import { isUuid } from "../../lib/uuid.ts";
+
 export type RealtimeStatus =
   | "idle"
   | "requesting_capture"
@@ -170,6 +172,24 @@ export function descriptionTurnOwnsCompletion(
   return mode === "narration" && currentTurnId === completedTurnId;
 }
 
+export function mergeNarrationTranscript(current: string, incoming: string): string {
+  const left = current.trim();
+  const right = incoming.trim();
+  if (!left) return right;
+  if (!right || left === right || left.endsWith(right)) return left;
+  if (right.startsWith(left)) return right;
+
+  const overlapLimit = Math.min(left.length, right.length);
+  for (let size = overlapLimit; size > 0; size -= 1) {
+    if (left.slice(-size) === right.slice(0, size)) {
+      return `${left}${right.slice(size)}`;
+    }
+  }
+  return /^[,.;:!?)]/.test(right) || /[(]$/.test(left)
+    ? `${left}${right}`
+    : `${left} ${right}`;
+}
+
 export function updateTurnChatMessages(
   messages: RealtimeChatMessage[],
   update: {
@@ -194,7 +214,6 @@ export function updateTurnChatMessages(
 
 export const SUPPORTED_SERVER_MESSAGE_TYPES = Object.freeze([
   "analysis_error",
-  "answer",
   "answer_update",
   "connected",
   "error",
@@ -202,7 +221,6 @@ export const SUPPORTED_SERVER_MESSAGE_TYPES = Object.freeze([
   "model_audio",
   "playback_clear",
   "provider_health",
-  "narration",
   "narration_update",
   "status",
   "status_text",
@@ -218,9 +236,7 @@ export type LiveProviderState = "connecting" | "ready" | "degraded" | "closed";
 type TextServerMessage = {
   type:
     | "analysis_error"
-    | "answer"
     | "error"
-    | "narration"
     | "status_text"
     | "telemetry";
   text?: string;
@@ -248,7 +264,7 @@ export type ServerMessage =
   | TextServerMessage
   | TurnTextServerMessage
   | TranscriptServerMessage
-  | { type: "connected"; protocolVersion: 2; model?: string }
+  | { type: "connected"; protocolVersion: 2; sessionId: string; model?: string }
   | { type: "event"; event?: StreamEvent }
   | {
       type: "model_audio";
@@ -276,8 +292,6 @@ export type ServerMessage =
       suppressed?: boolean;
     };
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const BASE64_PATTERN =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const PCM_MIME_PATTERN = /^audio\/pcm;rate=([1-9][0-9]*)$/;
@@ -310,7 +324,7 @@ function requireString(value: unknown): string {
 }
 
 function requireTurn(value: Record<string, unknown>): void {
-  if (!UUID_PATTERN.test(requireString(value.turnId))) invalidServerMessage();
+  if (!isUuid(value.turnId)) invalidServerMessage();
   if (value.mode !== "answer" && value.mode !== "narration") invalidServerMessage();
 }
 
@@ -372,17 +386,16 @@ export function parseServerMessage(rawText: string): ServerMessage {
 
   switch (value.type) {
     case "analysis_error":
-    case "answer":
     case "error":
-    case "narration":
     case "status_text":
     case "telemetry":
       requireExactKeys(value, ["type"], ["text"]);
       requireOptionalString(value.text);
       return value as ServerMessage;
     case "connected":
-      requireExactKeys(value, ["type", "protocolVersion"], ["model"]);
+      requireExactKeys(value, ["type", "protocolVersion", "sessionId"], ["model"]);
       if (value.protocolVersion !== 2) invalidServerMessage();
+      if (!isUuid(value.sessionId)) invalidServerMessage();
       requireOptionalString(value.model);
       return value as ServerMessage;
     case "event":

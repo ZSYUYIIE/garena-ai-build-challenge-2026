@@ -2,6 +2,7 @@ import { useCallback } from "react";
 
 import { EventTimelineSection } from "./components/EventTimelineSection";
 import { Header } from "./components/Header";
+import { HistoryNavigation } from "./components/HistoryNavigation";
 import { QuestionSection } from "./components/QuestionSection";
 import { VideoDescriptionSection } from "./components/VideoDescriptionSection";
 import {
@@ -65,10 +66,15 @@ function StreamSensePanel() {
         />
       </div>
       <div className="py-3">
+        <HistoryNavigation activeSessionId={session.activeSessionId} />
+      </div>
+      <div className="py-3">
         <VideoDescriptionSection
           description={session.description}
           statusText={session.statusText}
           error={session.error}
+          isRunning={session.isRunning}
+          isSpeaking={session.voiceStatus === "gemini_speaking"}
         />
       </div>
       <div className="py-3">

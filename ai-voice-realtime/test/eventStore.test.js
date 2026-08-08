@@ -38,6 +38,37 @@ test("EventStore records and lists timestamped events", () => {
   }
 });
 
+test("EventStore sends recorded events to an injected semantic context store", async () => {
+  const writes = [];
+  const store = new EventStore({
+    saveContextData: async (event) => writes.push(event),
+  });
+  const sessionId = randomUUID();
+
+  try {
+    const result = store.record(sampleEvent({ sessionId }));
+    await store.drainContext();
+
+    assert.equal(result.status, "recorded");
+    assert.deepEqual(writes, [result.event]);
+  } finally {
+    store.close();
+  }
+});
+
+test("EventStore bounds shutdown waiting for unavailable semantic storage", async () => {
+  const store = new EventStore({
+    saveContextData: () => new Promise(() => {}),
+  });
+
+  try {
+    store.record(sampleEvent());
+    assert.equal(await store.drainContext({ timeoutMs: 5 }), false);
+  } finally {
+    store.close();
+  }
+});
+
 test("EventStore suppresses similar events inside the duplicate window", () => {
   const store = new EventStore();
   const sessionId = randomUUID();

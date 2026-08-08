@@ -15,6 +15,7 @@ import {
   descriptionAfterTurnComplete,
   descriptionTurnOwnsCompletion,
   finishTurnRole,
+  mergeNarrationTranscript,
   settlingTurnAfterComplete,
   speakingTurnAfterPlaybackIdle,
 } from "../src/sidepanel/realtime/types.ts";
@@ -297,4 +298,14 @@ test("settles narration description only for its current turn owner", () => {
   assert.equal(descriptionTurnOwnsCompletion("narration-2", "narration-1", "narration"), false);
   assert.equal(descriptionTurnOwnsCompletion("narration-2", "narration-2", "answer"), false);
   assert.equal(descriptionTurnOwnsCompletion(null, "narration-1", "narration"), false);
+});
+
+test("builds Now describing from the actual streamed audio transcript", () => {
+  let text = mergeNarrationTranscript("", "Three attackers are entering");
+  text = mergeNarrationTranscript(text, "entering the penalty area.");
+  assert.equal(text, "Three attackers are entering the penalty area.");
+  assert.equal(
+    mergeNarrationTranscript(text, "Three attackers are entering the penalty area."),
+    text,
+  );
 });

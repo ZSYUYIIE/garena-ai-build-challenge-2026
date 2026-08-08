@@ -1,16 +1,35 @@
 # StreamSense
 
-StreamSense is a Chrome side-panel extension that watches an authorized browser
-tab, describes meaningful visual changes, builds a timestamped event timeline,
-and lets the user ask Gemini questions by text or push-to-talk voice.
+StreamSense is one local accessibility product with two user surfaces: a Chrome
+side panel for live assistance and a browser dashboard for saved history. The
+side panel watches an explicitly authorized tab, describes meaningful visual
+changes, builds a timestamped event timeline, and lets the user ask questions
+by text or voice. Clicking the toolbar always opens this Live side panel. Its
+**Open Memory Dashboard** action opens the current session's Memory view in a
+normal Chrome tab.
 
-The project has two processes:
+Both surfaces use the same local backend. The extension uses its protocol-v2
+WebSocket for realtime work, while the dashboard uses bounded REST endpoints.
+The backend includes the current session UUID in its validated connection
+acknowledgement, so the extension can hand the exact saved session to Memory.
+This is shared-backend connectivity, not a second realtime client in the
+dashboard.
+
+The dashboard also includes a MongoDB-backed prototype Account route for a
+display name, email, and viewing preferences. The browser stores only the
+opaque account UUID; this is not password-based production authentication. It
+does not alter the extension's capture, speech recognition, Gemini, narration,
+interruption, or playback pipeline.
 
 ```text
-Chrome extension
-  ├─ JPEG screen frames ────────────────┐
-  ├─ user microphone PCM ───────────────┼─> Express/WebSocket backend ─> Gemini
-  └─ captured-tab PCM ─> backend ─> Cloud Speech-to-Text V2
+Authorized browser tab
+  -> Chrome side panel -- frames + separate mic/tab PCM --> backend
+  -> backend --> Gemini visual and Live models
+  -> backend --> Cloud Speech-to-Text V2 for tab commentary
+  -> backend --> SQLite evidence + in-memory history projection
+
+Side panel -- Open Memory Dashboard --> Memory dashboard -- REST --> backend
+Memory dashboard -- account REST --> backend --> MongoDB profiles
 ```
 
 Microphone audio and captured-tab audio remain separate. Only microphone audio
@@ -23,7 +42,31 @@ context and is never presented as the user's speech.
 | --- | --- |
 | `chrome-extension/` | Manifest V3 extension, side-panel UI, tab capture, push-to-talk, and Gemini audio playback. |
 | `ai-voice-realtime/` | Express and WebSocket backend, Gemini Interactions/Live clients, Cloud Speech-to-Text, and event storage. |
+| `session-dashboard/` | Accessible React dashboard for previous sessions, timeline search, and context exploration. |
 | `docs/` | Design notes and verification material. |
+
+The repository root is an npm workspace and the supported starting point for
+installing, developing, building, demonstrating, and checking all three
+packages.
+
+## Architecture and contributor guidance
+
+[`docs/architecture.md`](docs/architecture.md) is the current cross-package
+architecture and product-direction reference. [`AGENTS.md`](AGENTS.md) defines
+the product boundaries, safety rules, Git workflow, and verification contract
+that AI coding agents and human reviewers should enforce. Tool-specific entry
+points—[`CLAUDE.md`](CLAUDE.md), [`GEMINI.md`](GEMINI.md), and
+[`.github/copilot-instructions.md`](.github/copilot-instructions.md)—direct
+other assistants to the same source of truth instead of duplicating rules.
+
+Current product direction keeps the extension focused on live assistance and
+the dashboard focused on memory. The dashboard now uses one accessible visual
+theme, MongoDB persists prototype profiles, and session history remains behind
+an in-memory repository boundary. Near-term ideas are a judge-ready sports or
+esports terminology pack, durable per-user history after production identity,
+multilingual narration, explicit retention/deletion controls, and a
+deterministic provider-failure demo path. These ideas are tracked as future
+work—not as implemented features—in the architecture document.
 
 ## Prerequisites
 
@@ -32,22 +75,31 @@ context and is never presented as the user's speech.
 - A Gemini API key with access to the configured vision and Live models.
 - A Google Cloud project with billing configured for Speech-to-Text V2.
 - The [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`).
-- MongoDB and Redis servers accessible remotely or running locally (view section on configuring the backend environment).
+- A MongoDB Atlas cluster for dashboard profiles and semantic event retrieval.
+  Docker Desktop is optional when an offline local store is preferred.
+
+The Gemini and Google Cloud requirements apply to the realtime extension. The
+deterministic session-dashboard workflow below requires only Node.js and npm.
 
 ## 1. Install dependencies
 
-From the repository root:
+From the repository root (`D:\Work\garena-ai-build-challenge-2026` on the
+example Windows checkout):
 
 ```bash
-cd ai-voice-realtime
-npm install
-
-cd ../chrome-extension
 npm install
 npm run build
 ```
 
-The extension build is written to `chrome-extension/dist`.
+On Windows PowerShell, `npm.cmd install` and `npm.cmd run build` are equivalent
+if the `npm` shim is unavailable. The workspace install uses the root lockfile.
+The build writes the unpacked extension to `chrome-extension/dist` and the
+dashboard assets to `session-dashboard/dist`.
+
+The root `.npmrc` currently sets `ignore-scripts=true` because the pinned
+dependencies used by this prototype include the required runtime artifacts and
+do not need native install hooks. Review that setting before adding a package
+that genuinely requires an `install` or `postinstall` script.
 
 ## 2. Load the Chrome extension
 
@@ -170,8 +222,7 @@ service-account JSON file or the generated ADC file in this repository.
 ## 4. Configure the backend environment
 
 ```bash
-cd ai-voice-realtime
-cp .env.example .env
+cp ai-voice-realtime/.env.example ai-voice-realtime/.env
 ```
 
 Edit `ai-voice-realtime/.env`:
@@ -187,12 +238,13 @@ GOOGLE_CLOUD_SPEECH_LOCATION=us
 
 STREAMSENSE_EXTENSION_ID=the_exact_32_character_id_from_chrome
 STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=false
+STREAMSENSE_HISTORY_MODE=memory
+
+MONGODB_URI=mongodb+srv://YOUR_ATLAS_DB_USER:YOUR_URL_ENCODED_PASSWORD@YOUR_ATLAS_CLUSTER_HOSTNAME/?retryWrites=true&w=majority&appName=StreamSense
+MONGODB_DB_NAME=streamsense
 
 HOST=127.0.0.1
 PORT=8000
-
-MONGODB_URI=mongodb://username:password@localhost:27017/?directConnection=true
-MONGODB_NAME=streamsense
 ```
 
 `STREAMSENSE_EXTENSION_ID` must be the actual ID from `chrome://extensions`;
@@ -204,28 +256,40 @@ For isolated local debugging, `STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=true`
 temporarily relaxes the extension-origin check. Do not use that setting for a
 shared or production backend.
 
-**Note**: You can run MongoDB locally via Docker or install them directly. If you use Docker, you can start the services with:
+MongoDB Atlas stores prototype profiles and the session-scoped semantic event
+index used to add earlier moments to Live prompts. In Atlas, create a dedicated
+database user (separate from the MongoDB Cloud sign-in), allow only the current
+backend operator IP, and copy the Node.js SRV value from **Connect > Drivers**.
+Replace every URI placeholder, URL-encode special characters in the database
+password, and keep the populated URI only in the ignored backend `.env` or a
+deployment secret manager. Do not use an unrestricted network access rule.
+For a least-privilege teammate setup, use the
+[Atlas handoff guide](docs/mongodb-atlas-handoff.md); StreamSense has no
+separate MongoDB key, and teammates must create their own database user and URI.
 
-```bash
-docker compose up
-```
-create a directory named `data/mongodb_data` in the `ai-voice-realtime` folder to persist MongoDB data.
-
+For offline development only, start the included loopback service with
+`docker compose up -d mongodb` and use
+`MONGODB_URI=mongodb://localhost:27017`. Its `streamsense-mongodb` Docker volume
+keeps prototype account records across container restarts. If `MONGODB_URI` is
+omitted or unavailable, the rest of StreamSense still starts, but account
+endpoints return `503` instead of falling back to browser-only profile storage.
 
 ## 5. Start StreamSense
 
-Keep the backend running in a terminal:
+For normal development, run one command from the repository root:
 
 ```bash
-cd ai-voice-realtime
-npm start
+npm run dev
 ```
 
-Expected output:
-
-```text
-Server running on http://127.0.0.1:8000
-```
+This supervised profile starts exactly one development-only, demo-seeded
+in-memory backend on port `8000`, the extension development process on `5173`,
+and the dashboard on `5174`. The seed provides one named Sports, Esports,
+Concert, Product launch, and Creator livestream session with five moments each,
+so every semantic lane is useful before the first live capture. New extension
+sessions can appear alongside those examples. It checks
+that all required ports are free before starting. Press Ctrl+C once to stop the
+process group.
 
 Then in Chrome:
 
@@ -239,6 +303,19 @@ Then in Chrome:
    **Allow microphone**, then return to the captured tab.
 5. Let the video play. Meaningful visual changes appear in the timeline and may
    be narrated according to the selected narration level.
+6. Select **Open Memory Dashboard** inside the side panel. The toolbar icon
+   itself always opens the side panel and never bypasses it to open Memory.
+   While a session is active, the extension opens
+   `http://127.0.0.1:5174/dashboard/sessions/{sessionId}?source=extension`.
+   Without an active session it opens
+   `http://127.0.0.1:5174/dashboard/?source=extension` instead.
+
+An active-session page opened from the extension refetches its session,
+timeline, and relationship REST resources every two seconds while that page is
+open. This bounded polling helps newly archived moments appear, but it is not a
+WebSocket, push channel, or guaranteed live subscription. Live capture,
+narration, questions, and interruption controls remain in the extension side
+panel.
 
 If you switch to another tab, click the toolbar icon on that new tab to
 authorize it before starting again.
@@ -256,44 +333,178 @@ hears the user rather than the computer. On release it returns to 30% while
 Gemini replies, then to 100% after playback finishes. Muting playback does not
 stop screen capture or the separate captured-tab transcription stream.
 
+## Grounded narration and timeline behavior
+
+Automatic narration now follows one fail-closed path:
+
+1. Gemini Interactions analyzes the current admitted frame without receiving a
+   previous generated description or captured-tab transcript as visual
+   evidence.
+2. StreamSense rejects self-descriptions, inferred user actions, and results
+   from a frame that has already been superseded.
+3. The accepted moment must be recorded and published to the current-session
+   timeline before it can be offered for speech. If local event persistence
+   fails, the panel shows a warning and skips that narration.
+4. Captured-tab transcript is compared only after the visual fact is grounded,
+   so it may suppress a redundant description but cannot create one.
+
+The panel builds its displayed description from Gemini Live's turn-bound output
+transcript, which follows the audio actually generated, rather than displaying
+the earlier visual-analysis sentence as if it had already been spoken. The
+label reads **Now describing** only during model playback, **Latest
+description** while the session is otherwise running, and **Video description**
+when stopped. Reload the unpacked extension after rebuilding; legacy unowned
+`answer` and `narration` WebSocket messages are rejected by the current panel.
+
+## Memory dashboard development without Speech-to-Text
+
+The full `npm run dev` profile and the dashboard-only profile both load the
+same deterministic demo history. To browse it without opening the extension or
+creating a realtime WebSocket session, run:
+
+```bash
+npm run dev:dashboard
+```
+
+Open `http://127.0.0.1:5174/dashboard/`. Vite serves the React application on
+port `5174` and proxies `/api` to the one demo backend on port `8000`.
+
+`start:dashboard-demo` is an explicit development-only mode used by both root
+profiles. It seeds a fresh in-memory repository every time the backend starts
+and is refused when `NODE_ENV=production`. `npm run dev:realtime`, normal
+`npm start`, and production startup retain an empty in-memory history
+repository. Neither history mode is durable: dashboard sessions are lost at
+process restart. Account profiles persist in MongoDB. Accepted event evidence
+still writes to SQLite and is also copied to MongoDB on a best-effort basis with
+768-dimensional embeddings for session-scoped Live prompt retrieval. Durable
+per-user dashboard history, Redis current context, and production identity and
+retention controls remain separate integration work.
+
+Memory now leads with an optional Three.js relationship map before the recent
+session list. The former `/dashboard/explore` URL is a compatibility redirect:
+a valid `sessionId` goes to that session's `#relationships` section, otherwise
+it returns to the Memory overview. Relationship exploration is therefore part
+of Memory and each session, rather than a separate product area.
+
+The map renders every session, event, entity, and topic as a sphere. Color
+groups content into labeled entertainment lanes; visual role and size provide
+non-color cues. One derived StreamSense Memory root is largest, followed by
+smaller domain roots, double-halo sessions, events, and context spheres. Event
+size represents supplied importance, and entity/topic size represents supplied
+event connections. The client never invents a missing relationship.
+
+A session remains available in the chronological session list immediately
+after capture starts, but it enters the relationship graph only after its first
+event is archived. This avoids rendering generic empty session spheres that
+have no useful relationship to inspect.
+
+The unfiltered overview always reserves the five canonical entertainment lanes
+and uses three semantic dimensions: X is normalized stream progress, Y is
+supplied moment importance, and Z is the entertainment lane. Empty lanes are
+labeled **No saved sessions** and add no fake records. Actual unclassified
+history receives a sixth **Other entertainment** lane. A compact status reports
+sessions, moments, and populated lanes; the full explanation remains available
+to screen readers and in the details below the canvas.
+Structural Memory/domain/session roots sit before the measured event region and
+do not receive fake numeric values. Context sits near the weighted centroid of
+its connected events; cross-domain context falls between the lanes it connects.
+Explicitly domain-filtered and session-scoped single-lane maps switch to the
+honest progress × importance 2D projection and disable orbit. Buttons restore
+named semantic comparisons,
+zoom, and framing instead of raw axis directions. Priority-based label collision
+handling keeps dense selections readable without hiding the DOM relationship
+list. The labeled-node selector and semantic details sit below the full-width
+canvas, session pages include complete readable lists, and WebGL failure
+preserves those alternatives.
+
+The Memory dashboard imports the extension's actual design tokens and shared
+button, input, label, and select primitives. Wider-page layout and WebGL styles
+remain dashboard-specific; the extension source and its visual design are not
+modified.
+
+Dashboard shortcuts have visible equivalents: `Ctrl+K` opens and focuses
+Memory search; `Alt+H` opens Memory; `Alt+G` focuses the graph selector;
+and `Alt+/` opens shortcut help (`Escape` closes it). The dashboard uses one
+shared accessible theme rather than a separate visual mode. It also provides a
+skip link, visible focus, route-focus management, OS forced-colors support, and
+reduced-motion behavior that disables camera easing and minimizes CSS motion.
+
+For an inspectable copy of the deterministic fixture, run the package-scoped
+utility:
+
+```bash
+npm run seed:dashboard --workspace ai-voice-realtime
+```
+
+That command writes the Git-ignored
+`ai-voice-realtime/data/dashboard-demo.json`. It does not start the backend,
+populate a running process, or change what `npm start` loads.
+
+### Serve a built one-backend demo locally
+
+```bash
+npm run demo
+```
+
+`demo` first builds the extension and dashboard, then starts exactly one
+development-only backend with deterministic history. Open
+`http://127.0.0.1:8000/dashboard/`; load `chrome-extension/dist` for the Live
+surface. There is no separate Vite server in this profile. Dashboard-only use
+does not start provider sessions, but this workflow is not evidence that
+physical Chrome capture, Gemini, or Cloud Speech-to-Text works in the current
+environment.
+
 ## Development
 
-Run the extension build in watch mode:
+Run commands from the repository root:
 
-```bash
-cd chrome-extension
-npm run dev
-```
+| Command | Processes and purpose |
+| --- | --- |
+| `npm run dev` | Demo-seeded development backend `8000` + Live extension `5173` + Memory dashboard `5174`. |
+| `npm run dev:realtime` | Empty-history backend `8000` + Live extension `5173`; omits the dashboard Vite process. |
+| `npm run dev:dashboard` | Demo-history backend `8000` + Memory dashboard `5174`; no extension process. |
+| `npm run build` | Builds `chrome-extension/dist` and `session-dashboard/dist`. |
+| `npm run demo` | Builds both surfaces, then serves the deterministic dashboard through one backend on `8000`. |
+| `npm run check` | Runs orchestration tests, backend checks, extension tests/build, and dashboard tests/typecheck/build. |
 
-For automatic backend reloads:
+Optional offline MongoDB helper commands:
 
-```bash
-cd ai-voice-realtime
-npm run dev
-```
+| Command | Purpose |
+| --- | --- |
+| `docker compose up -d mongodb` | Start the optional loopback-only profile database. |
+| `docker compose stop mongodb` | Stop it without deleting account data. |
 
-Reload the extension in `chrome://extensions` after extension changes. Restart
-the backend after changing `.env`.
-
-Run all project checks:
-
-```bash
-cd ai-voice-realtime
-npm test
-npm run check
-
-cd ../chrome-extension
-npm test
-npm run build
-```
+Reload the unpacked extension in `chrome://extensions` after extension build
+changes. Restart the relevant profile after changing `ai-voice-realtime/.env`.
+The dev runner uses strict ports and exits if any required port is already in
+use; do not start a second backend beside it.
 
 ## Troubleshooting
 
 ### Cannot reach StreamSense at 127.0.0.1:8000
 
 The backend is not running, exited after startup, or is using a different port.
-Run `npm start` in `ai-voice-realtime` and keep that terminal open. The extension
-manifest and default WebSocket URL expect port `8000`.
+Run the appropriate root development command and keep that terminal open. The
+extension manifest and default WebSocket URL expect port `8000`.
+
+### Account storage is unavailable
+
+For Atlas, confirm the dedicated database user credentials, narrowly scoped
+network access entry, and copied Drivers SRV value; then set `MONGODB_URI` and
+`MONGODB_DB_NAME` in `ai-voice-realtime/.env` and restart the development
+profile. For the optional offline store, run `docker compose up -d mongodb`
+and use `mongodb://localhost:27017`. The account UI does not silently write
+names or emails to local storage.
+
+### Open Memory Dashboard opens a 404 page
+
+Use `npm run dev` when developing both surfaces; the full profile points the
+side panel's Memory Dashboard action to the dashboard Vite server on port
+`5174`. The `dev:realtime` profile deliberately omits that server and falls
+back to the
+backend `/dashboard/` URL, which exists only when `session-dashboard/dist` has
+been built. Run `npm run build`, `npm run demo`, or the full `npm run dev`
+profile as appropriate.
 
 ### Authorize this tab cannot be selected
 
@@ -355,10 +566,21 @@ Reload the current extension build. The chat is a scrollable area above the
 fixed input row. Gemini Live output transcription must also be available for the
 configured Live model/session.
 
+### Narration is skipped and the timeline reports a persistence warning
+
+StreamSense intentionally does not speak an automatic visual description when
+the same moment could not be written to the current-session timeline. Check the
+backend terminal for a sanitized history warning, restart the local backend if
+its data directory is unavailable, and try the moment again.
+
 ## Security and privacy
 
 - `.env`, local ADC, event databases, build output, and `node_modules` are
   ignored by Git.
+- MongoDB stores prototype display names, normalized email addresses,
+  entertainment/narration preferences, opaque UUIDs, and timestamps. The
+  browser stores only the UUID. No passwords or provider credentials are
+  collected by this profile flow.
 - Raw microphone and captured-tab audio are streamed for processing and are not
   stored by StreamSense.
 - Captured-tab transcript context is bounded in memory and cleared with the
@@ -370,4 +592,8 @@ configured Live model/session.
 
 More implementation detail is available in
 [`ai-voice-realtime/README.md`](ai-voice-realtime/README.md) and
-[`chrome-extension/README.md`](chrome-extension/README.md).
+[`chrome-extension/README.md`](chrome-extension/README.md). Dashboard-specific
+contracts are documented in
+[`session-dashboard/README.md`](session-dashboard/README.md),
+[`docs/context-graph-api.md`](docs/context-graph-api.md), and
+[`docs/semantic-history-integration.md`](docs/semantic-history-integration.md).

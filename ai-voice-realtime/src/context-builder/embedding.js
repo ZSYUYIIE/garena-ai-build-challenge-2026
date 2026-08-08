@@ -1,9 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
-import dotenv from "dotenv";
 
-dotenv.config();
-
-const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+let ai;
+let activeApiKey;
 
 /**
  * Generate a 768-dimensional vector embedding for a given text.
@@ -33,7 +31,7 @@ export async function generateQueryEmbedding(query) {
  * @returns {Promise<number[]>} A promise that resolves to an array of 768 floats representing the embedding.
  */
 async function generateEmbedding(text, taskType = "RETRIEVAL_DOCUMENT") {
-  const response = await ai.models.embedContent({
+  const response = await getClient().models.embedContent({
     model: "gemini-embedding-001",
     contents: text,
     config: {
@@ -43,4 +41,18 @@ async function generateEmbedding(text, taskType = "RETRIEVAL_DOCUMENT") {
   });
 
   return response.embeddings[0].values;
+}
+
+function getClient() {
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "GOOGLE_API_KEY is required for semantic context embeddings.",
+    );
+  }
+  if (!ai || activeApiKey !== apiKey) {
+    ai = new GoogleGenAI({ apiKey });
+    activeApiKey = apiKey;
+  }
+  return ai;
 }

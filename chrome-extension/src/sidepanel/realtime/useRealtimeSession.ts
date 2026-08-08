@@ -10,6 +10,7 @@ import {
   isMicrophonePermissionGrantedMessage,
   microphonePermissionPageUrl,
 } from "../../services/microphonePermission";
+import { configuredBackendWebSocketUrl } from "../../services/backendUrls";
 import type { NarrationMode } from "../context/ConfigurationContext";
 import {
   calculateFrameDimensions,
@@ -55,6 +56,7 @@ import {
   descriptionAfterTurnComplete,
   descriptionTurnOwnsCompletion,
   finishTurnRole,
+  mergeNarrationTranscript,
   parseServerMessage,
   settlingTurnAfterComplete,
   speakingTurnAfterPlaybackIdle,
@@ -74,7 +76,6 @@ const VIDEO_FRAME_INTERVAL_MS = 1_000;
 const FORCED_FRAME_DEADLINE_MS = 150;
 const MAX_PENDING_MICROPHONE_BYTES = 32 * 1024;
 const LATE_TRANSCRIPT_SETTLEMENT_MS = 15_000;
-const DEFAULT_WEBSOCKET_URL = "ws://127.0.0.1:8000/ws";
 
 type PendingPcm = { pcm: Int16Array; timestampMs: number };
 type VoiceTurn = {
@@ -108,6 +109,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>("off");
   const [tabContextStatus, setTabContextStatus] = useState<"absent" | "connecting" | "ready" | "degraded">("absent");
   const [liveProviderState, setLiveProviderState] = useState<LiveProviderState>("closed");
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   const statusRef = useRef(status);
   statusRef.current = status;
@@ -140,6 +142,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const settlingTurnRef = useRef<TurnRoleState | null>(null);
   const speakingTurnIdRef = useRef<string | null>(null);
   const descriptionTurnIdRef = useRef<string | null>(null);
+  const narrationTranscriptRef = useRef<{ turnId: string; text: string } | null>(null);
   const microphoneTurnOwnershipRef = useRef<MicrophoneTurnOwnership<VoiceTurn> | null>(null);
   const retireMicrophoneTurnRef = useRef<RetireMicrophoneTurn | null>(null);
   const nextVoiceTurnIdRef = useRef<string | null>(null);
@@ -180,9 +183,11 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     settlingTurnRef.current = null;
     speakingTurnIdRef.current = null;
     descriptionTurnIdRef.current = null;
+    narrationTranscriptRef.current = null;
     microphoneTurnOwnershipRef.current?.clear();
     microphoneTurnOwnershipRef.current = null;
     retireMicrophoneTurnRef.current = null;
+    setActiveSessionId(null);
     publishLiveProviderState("closed");
     publishVoiceStatus({
       sessionActive: false,
@@ -542,6 +547,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     setStatus("requesting_capture");
     setStatusText("Capturing the active tab without the StreamSense panel.");
     setError(null);
+    setActiveSessionId(null);
     setEvents([]);
     setMessages([]);
     setDescription("Waiting for the first description...");
@@ -605,7 +611,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       if (!isCurrent()) { video.pause(); video.srcObject = null; for (const track of mediaStream.getTracks()) track.stop(); return; }
       captureStartedAtRef.current = performance.now();
       capturedTabIdRef.current = targetSnapshot.target.tabId;
-      const websocket = new WebSocket(import.meta.env.VITE_STREAMSENSE_WS_URL || DEFAULT_WEBSOCKET_URL);
+      const websocket = new WebSocket(configuredBackendWebSocketUrl());
       sessionWebsocket = websocket;
       websocketRef.current = websocket;
       resourceLifecycle.register(() => {
@@ -635,6 +641,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         switch (message.type) {
           case "connected":
             setStatus("connected"); setStatusText(`Connected to ${message.model ?? "Gemini"}.`); setError(null);
+            setActiveSessionId(message.sessionId);
             publishLiveProviderState("connecting");
             publishVoiceStatus({ helloAccepted: true });
             break;
@@ -707,6 +714,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
               && (descriptionTurnIdRef.current === null || descriptionTurnIdRef.current === message.turnId)
             ) {
               descriptionTurnIdRef.current = null;
+              narrationTranscriptRef.current = null;
               setDescription("");
             }
             break;
@@ -715,22 +723,20 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             settleTurnComplete(message);
             break;
           case "status_text": if (message.text) setStatusText(message.text); break;
-          case "narration":
-            if (message.text) {
-              descriptionTurnIdRef.current = null;
-              setDescription(message.text);
-            }
-            break;
           case "narration_update":
             if (message.text) {
               descriptionTurnIdRef.current = message.turnId;
-              setDescription(message.text);
+              const current = narrationTranscriptRef.current?.turnId === message.turnId
+                ? narrationTranscriptRef.current.text
+                : "";
+              const text = mergeNarrationTranscript(current, message.text);
+              narrationTranscriptRef.current = { turnId: message.turnId, text };
+              setDescription(text);
             }
             break;
           case "event": if (message.event) setEvents((current) => current.some((item) => item.id === message.event!.id) ? current : [message.event!, ...current].slice(0, 100)); break;
           case "error": setError(message.text ?? "The realtime session reported an error."); setStatus("error"); break;
           case "analysis_error": setError(message.text ?? "The current frame could not be analyzed."); break;
-          case "answer":
           case "status":
           case "telemetry":
           case "turn_started":
@@ -898,7 +904,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
 
   return {
     status, statusText, error, description, events, messages, voiceStatus, tabContextStatus,
-    microphoneState,
+    microphoneState, activeSessionId,
     isRunning: status === "connecting" || status === "connected",
     isBusy: status === "requesting_capture",
     canStart: captureTarget.canStart,

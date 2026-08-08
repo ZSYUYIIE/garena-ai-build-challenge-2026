@@ -1,8 +1,4 @@
-import dotenv from "dotenv";
 import { Collection, MongoClient } from "mongodb";
-import { exit } from "node:process";
-
-dotenv.config();
 
 /** @type {MongoClient | undefined} */
 let mongoClient;
@@ -17,12 +13,12 @@ export async function getMongoClient() {
     mongoClient = new MongoClient(mongoUri);
 
     await mongoClient.connect();
-    console.log("Connected to MongoDB at:", mongoUri);
+    console.log("Connected to MongoDB context storage.");
   }
 
   if (!vectorIndexInitPromise) {
     vectorIndexInitPromise = initVectorIndex(
-      mongoClient.db(process.env.MONGODB_NAME || "streamsense"),
+      mongoClient.db(process.env.MONGODB_DB_NAME || "streamsense"),
     );
   }
 
@@ -32,14 +28,20 @@ export async function getMongoClient() {
 
 export async function getMongodb() {
   const client = await getMongoClient();
-  return client.db(process.env.MONGODB_NAME || "streamsense");
+  return client.db(process.env.MONGODB_DB_NAME || "streamsense");
+}
+
+export async function closeMongoClient() {
+  const client = mongoClient;
+  mongoClient = undefined;
+  vectorIndexInitPromise = undefined;
+  await client?.close();
 }
 
 async function initVectorIndex(db) {
   await db.createCollection("events").catch((error) => {
     if (error.codeName !== "NamespaceExists") {
-      console.error("Failed to create MongoDB collection 'events':", error);
-      exit(1);
+      throw error;
     }
   });
   /** @type {Collection} */

@@ -20,6 +20,8 @@ test("server entrypoint reports its actual ephemeral port", async (t) => {
       GOOGLE_API_KEY: "test-key",
       GEMINI_VISION_MODEL: "test-model",
       EVENT_DB_PATH: ":memory:",
+      MONGODB_URI: "",
+      MONGODB_DB_NAME: "",
       HOST: "127.0.0.1",
       PORT: "0",
     },
@@ -41,6 +43,9 @@ test("server shutdown awaits session cleanup before closing the event store", as
   const runtime = createStreamSenseServer({
     extensionId: "abcdefghijklmnopabcdefghijklmnop",
     eventStore,
+    closeContextStore() {
+      events.push("context_store_closed");
+    },
     sessionFactory() {
       return {
         start() {},
@@ -60,7 +65,11 @@ test("server shutdown awaits session cleanup before closing the event store", as
   assert.deepEqual(events, ["session_close_started"]);
   cleanup.resolve();
   await closing;
-  assert.deepEqual(events, ["session_close_started", "event_store_closed"]);
+  assert.deepEqual(events, [
+    "session_close_started",
+    "context_store_closed",
+    "event_store_closed",
+  ]);
 });
 
 test("server retains a browser-closed session until delayed cleanup settles", async () => {
@@ -110,7 +119,7 @@ function readStartupLine(child) {
     let stderr = "";
     const timeout = setTimeout(() => {
       reject(new Error(`Server startup timed out. stderr: ${stderr}`));
-    }, 2_000);
+    }, 5_000);
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");

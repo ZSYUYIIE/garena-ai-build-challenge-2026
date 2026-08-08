@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildNarrationEventCandidate,
+  isDescriptionCoveredByTranscript,
   mergeTranscriptChunk,
   shouldSuppressVisualDescription,
 } from "../src/gemini/transcript.js";
@@ -50,5 +51,22 @@ test("buildNarrationEventCandidate creates an initial scene timeline item", () =
       importance: 0.35,
       confidence: 0.7,
     }
+  );
+});
+
+test("captured speech suppresses only an already-grounded overlapping description", () => {
+  assert.equal(
+    isDescriptionCoveredByTranscript(
+      "Three attackers enter the penalty area.",
+      "The commentator says three attackers are entering the penalty area.",
+    ),
+    true,
+  );
+  assert.equal(
+    isDescriptionCoveredByTranscript(
+      "A Google document is visible.",
+      "Now let us fold the wings of the paper airplane.",
+    ),
+    false,
   );
 });

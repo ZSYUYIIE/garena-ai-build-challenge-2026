@@ -1,10 +1,17 @@
 import express from "express";
+import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 
+import { UnavailableAccountRepository } from "../accounts/accountRepository.js";
+import { createAccountRouter } from "../accounts/accountRouter.js";
 import { EventStore } from "../events/eventStore.js";
+import { HistoryArchiveQueue } from "../history/historyArchiveQueue.js";
+import { createHistoryRouter } from "../history/historyRouter.js";
+import { HistoryService } from "../history/historyService.js";
+import { MemoryHistoryRepository } from "../history/memoryHistoryRepository.js";
 import { MAX_WEBSOCKET_PAYLOAD_BYTES } from "../protocol/browserMessages.js";
 import {
   isAllowedExtensionOrigin,
@@ -24,11 +31,31 @@ export function createStreamSenseServer({
   extensionId = "",
   allowAnyExtensionOrigin = false,
   databasePath = ":memory:",
-  eventStore = new EventStore({ databasePath }),
+  saveContextData,
+  eventStore = new EventStore({ databasePath, saveContextData }),
+  accountRepository = new UnavailableAccountRepository(),
+  historyRepository,
+  historyService,
+  historyArchive,
+  onHistoryError = () => {},
+  semanticHistoryService,
+  getPromptContext = async () => [],
+  closeContextStore = async () => {},
   sessionFactory,
   sessionOptions = {},
   staticDirectory = path.join(projectDirectory, "static"),
+  dashboardDirectory = path.resolve(projectDirectory, "../session-dashboard/dist"),
 } = {}) {
+  const activeHistoryRepository =
+    historyRepository ?? historyService?.repository ?? new MemoryHistoryRepository();
+  const activeHistoryService = historyService ?? new HistoryService({
+    repository: activeHistoryRepository,
+    semanticHistoryService,
+  });
+  const activeHistoryArchive = historyArchive ?? new HistoryArchiveQueue({
+    historyService: activeHistoryService,
+    onError: onHistoryError,
+  });
   const createSession =
     sessionFactory ??
     ((browser, sessionEventStore) =>
@@ -38,6 +65,8 @@ export function createStreamSenseServer({
         liveModel,
         speechProjectId,
         speechLocation,
+        historyArchive: activeHistoryArchive,
+        getPromptContext,
         ...sessionOptions,
       }));
 
@@ -51,6 +80,18 @@ export function createStreamSenseServer({
   const sessionClosures = new WeakMap();
   let closing = false;
 
+  app.use("/api/accounts", createAccountRouter({ accountRepository }));
+  app.use("/api", createHistoryRouter({ historyService: activeHistoryService }));
+  const dashboardIndex = path.join(dashboardDirectory, "index.html");
+  if (fs.existsSync(dashboardIndex)) {
+    app.get(/^\/dashboard$/, (_request, response) => {
+      response.redirect(308, "/dashboard/");
+    });
+    app.use("/dashboard", express.static(dashboardDirectory));
+    app.get("/dashboard/*", (_request, response) => {
+      response.sendFile(dashboardIndex);
+    });
+  }
   app.use("/static", express.static(staticDirectory));
   app.get("/", (_request, response) => {
     response.sendFile(path.join(staticDirectory, "index.html"));
@@ -157,6 +198,16 @@ export function createStreamSenseServer({
         if (browser.readyState !== WebSocket.CLOSED) browser.terminate();
       }
       await Promise.allSettled([closeWebSocketServer(browserWss), closeHttpServer(httpServer)]);
+      const historyDrained = activeHistoryArchive.drain
+        ? await Promise.resolve(activeHistoryArchive.drain({ timeoutMs: 2_000 })).catch(() => false)
+        : true;
+      // Do not close a repository underneath a still-running off-path archive.
+      if (historyDrained) {
+        await Promise.resolve(activeHistoryService.close?.()).catch(() => {});
+      }
+      await Promise.resolve(accountRepository.close?.()).catch(() => {});
+      await Promise.resolve(eventStore.drainContext?.()).catch(() => {});
+      await Promise.resolve(closeContextStore()).catch(() => {});
       eventStore.close();
     })();
     return closePromise;
@@ -167,6 +218,10 @@ export function createStreamSenseServer({
     httpServer,
     browserWss,
     eventStore,
+    accountRepository,
+    historyRepository: activeHistoryRepository,
+    historyService: activeHistoryService,
+    historyArchive: activeHistoryArchive,
     listen,
     close,
   };

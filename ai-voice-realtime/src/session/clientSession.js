@@ -12,7 +12,6 @@ import { SessionRateLimiter } from "../protocol/sessionRateLimiter.js";
 import { SpeechPolicy } from "./speechPolicy.js";
 import { GoogleSpeechTranscriber } from "../stt/googleSpeechTranscriber.js";
 import { TabTranscriptBuffer } from "../transcript/tabTranscriptBuffer.js";
-import { getContextData } from "../context-builder/contextstore.js";
 
 const OUTPUT_BUFFER_LIMIT_BYTES = 256 * 1024;
 const LIVE_FRAME_INTERVAL_MS = 1_000;
@@ -53,6 +52,7 @@ function safeProviderState(value) {
  * @param {SpeechPolicy} options.speechPolicy - Speech narration policy
  * @param {Function} options.liveSessionFactory - GeminiLiveSession factory
  * @param {Function} options.transcriberFactory - Speech transcriber factory
+ * @param {Function} options.getPromptContext - Session-scoped semantic context lookup.
  * @param {Function} options.onEmbeddingRetrieved - Hook called when embeddings are retrieved. Called with {text: string, matches: Array} after embedding search completes.
  */
 export class ClientSession {
@@ -75,7 +75,9 @@ export class ClientSession {
       speechPolicy,
       liveSessionFactory,
       transcriberFactory,
+      getPromptContext = async () => [],
       onEmbeddingRetrieved,
+      historyArchive,
     } = {},
   ) {
     this.browser = browser;
@@ -90,6 +92,7 @@ export class ClientSession {
     this.timers = timers;
     this.rateLimiter = rateLimiter;
     this.audioSequenceGuard = audioSequenceGuard;
+    this.getPromptContext = getPromptContext;
     this.onEmbeddingRetrieved = onEmbeddingRetrieved;
     this.sessionId = randomUUID();
     this.sessionStartedAt = now();
@@ -108,6 +111,7 @@ export class ClientSession {
       liveSessionFactory ?? ((options) => new GeminiLiveSession(options));
     this.transcriberFactory =
       transcriberFactory ?? ((options) => new GoogleSpeechTranscriber(options));
+    this.historyArchive = historyArchive;
 
     this.helloReceived = false;
     this.initialTabAudioState = null;
@@ -250,9 +254,18 @@ export class ClientSession {
     this.initialTabAudioState = message.tabAudioState;
     this.tabAudioState = message.tabAudioState;
     this.microphoneState = message.microphoneState;
+    this.enqueueHistory("startSession", {
+      sessionId: this.sessionId,
+      startedAt: new Date(this.sessionStartedAt).toISOString(),
+      title: "StreamSense session",
+      domain: "unknown",
+      sourceLabel: "Authorized browser tab",
+      dataOrigin: "realtime",
+    });
     this.sendBrowser({
       type: "connected",
       protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
       model: this.liveModel,
     });
     this.sendBrowser({ type: "status", mode: "narration" });
@@ -278,7 +291,7 @@ export class ClientSession {
         this.handleLiveMessage({ type: "playback_clear", ...event }),
       onHealth: (event) => this.handleLiveMessage({ type: "health", ...event }),
       getPromptContext: async ({ text }) => {
-        const matches = await getContextData(this.sessionId, text, 5);
+        const matches = await this.getPromptContext(this.sessionId, text, 5);
         if (this.onEmbeddingRetrieved) {
           try {
             this.onEmbeddingRetrieved({ text, matches });
@@ -573,13 +586,6 @@ export class ClientSession {
         try {
           this.live.speakNarration?.(turnId, action.candidate.description);
           this.activeSpeechTurn = turn;
-          this.sendBrowser({
-            type: "narration_update",
-            turnId,
-            mode: "narration",
-            text: action.candidate.description,
-            finished: false,
-          });
           this.applySpeechActions(
             this.speechPolicy.markNarrationStarted?.(
               turnId,
@@ -794,7 +800,6 @@ export class ClientSession {
         frame: snapshot.frame,
         initial,
         narrationLevel: this.narrationLevel,
-        previousDescription: this.lastGroundedDescription,
         priorVisibleStates: this.visibleStateCache.list(
           this.elapsedMilliseconds,
         ),
@@ -808,6 +813,8 @@ export class ClientSession {
         initial,
         offerCandidate:
           current &&
+          this.frameMatchesSnapshot(snapshot) &&
+          !this.pendingAtomicNarration &&
           record.userTurnEpoch === this.userTurnEpoch &&
           !this.activeSpeechTurn,
       });
@@ -890,51 +897,76 @@ export class ClientSession {
       });
       return;
     }
-    const cacheMayAdvance = this.visibleStateCache.observe(
-      snapshot.frameSequence,
-    );
-    if (analysis.visibleState && cacheMayAdvance) {
-      this.visibleStateCache.update(
-        analysis.visibleState,
-        snapshot.acceptedAtMs,
-        snapshot.frameSequence,
-      );
-    }
-    if (analysis.event)
-      this.recordVisionEvent(analysis.event, snapshot.timestampSeconds);
-    else if (
-      analysis.shouldNarrate &&
+    if (
       analysis.description &&
-      !shouldSuppressVisualDescription(analysis.description)
+      shouldSuppressVisualDescription(analysis.description)
     ) {
-      this.recordNarrationEvent(
+      this.sendBrowser({
+        type: "telemetry",
+        text: "visual analysis suppressed: captured StreamSense or inferred user interaction",
+      });
+      return;
+    }
+    let persistenceStatus = "not_required";
+    if (analysis.event) {
+      persistenceStatus = this.recordVisionEvent(
+        analysis.event,
+        snapshot.timestampSeconds,
+      );
+      if (
+        persistenceStatus === "suppressed"
+        && analysis.shouldNarrate
+        && analysis.description
+      ) {
+        persistenceStatus = this.recordNarrationEvent(
+          analysis.description,
+          initial,
+          snapshot.timestampSeconds,
+        );
+      }
+    } else if (analysis.shouldNarrate && analysis.description) {
+      persistenceStatus = this.recordNarrationEvent(
         analysis.description,
         initial,
         snapshot.timestampSeconds,
       );
     }
-    this.lastGroundedDescription =
-      analysis.description ||
-      analysis.event?.description ||
-      analysis.semanticKey ||
-      "";
-    if (
-      snapshot.frameSequence > this.groundedSemanticState.observedFrameSequence
-    ) {
-      const changed =
-        this.groundedSemanticState.semanticKey !== analysis.semanticKey;
-      this.groundedSemanticState = {
-        semanticKey: analysis.semanticKey,
-        originAcceptedAtMs: changed
-          ? analysis.semanticKey
-            ? snapshot.acceptedAtMs
-            : null
-          : this.groundedSemanticState.originAcceptedAtMs,
-        observedFrameSequence: snapshot.frameSequence,
-      };
+    const currentFrame = this.frameMatchesSnapshot(snapshot);
+    if (currentFrame && persistenceStatus !== "failed") {
+      const cacheMayAdvance = this.visibleStateCache.observe(
+        snapshot.frameSequence,
+      );
+      if (analysis.visibleState && cacheMayAdvance) {
+        this.visibleStateCache.update(
+          analysis.visibleState,
+          snapshot.acceptedAtMs,
+          snapshot.frameSequence,
+        );
+      }
+      this.lastGroundedDescription =
+        analysis.description ||
+        analysis.event?.description ||
+        analysis.semanticKey ||
+        "";
+      if (
+        snapshot.frameSequence > this.groundedSemanticState.observedFrameSequence
+      ) {
+        const changed =
+          this.groundedSemanticState.semanticKey !== analysis.semanticKey;
+        this.groundedSemanticState = {
+          semanticKey: analysis.semanticKey,
+          originAcceptedAtMs: changed
+            ? analysis.semanticKey
+              ? snapshot.acceptedAtMs
+              : null
+            : this.groundedSemanticState.originAcceptedAtMs,
+          observedFrameSequence: snapshot.frameSequence,
+        };
+      }
     }
     if (
       !offerCandidate ||
+      persistenceStatus !== "recorded" ||
       !analysis.shouldNarrate ||
       !analysis.isNew ||
       analysis.coveredByTabSpeech ||
@@ -959,33 +991,50 @@ export class ClientSession {
         timestampSeconds,
       });
       if (result.status === "recorded") this.publishEvent(result.event);
+      return result.status;
     } catch (error) {
       this.sendBrowser({
         type: "telemetry",
         text: `narration event rejected: ${summarizeValidationError(error)}`,
       });
+      this.sendBrowser({
+        type: "analysis_error",
+        text: "This moment could not be added to the timeline, so narration was skipped.",
+      });
+      return "failed";
     }
   }
 
   recordVisionEvent(candidate, timestampSeconds) {
     try {
       const validated = eventCandidateSchema.parse(candidate);
-      if (shouldSuppressVisualDescription(validated.description)) return;
+      if (shouldSuppressVisualDescription(validated.description)) return "suppressed";
       const result = this.eventStore.record({
         ...validated,
         sessionId: this.sessionId,
         timestampSeconds,
       });
       if (result.status === "recorded") this.publishEvent(result.event);
+      return result.status;
     } catch (error) {
       this.sendBrowser({
         type: "telemetry",
         text: `vision event rejected: ${summarizeValidationError(error)}`,
       });
+      this.sendBrowser({
+        type: "analysis_error",
+        text: "This moment could not be added to the timeline, so narration was skipped.",
+      });
+      return "failed";
     }
   }
 
   publishEvent(event) {
+    this.enqueueHistory("archiveEvent", {
+      ...event,
+      createdAt: new Date(this.now()).toISOString(),
+      topicLabels: [event.eventType.split("_").join(" ")],
+    });
     const { sessionId: _sessionId, ...publicEvent } = event;
     this.sendBrowser({ type: "event", event: publicEvent });
     this.sendBrowser({
@@ -1137,6 +1186,15 @@ export class ClientSession {
     this.browser.close(1008, reason);
   }
 
+  enqueueHistory(method, input) {
+    try {
+      const result = this.historyArchive?.[method]?.(input);
+      if (result && typeof result.catch === "function") result.catch(() => {});
+    } catch {
+      // History is intentionally best-effort and never owns realtime failure.
+    }
+  }
+
   async closeProviders(live = this.live, transcriber = this.transcriber) {
     const closeProvider = (provider) =>
       Promise.resolve().then(() => provider?.close?.());
@@ -1146,6 +1204,11 @@ export class ClientSession {
   close(code = 1000, reason = "Session closed") {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
+    this.enqueueHistory("finishSession", {
+      sessionId: this.sessionId,
+      endedAt: new Date(this.now()).toISOString(),
+      durationSeconds: this.elapsedTimestampSeconds,
+    });
     this.transcriberGeneration += 1;
     if (this.speechPolicyTimer)
       this.timers.clearTimeout(this.speechPolicyTimer);

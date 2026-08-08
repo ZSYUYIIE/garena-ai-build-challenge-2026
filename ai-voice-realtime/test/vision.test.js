@@ -40,11 +40,9 @@ test("buildAnalysisPrompt binds narration to the exact frame", () => {
   assert.match(prompt, /do not infer a tutorial topic/i);
   assert.match(prompt, /StreamSense interface/i);
   assert.match(prompt, /03:42/);
-  assert.match(prompt, /A document editor is visible/);
-  assert.match(prompt, /captured-tab context/i);
-  assert.match(prompt, /not user speech/i);
-  assert.match(prompt, /suppress or corroborate/i);
-  assert.match(prompt, /cannot justify unseen visual claims/i);
+  assert.doesNotMatch(prompt, /A document editor is visible/);
+  assert.doesNotMatch(prompt, /Team A has taken a 2-1 lead/);
+  assert.match(prompt, /transcript words can never create a visual claim/i);
   assert.match(prompt, /score:2-1/i);
   assert.match(prompt, /routine.*motion.*caption churn/i);
   assert.match(prompt, /materially different.*section/i);
@@ -56,7 +54,6 @@ test("buildAnalysisPrompt binds narration to the exact frame", () => {
   assert.match(prompt, /Team A vs Team B/);
   assert.match(prompt, /"value":"1-1"/);
   assert.match(prompt, /description must be empty when shouldNarrate is false/i);
-  assert.match(prompt, /Team A has taken a 2-1 lead/);
 });
 
 test("analyzeVisionFrame uses the Gemini Interactions contract", async (t) => {
@@ -161,8 +158,7 @@ test("analyzeVisionFrame uses the Gemini Interactions contract", async (t) => {
       .properties.basis.enum,
     ["current_frame", "state_transition"],
   );
-  assert.equal(requestBody.input[0].text.includes("x".repeat(2_000)), true);
-  assert.equal(requestBody.input[0].text.includes("x".repeat(2_001)), false);
+  assert.equal(requestBody.input[0].text.includes("x".repeat(100)), false);
   assert.deepEqual(requestBody.generation_config, {
     max_output_tokens: 512,
     thinking_level: "minimal",

@@ -2,7 +2,11 @@ import {
   generateDocumentEmbedding,
   generateQueryEmbedding,
 } from "./embedding.js";
-import { getContextDataFromMongo, saveContextDataToMongo } from "./mongo.js";
+import {
+  closeMongoClient,
+  getContextDataFromMongo,
+  saveContextDataToMongo,
+} from "./mongo.js";
 
 /**
  * Saves context data for a given event and session metadata. This function generates an embedding for the event description if needed.
@@ -38,4 +42,8 @@ export async function getContextData(sessionId, searchString, limit = 10) {
   );
 
   return contextData;
+}
+
+export async function closeContextDataStore() {
+  await closeMongoClient();
 }
