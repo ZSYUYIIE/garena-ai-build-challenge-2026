@@ -9,6 +9,7 @@ import {
   findDuplicateEvent,
 } from "./deduplicate.js";
 import { eventRecordInputSchema, formatTimestamp } from "./eventSchema.js";
+import { saveContextData } from "../context-builder/contextstore.js";
 
 export class EventStore {
   constructor({ databasePath = ":memory:" } = {}) {
@@ -79,7 +80,7 @@ export class EventStore {
       .all(
         candidate.sessionId,
         Math.max(0, candidate.timestampSeconds - duplicateWindowSeconds),
-        25
+        25,
       )
       .map(toEvent);
 
@@ -96,6 +97,11 @@ export class EventStore {
       timestamp: formatTimestamp(candidate.timestampSeconds),
     };
 
+    saveContextData(event).catch((error) => {
+      console.error("Failed to save context data for event:", event.id, error);
+    });
+
+    // TODO: remove the sqlite storage as we are migrating to mongodb
     this.insertStatement.run(
       event.id,
       event.sessionId,
@@ -104,7 +110,7 @@ export class EventStore {
       JSON.stringify(event.entities),
       event.description,
       event.importance,
-      event.confidence
+      event.confidence,
     );
 
     return { status: "recorded", event };
