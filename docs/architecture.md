@@ -1,0 +1,150 @@
+# StreamSense Architecture and Product Direction
+
+This document is the current source of truth for component ownership, data
+flow, persistence, accessibility, and near-term product ideas. Package-specific
+contracts remain in their package READMEs and the focused documents in this
+directory.
+
+## Product shape
+
+StreamSense is one accessibility product with two deliberately different
+surfaces:
+
+1. **Live side panel:** compact, immediate assistance beside the authorized
+   stream.
+2. **Memory dashboard:** a normal browser tab for reviewing, searching, and
+   understanding saved moments.
+
+```mermaid
+flowchart LR
+    Video["Authorized video tab"] --> Extension["Chrome extension\nStreamSense Live"]
+    Extension -->|"JPEG frames + separate mic/tab PCM"| Backend["Express + WebSocket backend"]
+    Backend --> Gemini["Gemini visual + Live models"]
+    Backend --> STT["Google Cloud Speech-to-Text"]
+    Backend --> Events["SQLite event store + in-memory history projection"]
+    Extension -->|"Open Memory Dashboard"| Dashboard["React Memory dashboard"]
+    Dashboard -->|"bounded REST /api"| Backend
+    Dashboard -->|"account REST"| Backend
+    Backend --> Mongo[("MongoDB dashboard_accounts")]
+```
+
+The toolbar action always opens the side panel. The dashboard handoff is an
+explicit option inside that panel. A connected backend returns the active
+session UUID so the handoff can target `/dashboard/sessions/{sessionId}`;
+without one it opens the Memory overview.
+
+## Live processing flow
+
+The extension captures admitted frames, user microphone PCM, and captured-tab
+PCM. The backend keeps the two audio sources separate: the microphone represents
+the user's question, while captured-tab audio is transcribed into bounded
+commentary context.
+
+Automatic narration follows a fail-closed sequence:
+
+1. Analyze the admitted current frame without treating prior generated prose as
+   visual evidence.
+2. Reject stale, unsupported, repeated, or self-referential output.
+3. Compare grounded visual facts with commentary only to suppress redundancy.
+4. Persist and publish the accepted event to the current timeline.
+5. Offer that event to speech only after persistence succeeds.
+
+Typed and microphone questions use Gemini Live and can interrupt narration.
+Captured-tab audio is never presented as user speech.
+
+## Memory dashboard
+
+The dashboard consumes REST resources for session lists, session details,
+events, semantic search, and context graphs. It does not connect to Gemini,
+Cloud Speech-to-Text, or the realtime WebSocket directly.
+
+The dashboard is a bounded workspace with a slim navigation rail. It reuses the
+extension's tokens and Button/Input/Label/Select primitives at build time while
+keeping wider-page layout and WebGL code dashboard-specific.
+
+The 3D graph is a semantic memory hierarchy:
+
+```text
+Entertainment domain
+  └─ Session
+      └─ Chronological event
+          ├─ Entity context
+          └─ Topic context
+```
+
+Domain islands and count-aware shells prevent dense groups from colliding.
+Color, sphere size, halo treatment, readable legends, and adjacent text provide
+redundant meaning. Selection reveals supplied first-hop relationships; the
+client never fabricates a relationship. Screen-space collision suppression
+keeps projected labels bounded. The node selector, inspector, and full DOM
+relationship lists remain the keyboard and screen-reader equivalent.
+
+## Persistence and ownership
+
+| Data | Current store | Lifetime and ownership |
+| --- | --- | --- |
+| Realtime accepted events | SQLite event store | Backend-local event evidence. |
+| Dashboard session/history projection | In-memory repository | Lost on backend restart; demo mode is deterministic. |
+| Dashboard profile | MongoDB `dashboard_accounts` | Persists account UUID, display name, normalized email, preferences, and timestamps. |
+| Browser profile state | Local storage | Opaque account UUID only. |
+| Raw mic/tab audio | Not stored | Streamed for processing and discarded. |
+| Captured-tab transcript context | Bounded memory | Cleared with the live session. |
+
+The current account route is a prototype profile, not authentication. Signing
+out forgets the local UUID but does not delete the MongoDB record. Production
+identity, recovery, account deletion, and per-user session authorization are
+future work.
+
+## Accessibility and visual design
+
+StreamSense targets blind and low-vision viewers, so accessibility is part of
+the default system rather than an optional dashboard theme. The dashboard has
+one shared visual treatment and retains:
+
+- visible keyboard focus and a skip link;
+- semantic headings, landmarks, status, error, loading, and empty states;
+- keyboard shortcuts with visible equivalents;
+- OS forced-colors and reduced-motion support;
+- readable alternatives for every complex WebGL relationship;
+- responsive reflow and content wrapping at narrow widths and browser zoom.
+
+Current dashboard shortcuts are `Ctrl+K` for Memory search, `Alt+H` for the
+Memory overview, `Alt+G` for the graph selector, and `Alt+/` for help. `Escape`
+closes help and restores focus.
+
+## Near-term product ideas
+
+These are directions, not claims about the current build:
+
+1. Start with one judge-ready sports or esports terminology pack, then add
+   reviewed packs for concerts, product launches, and creator livestreams.
+2. Add production identity, explicit retention/deletion controls, and per-user
+   history ownership before treating profiles as accounts.
+3. Replace in-memory session history with a durable repository while preserving
+   the existing bounded history interface and REST contracts.
+4. Add multilingual narration and user-controlled unfamiliar-term explanations.
+5. Introduce creator-provided metadata and shared highlight links only after
+   privacy and authorization rules are defined.
+6. Keep a deterministic offline demo path and recorded backup for judging; do
+   not replace provider failures with invented live output.
+
+## Development and verification
+
+From the repository root:
+
+```powershell
+npm.cmd install
+docker compose up -d mongodb
+npm.cmd run dev
+```
+
+Use `npm.cmd run dev:dashboard` for deterministic Memory development without
+the extension. Use `npm.cmd run check` as the full pre-commit gate.
+
+More detail:
+
+- `chrome-extension/README.md` — Live UI, capture, audio, and handoff.
+- `ai-voice-realtime/README.md` — backend providers, policies, and APIs.
+- `session-dashboard/README.md` — Memory routes, graph, accounts, and access.
+- `docs/context-graph-api.md` — graph contract and renderer semantics.
+- `docs/semantic-history-integration.md` — history and retrieval boundary.

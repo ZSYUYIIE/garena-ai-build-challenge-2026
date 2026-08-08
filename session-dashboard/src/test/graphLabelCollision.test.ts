@@ -127,11 +127,11 @@ describe("graph renderer accessibility presentation", () => {
     ] as const;
 
     for (const type of relationshipTypes) {
-      const presentation = graphEdgePresentation(type, false);
+      const presentation = graphEdgePresentation(type);
       expect(
         compositedContrastRatio(
           presentation.color,
-          graphBackgroundColor(false),
+          graphBackgroundColor(),
           presentation.opacity,
         ),
         type,
@@ -139,11 +139,9 @@ describe("graph renderer accessibility presentation", () => {
     }
   });
 
-  it("uses a near-opaque edge presentation in high contrast mode", () => {
-    expect(graphBackgroundColor(true)).toBe(0x000000);
-    expect(graphEdgePresentation("same_session", true).opacity).toBeGreaterThanOrEqual(
-      0.9,
-    );
+  it("uses one stable graph presentation instead of a theme mode", () => {
+    expect(graphBackgroundColor()).toBe(0x07111f);
+    expect(graphEdgePresentation("same_session").opacity).toBe(0.6);
   });
 
   it("keeps a hovered node visible while another selected branch has focus", () => {

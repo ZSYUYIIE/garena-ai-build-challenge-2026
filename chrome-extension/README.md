@@ -96,7 +96,7 @@ eligible, so a spoken visual moment cannot silently bypass the live timeline.
 The separate Memory dashboard reads archived session/event projections over
 REST; the extension does not rehydrate old sessions into its compact timeline.
 The dashboard's Memory-first relationship map, search, accessibility shortcuts,
-high-contrast option, and readable relationship alternatives are documented in
+single accessible theme, and readable relationship alternatives are documented in
 [`../session-dashboard/README.md`](../session-dashboard/README.md).
 
 ## Checks and acceptance caveat

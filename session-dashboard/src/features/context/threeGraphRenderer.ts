@@ -46,23 +46,18 @@ export type GraphLabelCollisionCandidate = {
 };
 
 const DEFAULT_GRAPH_BACKGROUND = 0x07111f;
-const HIGH_CONTRAST_GRAPH_BACKGROUND = 0x000000;
 
-export function graphBackgroundColor(highContrast: boolean): number {
-  return highContrast
-    ? HIGH_CONTRAST_GRAPH_BACKGROUND
-    : DEFAULT_GRAPH_BACKGROUND;
+export function graphBackgroundColor(): number {
+  return DEFAULT_GRAPH_BACKGROUND;
 }
 
 export function graphEdgePresentation(
   type: PositionedGraphEdge["type"],
-  highContrast: boolean,
 ): { color: number; opacity: number } {
   return {
     color: edgeColor(type),
-    // At 0.6, every supplied edge color clears 3:1 against the default
-    // scene background. High contrast deliberately removes most blending.
-    opacity: highContrast ? 0.92 : 0.6,
+    // Every supplied edge color clears 3:1 against the single scene theme.
+    opacity: 0.6,
   };
 }
 
@@ -145,8 +140,6 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
     throw new Error("WebGL is unavailable.");
   }
 
-  const contrastRoot = container.closest<HTMLElement>(".app-shell");
-  let highContrast = contrastRoot?.dataset.contrast === "high";
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: true,
@@ -162,10 +155,10 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   container.append(labelRenderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(graphBackgroundColor(highContrast));
+  scene.background = new THREE.Color(graphBackgroundColor());
   scene.fog = new THREE.FogExp2(
-    graphBackgroundColor(highContrast),
-    highContrast ? 0 : 0.008,
+    graphBackgroundColor(),
+    0.008,
   );
 
   const initialRectangle = container.getBoundingClientRect();
@@ -301,7 +294,7 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
       vectorForNode(source),
       vectorForNode(target),
     ]);
-    const material = createEdgeMaterial(edge, highContrast);
+    const material = createEdgeMaterial(edge);
     const line = new THREE.Line(geometry, material);
     if (material instanceof THREE.LineDashedMaterial) line.computeLineDistances();
     line.renderOrder = edge.semanticBridge ? 3 : 1;
@@ -322,8 +315,6 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
   let disposed = false;
   let frameRequest: number | null = null;
   let settlingFrames = 0;
-  let contrastObserver: MutationObserver | null = null;
-
   const suppressOverlappingLabels = () => {
     const elementsById = new Map<string, HTMLElement>();
     const candidates: GraphLabelCollisionCandidate[] = [];
@@ -467,12 +458,8 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
         (edge.source === focusNodeId || edge.target === focusNodeId);
       material.opacity = focusNodeId
         ? connected
-          ? highContrast
-            ? 1
-            : 0.96
-          : highContrast
-            ? 0.08
-            : 0.05
+          ? 0.96
+          : 0.05
         : edgeBaseOpacity.get(edge.id) ?? 0.14;
       material.needsUpdate = true;
     }
@@ -484,39 +471,6 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
     }
     requestRender(paused || reducedMotion ? 1 : 10);
   };
-
-  const applyContrastMode = (nextHighContrast: boolean) => {
-    if (nextHighContrast === highContrast) return;
-    highContrast = nextHighContrast;
-    const background = graphBackgroundColor(highContrast);
-    if (scene.background instanceof THREE.Color) {
-      scene.background.setHex(background);
-    } else {
-      scene.background = new THREE.Color(background);
-    }
-    if (scene.fog instanceof THREE.FogExp2) {
-      scene.fog.color.setHex(background);
-      scene.fog.density = highContrast ? 0 : 0.008;
-    }
-    for (const edge of model.edges) {
-      const material = edgeMaterials.get(edge.id);
-      if (!material) continue;
-      const presentation = graphEdgePresentation(edge.type, highContrast);
-      material.color.setHex(presentation.color);
-      edgeBaseOpacity.set(edge.id, presentation.opacity);
-    }
-    updateGraphAppearance();
-  };
-
-  if (contrastRoot && typeof MutationObserver === "function") {
-    contrastObserver = new MutationObserver(() => {
-      applyContrastMode(contrastRoot.dataset.contrast === "high");
-    });
-    contrastObserver.observe(contrastRoot, {
-      attributes: true,
-      attributeFilter: ["data-contrast"],
-    });
-  }
 
   const hitTest = (event: PointerEvent): string | null => {
     const rectangle = canvas.getBoundingClientRect();
@@ -673,7 +627,6 @@ export const createThreeGraphRenderer: GraphRendererFactory = ({
       controls.removeEventListener("change", handleControlChange);
       controls.removeEventListener("end", handleControlEnd);
       controls.dispose();
-      contrastObserver?.disconnect();
       resizeObserver?.disconnect();
       if (!resizeObserver) window.removeEventListener("resize", resize);
       disposableGeometries.forEach((geometry) => geometry.dispose());
@@ -715,9 +668,8 @@ function haloScales(node: PositionedGraphNode): number[] {
 
 function createEdgeMaterial(
   edge: PositionedGraphEdge,
-  highContrast: boolean,
 ): THREE.LineBasicMaterial {
-  const { color, opacity } = graphEdgePresentation(edge.type, highContrast);
+  const { color, opacity } = graphEdgePresentation(edge.type);
   if (edge.type === "semantic_similarity") {
     return new THREE.LineDashedMaterial({
       color,

@@ -181,12 +181,12 @@ information to keyboard and assistive-technology users. Session pages continue
 with complete readable node and relationship lists.
 
 `Alt+G` focuses the labeled selector, and the dashboard also exposes visible
-shortcut help and a persistent high-contrast option. `prefers-reduced-motion`
-disables camera easing and minimizes CSS motion. If WebGL initialization fails,
-the dashboard reports the optional view as unavailable and leaves the DOM path
-usable. High contrast reaches portaled menus and updates the WebGL scene and
-edge presentation live. Forced-colors styles preserve visible focus and graph
-legends.
+shortcut help. One stable accessible theme covers both the DOM inspector and
+WebGL scene; there is no separate dashboard contrast mode.
+`prefers-reduced-motion` disables camera easing and minimizes CSS motion. If
+WebGL initialization fails, the dashboard reports the optional view as
+unavailable and leaves the DOM path usable. Forced-colors styles preserve
+visible focus and graph legends.
 
 The renderer schedules bounded frames only for initialization, interaction,
 selection, and resize. Replacing graph data or leaving the route cancels the

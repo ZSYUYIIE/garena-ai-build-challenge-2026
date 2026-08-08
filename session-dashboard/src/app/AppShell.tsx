@@ -14,7 +14,6 @@ import {
   readDashboardAccountId,
 } from "../features/account/accountStorage";
 
-const HIGH_CONTRAST_STORAGE_KEY = "streamsense.dashboard.highContrast";
 const FOCUS_WAIT_MILLISECONDS = 5_000;
 
 type PendingFocus = {
@@ -30,7 +29,6 @@ export function AppShell() {
   const initialLocation = useRef(location.pathname);
   const focusRequestId = useRef(0);
   const shortcutHelpButtonRef = useRef<HTMLButtonElement>(null);
-  const [highContrast, setHighContrast] = useState(readStoredHighContrast);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [shortcutStatus, setShortcutStatus] = useState("");
   const [pendingFocus, setPendingFocus] = useState<PendingFocus | null>(null);
@@ -48,29 +46,6 @@ export function AppShell() {
     const heading = document.querySelector<HTMLElement>("[data-route-heading]");
     heading?.focus();
   }, [location.pathname]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        HIGH_CONTRAST_STORAGE_KEY,
-        highContrast ? "true" : "false",
-      );
-    } catch {
-      // The control remains effective for this tab when storage is unavailable.
-    }
-  }, [highContrast]);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    if (highContrast) {
-      root.dataset.streamsenseDashboardContrast = "high";
-    } else {
-      delete root.dataset.streamsenseDashboardContrast;
-    }
-    return () => {
-      delete root.dataset.streamsenseDashboardContrast;
-    };
-  }, [highContrast]);
 
   useEffect(() => {
     let active = true;
@@ -202,14 +177,6 @@ export function AppShell() {
     );
   };
 
-  const toggleHighContrast = () => {
-    const nextHighContrast = !highContrast;
-    setHighContrast(nextHighContrast);
-    setShortcutStatus(
-      `High contrast ${nextHighContrast ? "enabled" : "disabled"}.`,
-    );
-  };
-
   const closeShortcutHelp = (restoreFocus = false) => {
     setShortcutHelpOpen(false);
     if (restoreFocus) {
@@ -262,9 +229,6 @@ export function AppShell() {
         } else if (key === "g") {
           event.preventDefault();
           focusGraph();
-        } else if (key === "c") {
-          event.preventDefault();
-          toggleHighContrast();
         } else if (key === "/") {
           event.preventDefault();
           toggleShortcutHelp(true);
@@ -283,10 +247,7 @@ export function AppShell() {
   });
 
   return (
-    <div
-      className="app-shell"
-      data-contrast={highContrast ? "high" : undefined}
-    >
+    <div className="app-shell">
       <a className="skip-link" href="#main-content">
         Skip to main content
       </a>
@@ -388,22 +349,6 @@ export function AppShell() {
             aria-label="Dashboard tools"
           >
             <button
-              className={buttonVariants({
-                variant: "outline",
-                size: "lg",
-                className: "shell-control shell-contrast-toggle",
-              })}
-              type="button"
-              onClick={toggleHighContrast}
-              aria-keyshortcuts="Alt+C"
-              aria-pressed={highContrast}
-            >
-              High contrast
-              <span className="shell-control-state">
-                {highContrast ? "On" : "Off"}
-              </span>
-            </button>
-            <button
               ref={shortcutHelpButtonRef}
               className={buttonVariants({
                 variant: "outline",
@@ -473,10 +418,6 @@ export function AppShell() {
                   <dd>Focus the relationship map selector</dd>
                 </div>
                 <div>
-                  <dt><kbd>Alt</kbd> + <kbd>C</kbd></dt>
-                  <dd>Toggle high contrast</dd>
-                </div>
-                <div>
                   <dt><kbd>Alt</kbd> + <kbd>/</kbd></dt>
                   <dd>Show or hide this help</dd>
                 </div>
@@ -504,13 +445,4 @@ export function AppShell() {
       </div>
     </div>
   );
-}
-
-function readStoredHighContrast(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(HIGH_CONTRAST_STORAGE_KEY) === "true";
-  } catch {
-    return false;
-  }
 }

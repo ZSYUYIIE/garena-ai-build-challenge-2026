@@ -6,20 +6,14 @@ import {
   within,
 } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { AppShell } from "../app/AppShell";
 import { legacyExploreDestination } from "../app/DashboardRoutes";
 import { DemoDataBanner } from "../components/DemoDataBanner";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
-const highContrastStorageKey = "streamsense.dashboard.highContrast";
-
 describe("dashboard shell accessibility", () => {
-  beforeEach(() => {
-    window.localStorage.removeItem(highContrastStorageKey);
-  });
-
   it("presents StreamSense as one Live and Memory product without Explore navigation", () => {
     renderShell();
 
@@ -47,10 +41,7 @@ describe("dashboard shell accessibility", () => {
       "aria-keyshortcuts",
       "Alt+G",
     );
-    expect(screen.getByRole("button", { name: /high contrast/i })).toHaveAttribute(
-      "aria-keyshortcuts",
-      "Alt+C",
-    );
+    expect(screen.queryByRole("button", { name: /high contrast/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toHaveAttribute(
       "aria-keyshortcuts",
       "Alt+/",
@@ -89,23 +80,14 @@ describe("dashboard shell accessibility", () => {
     await waitFor(() => expect(graphSelector).toHaveFocus());
   });
 
-  it("offers persistent high contrast and keyboard shortcut help", async () => {
+  it("uses one dashboard theme and offers keyboard shortcut help", async () => {
     renderShell();
 
-    const contrastButton = screen.getByRole("button", { name: /high contrast/i });
-    expect(contrastButton).toHaveAttribute("aria-pressed", "false");
-
     fireEvent.keyDown(window, { altKey: true, key: "c" });
-    expect(contrastButton).toHaveAttribute("aria-pressed", "true");
-    expect(document.querySelector(".app-shell")).toHaveAttribute(
-      "data-contrast",
-      "high",
-    );
-    expect(document.documentElement).toHaveAttribute(
+    expect(document.querySelector(".app-shell")).not.toHaveAttribute("data-contrast");
+    expect(document.documentElement).not.toHaveAttribute(
       "data-streamsense-dashboard-contrast",
-      "high",
     );
-    expect(window.localStorage.getItem(highContrastStorageKey)).toBe("true");
 
     fireEvent.keyDown(window, { altKey: true, key: "/" });
     const helpHeading = screen.getByRole("heading", {
@@ -113,6 +95,7 @@ describe("dashboard shell accessibility", () => {
     });
     await waitFor(() => expect(helpHeading).toHaveFocus());
     expect(screen.getByText("Open and focus Memory search")).toBeInTheDocument();
+    expect(screen.queryByText(/toggle high contrast/i)).not.toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>

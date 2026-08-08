@@ -273,22 +273,6 @@ a {
   font-size: 0.78rem;
 }
 
-.shell-contrast-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-}
-
-.shell-control-state {
-  min-width: 2rem;
-  border-radius: 999px;
-  background: var(--surface-subtle);
-  padding: 0.2rem 0.35rem;
-  color: var(--muted-foreground);
-  font-size: 0.65rem;
-  text-align: center;
-}
-
 .dashboard-content {
   display: grid;
   min-width: 0;
@@ -1739,61 +1723,6 @@ p {
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-}
-
-.app-shell[data-contrast="high"],
-html[data-streamsense-dashboard-contrast="high"] {
-  --background: #ffffff;
-  --foreground: #000000;
-  --card: #ffffff;
-  --card-foreground: #000000;
-  --popover: #ffffff;
-  --popover-foreground: #000000;
-  --primary: #000000;
-  --primary-foreground: #ffffff;
-  --secondary: #eeeeee;
-  --secondary-foreground: #000000;
-  --muted: #eeeeee;
-  --muted-foreground: #202020;
-  --accent: #eeeeee;
-  --accent-foreground: #000000;
-  --border: #000000;
-  --input: #000000;
-  --ring: #0048ff;
-  --question: #006b63;
-  --question-foreground: #004f49;
-  --narrating: #8a5100;
-  --narrating-foreground: #5a3000;
-  --destructive: #8f0018;
-  --border-strong: #000000;
-  --shadow: none;
-  background: #ffffff;
-}
-
-.app-shell[data-contrast="high"] .site-header,
-.app-shell[data-contrast="high"] .session-card,
-.app-shell[data-contrast="high"] .metric-card,
-.app-shell[data-contrast="high"] .timeline-event-body,
-.app-shell[data-contrast="high"] .search-result,
-.app-shell[data-contrast="high"] .relationship-panel,
-.app-shell[data-contrast="high"] .summary-panel {
-  border-color: #000000;
-  box-shadow: none;
-}
-
-.app-shell[data-contrast="high"] .graph-explorer {
-  border-width: 2px;
-  border-color: #000000;
-  background: #ffffff;
-}
-
-.app-shell[data-contrast="high"] .graph-viewport {
-  background: #000000;
-}
-
-.app-shell[data-contrast="high"] .graph-selection {
-  border-color: #000000;
-  background: #ffffff;
 }
 
 @container graph-stack (max-width: 62rem) {

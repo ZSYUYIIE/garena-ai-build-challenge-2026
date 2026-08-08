@@ -18,17 +18,18 @@ dashboard.
 The dashboard also includes a MongoDB-backed prototype Account route for a
 display name, email, and viewing preferences. The browser stores only the
 opaque account UUID; this is not password-based production authentication. It
-does not alter the extension's
-capture, speech recognition, Gemini, narration, interruption, or playback
-pipeline.
+does not alter the extension's capture, speech recognition, Gemini, narration,
+interruption, or playback pipeline.
 
 ```text
-Chrome extension
-  ├─ JPEG screen frames ────────────────┐
-  ├─ user microphone PCM ───────────────┼─> Express/WebSocket backend ─> Gemini
-  └─ captured-tab PCM ─> backend ─> Cloud Speech-to-Text V2
+Authorized browser tab
+  -> Chrome side panel -- frames + separate mic/tab PCM --> backend
+  -> backend --> Gemini visual and Live models
+  -> backend --> Cloud Speech-to-Text V2 for tab commentary
+  -> backend --> SQLite evidence + in-memory history projection
 
-Memory dashboard ─── REST `/api` ──> in-memory history service
+Side panel -- Open Memory Dashboard --> Memory dashboard -- REST --> backend
+Memory dashboard -- account REST --> backend --> MongoDB profiles
 ```
 
 Microphone audio and captured-tab audio remain separate. Only microphone audio
@@ -47,6 +48,25 @@ context and is never presented as the user's speech.
 The repository root is an npm workspace and the supported starting point for
 installing, developing, building, demonstrating, and checking all three
 packages.
+
+## Architecture and contributor guidance
+
+[`docs/architecture.md`](docs/architecture.md) is the current cross-package
+architecture and product-direction reference. [`AGENTS.md`](AGENTS.md) defines
+the product boundaries, safety rules, Git workflow, and verification contract
+that AI coding agents and human reviewers should enforce. Tool-specific entry
+points—[`CLAUDE.md`](CLAUDE.md), [`GEMINI.md`](GEMINI.md), and
+[`.github/copilot-instructions.md`](.github/copilot-instructions.md)—direct
+other assistants to the same source of truth instead of duplicating rules.
+
+Current product direction keeps the extension focused on live assistance and
+the dashboard focused on memory. The dashboard now uses one accessible visual
+theme, MongoDB persists prototype profiles, and session history remains behind
+an in-memory repository boundary. Near-term ideas are a judge-ready sports or
+esports terminology pack, durable per-user history after production identity,
+multilingual narration, explicit retention/deletion controls, and a
+deterministic provider-failure demo path. These ideas are tracked as future
+work—not as implemented features—in the architecture document.
 
 ## Prerequisites
 
@@ -382,12 +402,10 @@ modified.
 
 Dashboard shortcuts have visible equivalents: `Ctrl+K` opens and focuses
 Memory search; `Alt+H` opens Memory; `Alt+G` focuses the graph selector;
-`Alt+C` toggles the persistent high-contrast mode; and `Alt+/` opens shortcut
-help (`Escape` closes it). The dashboard also provides a skip link, visible
-focus, route-focus management, forced-colors support, and reduced-motion
-behavior that disables camera easing and minimizes CSS motion. High contrast
-also reaches portaled select menus and updates the WebGL background, fog, and
-relationship-line presentation live.
+and `Alt+/` opens shortcut help (`Escape` closes it). The dashboard uses one
+shared accessible theme rather than a separate visual mode. It also provides a
+skip link, visible focus, route-focus management, OS forced-colors support, and
+reduced-motion behavior that disables camera easing and minimizes CSS motion.
 
 For an inspectable copy of the deterministic fixture, run the package-scoped
 utility:

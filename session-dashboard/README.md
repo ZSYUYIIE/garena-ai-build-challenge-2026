@@ -168,8 +168,8 @@ adjacent summary, inspector, and relationship lists follow the W3C guidance for
 
 The dashboard imports the Chrome extension's real Tailwind theme and UI
 primitives through `src/components/StreamSenseUi.ts`. Buttons, inputs, labels,
-selects, typography, color tokens, focus states, and high-contrast overrides
-therefore have one source of truth. Dashboard CSS is limited to the wider page
+selects, typography, color tokens, and focus states therefore have one source
+of truth. Dashboard CSS is limited to the wider page
 layout, content-specific cards, accessibility states, and the WebGL canvas.
 Extension feature components are not imported because they own Chrome capture
 and realtime state. No extension source or visual design is modified by the
@@ -189,15 +189,13 @@ The dashboard exposes these shortcuts and matching visible controls:
 | `Ctrl+K` | Open and focus Memory search. |
 | `Alt+H` | Open the Memory overview. |
 | `Alt+G` | Focus the map's labeled-node selector. |
-| `Alt+C` | Toggle high contrast. |
 | `Alt+/` | Open or close shortcut help. |
 | `Escape` | Close open shortcut help and restore focus. |
 
-High contrast is a user-controlled mode persisted in local storage; it removes
-decorative shadows, strengthens borders and text, and keeps an explicit focus
-color. The state reaches portaled select menus and updates the WebGL background,
-fog, and relationship-line presentation live. The stylesheet also includes
-forced-colors handling. Shortcuts never replace standard Tab navigation.
+The dashboard uses one extension-derived theme rather than a persisted visual
+mode. Contrast, borders, text, and focus treatment are part of the default
+design. The stylesheet still respects the operating system's forced-colors
+mode. Shortcuts never replace standard Tab navigation.
 
 Pointer users can orbit, zoom, and select spheres, and visible buttons provide
 rotate, tilt, zoom, and reset operations. Keyboard and assistive-technology
