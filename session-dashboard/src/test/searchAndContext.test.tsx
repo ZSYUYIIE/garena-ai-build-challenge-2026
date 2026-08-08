@@ -132,7 +132,7 @@ describe("history intelligence surfaces", () => {
       screen.getByRole("heading", { name: "How this session connects" }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByRole("heading", { name: "3D relationship map" }),
+      await screen.findByRole("heading", { name: "Semantic relationship map" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", {
@@ -166,7 +166,7 @@ describe("history intelligence surfaces", () => {
       }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByRole("heading", { name: "3D relationship map" }),
+      await screen.findByRole("heading", { name: "Semantic relationship map" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: /Explore session context/i }),

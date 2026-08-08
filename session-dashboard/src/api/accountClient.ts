@@ -90,7 +90,7 @@ async function request(url: string, init: RequestInit): Promise<DashboardAccount
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new AccountApiError(
-      "StreamSense account storage could not be reached. Check that the backend and MongoDB are running.",
+      "StreamSense accounts are temporarily unavailable. Check that the StreamSense backend is running and try again.",
       { code: "network_error", status: 0 },
     );
   }

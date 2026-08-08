@@ -71,7 +71,7 @@ export function buildProcessPlan(
 
   const processes = [];
 
-  if (profile === "dashboard") {
+  if (profile === "all" || profile === "dashboard") {
     processes.push(backendProcess(rootDir, true));
   } else {
     processes.push(backendProcess(rootDir, false));

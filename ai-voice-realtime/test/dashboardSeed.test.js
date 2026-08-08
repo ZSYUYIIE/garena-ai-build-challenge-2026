@@ -7,9 +7,11 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { EventStore } from "../src/events/eventStore.js";
+import { buildContextGraph } from "../src/history/contextGraph.js";
 import {
   createDemoHistory,
   DEMO_DATA_LABEL,
+  DEMO_SESSION_TITLES,
 } from "../src/history/demoHistory.js";
 import {
   historyEventSchema,
@@ -23,8 +25,16 @@ test("dashboard demo history is deterministic and production-schema compatible",
 
   assert.deepEqual(first, second);
   assert.equal(first.label, DEMO_DATA_LABEL);
-  assert.equal(first.sessions.length, 3);
-  assert.deepEqual(first.sessions.map((session) => session.eventCount), [12, 10, 10]);
+  assert.equal(first.sessions.length, 5);
+  assert.deepEqual(
+    first.sessions.map((session) => session.title),
+    Object.values(DEMO_SESSION_TITLES),
+  );
+  assert.equal(
+    first.sessions.some((session) => session.title === "StreamSense session"),
+    false,
+  );
+  assert.deepEqual(first.sessions.map((session) => session.eventCount), [5, 5, 5, 5, 5]);
   first.sessions.forEach((session) => historySessionSchema.parse(session));
   first.events.forEach((event) => historyEventSchema.parse(event));
 
@@ -32,23 +42,23 @@ test("dashboard demo history is deterministic and production-schema compatible",
   for (const required of [
     "shot_saved",
     "goal",
-    "dangerous_attack",
-    "possession_change",
-    "substitution",
-    "penalty",
     "teamfight",
     "objective_taken",
+    "audience_singalong",
+    "product_revealed",
+    "prototype_tested",
   ]) {
     assert.equal(eventTypes.has(required), true, required);
   }
   const topics = new Set(first.events.flatMap((event) => event.topicLabels));
   for (const required of [
-    "Counterattack",
-    "Defensive save",
-    "Momentum shift",
-    "Final-third pressure",
-    "Comeback",
-    "Substitution impact",
+    "Turning point",
+    "Audience reaction",
+    "Match momentum",
+    "Objective control",
+    "Set highlight",
+    "Product reveal",
+    "Live collaboration",
   ]) {
     assert.equal(topics.has(required), true, required);
   }
@@ -62,8 +72,90 @@ test("dashboard demo history is deterministic and production-schema compatible",
     );
     assert.equal(session.dataOrigin, "demo");
     assert.match(session.sourceLabel, /DEVELOPMENT \/ DEMO DATA/);
+    assert.equal(session.entities.length, 3);
+    assert.equal(session.topics.length, 2);
   }
   assert.deepEqual(findForbiddenKeys(first), []);
+});
+
+test("dashboard demo projects five bounded judge-friendly entertainment lanes", () => {
+  const demo = createDemoHistory();
+  const graph = buildContextGraph({
+    sessions: demo.sessions,
+    sessionEvents: new Map(
+      demo.sessions.map((session) => [
+        session.sessionId,
+        demo.events.filter((event) => event.sessionId === session.sessionId),
+      ]),
+    ),
+    limit: 80,
+  });
+
+  assert.ok(graph.nodes.length <= 80);
+  assert.equal(graph.nodes.filter((node) => node.type === "event").length, 25);
+  assert.deepEqual(
+    graph.nodes
+      .filter((node) => node.type === "session")
+      .map((node) => node.label),
+    Object.values(DEMO_SESSION_TITLES),
+  );
+  assert.deepEqual(
+    new Set(graph.nodes.map((node) => node.type)),
+    new Set(["session", "event", "entity", "topic"]),
+  );
+  assert.equal(
+    graph.nodes.some(
+      (node) => node.type === "entity" && node.label === "Mateo Silva",
+    ),
+    true,
+  );
+  assert.equal(
+    graph.nodes.some(
+      (node) => node.type === "entity" && node.label === "Elder Dragon",
+    ),
+    true,
+  );
+
+  const turningPoint = graph.nodes.find(
+    (node) => node.type === "topic" && node.label === "Turning point",
+  );
+  const eventsById = new Map(
+    graph.nodes
+      .filter((node) => node.type === "event")
+      .map((node) => [node.id, node]),
+  );
+  const connectedDomains = new Set(
+    graph.edges
+      .filter(
+        (edge) => edge.type === "shared_topic" && edge.target === turningPoint.id,
+      )
+      .map((edge) => eventsById.get(edge.source)?.sessionId)
+      .map(
+        (sessionId) =>
+          demo.sessions.find((session) => session.sessionId === sessionId)?.domain,
+      ),
+  );
+  assert.deepEqual(connectedDomains, new Set(["football", "esports"]));
+
+  const audienceReaction = graph.nodes.find(
+    (node) => node.type === "topic" && node.label === "Audience reaction",
+  );
+  const audienceDomains = new Set(
+    graph.edges
+      .filter(
+        (edge) =>
+          edge.type === "shared_topic" && edge.target === audienceReaction.id,
+      )
+      .map((edge) => eventsById.get(edge.source)?.sessionId)
+      .map(
+        (sessionId) =>
+          demo.sessions.find((session) => session.sessionId === sessionId)?.domain,
+      ),
+  );
+  assert.deepEqual(
+    audienceDomains,
+    new Set(["concert", "product launch", "creator livestream"]),
+  );
 });
 
 test("a realtime EventStore result normalizes without changing its public shape", () => {

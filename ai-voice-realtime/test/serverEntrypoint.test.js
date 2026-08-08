@@ -20,6 +20,8 @@ test("server entrypoint reports its actual ephemeral port", async (t) => {
       GOOGLE_API_KEY: "test-key",
       GEMINI_VISION_MODEL: "test-model",
       EVENT_DB_PATH: ":memory:",
+      MONGODB_URI: "",
+      MONGODB_DB_NAME: "",
       HOST: "127.0.0.1",
       PORT: "0",
     },

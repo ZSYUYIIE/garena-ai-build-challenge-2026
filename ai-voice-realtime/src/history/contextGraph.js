@@ -24,6 +24,9 @@ export function buildContextGraph({ sessions, sessionEvents, limit = 80 }) {
   };
 
   for (const session of sessions) {
+    const eventsForSession = sessionEvents.get(session.sessionId) ?? [];
+    if (eventsForSession.length === 0) continue;
+
     const sessionNodeId = `session:${session.sessionId}`;
     if (!addNode({
       id: sessionNodeId,
@@ -38,7 +41,7 @@ export function buildContextGraph({ sessions, sessionEvents, limit = 80 }) {
     })) break;
 
     let previousEvent = null;
-    for (const event of sessionEvents.get(session.sessionId) ?? []) {
+    for (const event of eventsForSession) {
       const eventNodeId = `event:${event.id}`;
       if (!addNode({
         id: eventNodeId,

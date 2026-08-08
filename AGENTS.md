@@ -29,9 +29,14 @@ Read this file before changing the repository. Then read
   not sessions or raw media.
 - Browser account storage contains only an opaque account UUID. Never store
   passwords, API keys, Google credentials, or the full profile there.
-- The relationship map hierarchy is domain → session → event → context. X/Y/Z
-  coordinates are layout mechanics, not measurements. Every relationship must
-  also be available as readable DOM content.
+- The relationship map hierarchy is Memory → domain → session → event →
+  context. Event X is normalized stream progress, Y is supplied importance,
+  and Z is the labeled entertainment lane. Structural roots sit before the
+  measured plot. The unfiltered overview reserves the five canonical lanes and
+  stays 3D; empty lanes are visual scaffolding only and never create API nodes,
+  sessions, moments, or relationships. Filtered and session-scoped single-lane
+  graphs default to 2D. Every relationship must also be available as readable
+  DOM content.
 
 ## UI and accessibility
 
@@ -65,11 +70,16 @@ root:
 npm.cmd run check
 ```
 
-For MongoDB-backed profile work, also run:
+For MongoDB-backed profile work, verify against the configured development
+Atlas database. When intentionally testing the optional offline substitute,
+also run:
 
 ```powershell
 docker compose up -d mongodb
 ```
+
+Never expose a populated `MONGODB_URI`. Teammates must use their own Atlas
+project invitation and database user; follow `docs/mongodb-atlas-handoff.md`.
 
 The full check must keep orchestration, backend, extension, and dashboard tests
 and builds passing. Record non-blocking warnings separately from failures.

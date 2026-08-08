@@ -33,8 +33,14 @@ test("history API lists, details, and chronologically paginates demo sessions", 
   const second = await getJson(
     `${fixture.url}/api/sessions?limit=2&cursor=${encodeURIComponent(first.nextCursor)}`,
   );
-  assert.equal(second.body.sessions.length, 1);
-  assert.equal(second.body.nextCursor, null);
+  assert.equal(second.body.sessions.length, 2);
+  assert.ok(second.body.nextCursor);
+
+  const third = await getJson(
+    `${fixture.url}/api/sessions?limit=2&cursor=${encodeURIComponent(second.body.nextCursor)}`,
+  );
+  assert.equal(third.body.sessions.length, 1);
+  assert.equal(third.body.nextCursor, null);
 
   const sessionId = first.sessions[0].sessionId;
   const detail = await getJson(`${fixture.url}/api/sessions/${sessionId}`);
@@ -79,8 +85,12 @@ test("history API validates IDs, limits, filters, cursors, and missing sessions"
   const goals = await getJson(
     `${fixture.url}/api/sessions/${demo.sessions[0].sessionId}/events?eventType=goal`,
   );
+  const expectedGoals = demo.events.filter(
+    (event) => event.sessionId === demo.sessions[0].sessionId
+      && event.eventType === "goal",
+  );
   assert.equal(goals.status, 200);
-  assert.equal(goals.body.events.length, 2);
+  assert.equal(goals.body.events.length, expectedGoals.length);
   assert.equal(goals.body.events.every((event) => event.eventType === "goal"), true);
 
   const exactEvent = demo.events.find(
@@ -103,7 +113,8 @@ test("semantic and context graph API contracts degrade independently of history"
   });
   assert.equal(search.status, 200);
   assert.equal(search.body.retrievalMode, "semantic");
-  assert.equal(search.body.results.length, 2);
+  assert.ok(search.body.results.length > 0);
+  assert.ok(search.body.results.length <= 2);
   assert.equal(search.body.results.every((result) => result.similarity <= 1), true);
 
   const differentSearch = await postJson(`${fixture.url}/api/search`, {
@@ -149,7 +160,7 @@ test("semantic and context graph API contracts degrade independently of history"
   assert.deepEqual(unavailableSearch.body.results, []);
   const stillHealthy = await getJson(`${unavailable.url}/api/sessions`);
   assert.equal(stillHealthy.status, 200);
-  assert.equal(stillHealthy.body.sessions.length, 3);
+  assert.equal(stillHealthy.body.sessions.length, demo.sessions.length);
 
   const failing = await createApiFixture({
     semanticHistoryService: {

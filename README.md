@@ -75,8 +75,8 @@ work—not as implemented features—in the architecture document.
 - A Gemini API key with access to the configured vision and Live models.
 - A Google Cloud project with billing configured for Speech-to-Text V2.
 - The [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`).
-- Docker Desktop or another MongoDB 8-compatible local/server installation for
-  dashboard profile persistence.
+- A MongoDB Atlas cluster for dashboard profile persistence. Docker Desktop is
+  optional when an offline local profile store is preferred.
 
 The Gemini and Google Cloud requirements apply to the realtime extension. The
 deterministic session-dashboard workflow below requires only Node.js and npm.
@@ -240,7 +240,7 @@ STREAMSENSE_EXTENSION_ID=the_exact_32_character_id_from_chrome
 STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=false
 STREAMSENSE_HISTORY_MODE=memory
 
-MONGODB_URI=mongodb://127.0.0.1:27017
+MONGODB_URI=mongodb+srv://YOUR_ATLAS_DB_USER:YOUR_URL_ENCODED_PASSWORD@YOUR_ATLAS_CLUSTER_HOSTNAME/?retryWrites=true&w=majority&appName=StreamSense
 MONGODB_DB_NAME=streamsense
 
 HOST=127.0.0.1
@@ -256,16 +256,22 @@ For isolated local debugging, `STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=true`
 temporarily relaxes the extension-origin check. Do not use that setting for a
 shared or production backend.
 
-Start the included loopback-only MongoDB service before StreamSense:
+MongoDB Atlas is the primary profile store. In Atlas, create a dedicated
+database user (separate from the MongoDB Cloud sign-in), allow only the current
+backend operator IP, and copy the Node.js SRV value from **Connect > Drivers**.
+Replace every URI placeholder, URL-encode special characters in the database
+password, and keep the populated URI only in the ignored backend `.env` or a
+deployment secret manager. Do not use an unrestricted network access rule.
+For a least-privilege teammate setup, use the
+[Atlas handoff guide](docs/mongodb-atlas-handoff.md); StreamSense has no
+separate MongoDB key, and teammates must create their own database user and URI.
 
-```bash
-docker compose up -d mongodb
-```
-
-The `streamsense-mongodb` Docker volume keeps prototype account records across
-container restarts. If `MONGODB_URI` is omitted, the rest of StreamSense still
-starts, but account endpoints return a clear `503` instead of falling back to
-browser-only profile storage.
+For offline development only, start the included loopback service with
+`docker compose up -d mongodb` and use
+`MONGODB_URI=mongodb://localhost:27017`. Its `streamsense-mongodb` Docker volume
+keeps prototype account records across container restarts. If `MONGODB_URI` is
+omitted or unavailable, the rest of StreamSense still starts, but account
+endpoints return `503` instead of falling back to browser-only profile storage.
 
 ## 5. Start StreamSense
 
@@ -275,10 +281,14 @@ For normal development, run one command from the repository root:
 npm run dev
 ```
 
-This supervised profile starts exactly one normal in-memory backend on port
-`8000`, the extension development process on `5173`, and the dashboard on
-`5174`. It checks that all required ports are free before starting. Press
-Ctrl+C once to stop the process group.
+This supervised profile starts exactly one development-only, demo-seeded
+in-memory backend on port `8000`, the extension development process on `5173`,
+and the dashboard on `5174`. The seed provides one named Sports, Esports,
+Concert, Product launch, and Creator livestream session with five moments each,
+so every semantic lane is useful before the first live capture. New extension
+sessions can appear alongside those examples. It checks
+that all required ports are free before starting. Press Ctrl+C once to stop the
+process group.
 
 Then in Chrome:
 
@@ -347,8 +357,9 @@ when stopped. Reload the unpacked extension after rebuilding; legacy unowned
 
 ## Memory dashboard development without Speech-to-Text
 
-The Memory surface can run from deterministic demo data without opening the
-extension or creating a realtime WebSocket session:
+The full `npm run dev` profile and the dashboard-only profile both load the
+same deterministic demo history. To browse it without opening the extension or
+creating a realtime WebSocket session, run:
 
 ```bash
 npm run dev:dashboard
@@ -357,9 +368,10 @@ npm run dev:dashboard
 Open `http://127.0.0.1:5174/dashboard/`. Vite serves the React application on
 port `5174` and proxies `/api` to the one demo backend on port `8000`.
 
-`start:dashboard-demo` is an explicit development-only mode. It seeds a fresh
-in-memory repository every time the backend starts and is refused when
-`NODE_ENV=production`. Normal `npm start` uses an empty in-memory history
+`start:dashboard-demo` is an explicit development-only mode used by both root
+profiles. It seeds a fresh in-memory repository every time the backend starts
+and is refused when `NODE_ENV=production`. `npm run dev:realtime`, normal
+`npm start`, and production startup retain an empty in-memory history
 repository. Neither history mode is durable: dashboard sessions are lost at
 process restart. Account profiles are a separate MongoDB collection and do
 persist. Durable session/event storage, vector embeddings/search, Redis current
@@ -372,28 +384,35 @@ it returns to the Memory overview. Relationship exploration is therefore part
 of Memory and each session, rather than a separate product area.
 
 The map renders every session, event, entity, and topic as a sphere. Color
-groups spheres into labeled entertainment-domain constellations; visual role
-and size provide non-color cues. Sessions are the largest double-halo anchors,
-event size represents supplied importance, and entity/topic size represents
-the number of supplied event connections. Solid or dashed edges retain the
-backend meanings for session membership, chronological adjacency, shared
-entities, shared topics, and optional backend-supplied semantic similarity.
-The client never invents a missing relationship.
+groups content into labeled entertainment lanes; visual role and size provide
+non-color cues. One derived StreamSense Memory root is largest, followed by
+smaller domain roots, double-halo sessions, events, and context spheres. Event
+size represents supplied importance, and entity/topic size represents supplied
+event connections. The client never invents a missing relationship.
 
-This is a memory hierarchy, not an XYZ chart: separated entertainment-domain
-islands contain non-overlapping session systems, chronological event arcs, and
-outer entity/topic context shells. Multi-domain context occupies a dedicated
-bridge lane above the islands so it cannot be mistaken for an unrelated domain.
-Context shared by multiple sessions in one domain uses packed rings outside the
-island. All ring radii are derived from node count and sphere size to prevent
-dense nodes from intersecting. Depth only separates overlaps; absolute X, Y,
-and Z coordinates are not measurements. Reset framing includes sphere extents,
-island labels, and narrow-viewport aspect. Priority-based screen-space label
-collision handling keeps dense selections readable without hiding their DOM
-relationship list. The labeled-node selector and semantic details are the
-keyboard and screen-reader path on every map. Session pages also include
-complete readable node and relationship lists. WebGL failure preserves those
-DOM alternatives.
+A session remains available in the chronological session list immediately
+after capture starts, but it enters the relationship graph only after its first
+event is archived. This avoids rendering generic empty session spheres that
+have no useful relationship to inspect.
+
+The unfiltered overview always reserves the five canonical entertainment lanes
+and uses three semantic dimensions: X is normalized stream progress, Y is
+supplied moment importance, and Z is the entertainment lane. Empty lanes are
+labeled **No saved sessions** and add no fake records. Actual unclassified
+history receives a sixth **Other entertainment** lane. A compact status reports
+sessions, moments, and populated lanes; the full explanation remains available
+to screen readers and in the details below the canvas.
+Structural Memory/domain/session roots sit before the measured event region and
+do not receive fake numeric values. Context sits near the weighted centroid of
+its connected events; cross-domain context falls between the lanes it connects.
+Explicitly domain-filtered and session-scoped single-lane maps switch to the
+honest progress × importance 2D projection and disable orbit. Buttons restore
+named semantic comparisons,
+zoom, and framing instead of raw axis directions. Priority-based label collision
+handling keeps dense selections readable without hiding the DOM relationship
+list. The labeled-node selector and semantic details sit below the full-width
+canvas, session pages include complete readable lists, and WebGL failure
+preserves those alternatives.
 
 The Memory dashboard imports the extension's actual design tokens and shared
 button, input, label, and select primitives. Wider-page layout and WebGL styles
@@ -438,18 +457,18 @@ Run commands from the repository root:
 
 | Command | Processes and purpose |
 | --- | --- |
-| `npm run dev` | Normal backend `8000` + Live extension `5173` + Memory dashboard `5174`. |
-| `npm run dev:realtime` | Normal backend `8000` + Live extension `5173`; omits the dashboard Vite process. |
+| `npm run dev` | Demo-seeded development backend `8000` + Live extension `5173` + Memory dashboard `5174`. |
+| `npm run dev:realtime` | Empty-history backend `8000` + Live extension `5173`; omits the dashboard Vite process. |
 | `npm run dev:dashboard` | Demo-history backend `8000` + Memory dashboard `5174`; no extension process. |
 | `npm run build` | Builds `chrome-extension/dist` and `session-dashboard/dist`. |
 | `npm run demo` | Builds both surfaces, then serves the deterministic dashboard through one backend on `8000`. |
 | `npm run check` | Runs orchestration tests, backend checks, extension tests/build, and dashboard tests/typecheck/build. |
 
-MongoDB helper commands:
+Optional offline MongoDB helper commands:
 
 | Command | Purpose |
 | --- | --- |
-| `docker compose up -d mongodb` | Start the loopback-only profile database. |
+| `docker compose up -d mongodb` | Start the optional loopback-only profile database. |
 | `docker compose stop mongodb` | Stop it without deleting account data. |
 
 Reload the unpacked extension in `chrome://extensions` after extension build
@@ -465,11 +484,14 @@ The backend is not running, exited after startup, or is using a different port.
 Run the appropriate root development command and keep that terminal open. The
 extension manifest and default WebSocket URL expect port `8000`.
 
-### Account storage says MongoDB is unavailable
+### Account storage is unavailable
 
-Run `docker compose up -d mongodb`, set `MONGODB_URI` and `MONGODB_DB_NAME` in
-`ai-voice-realtime/.env`, and restart the development profile. The account UI
-does not silently write names or emails to local storage.
+For Atlas, confirm the dedicated database user credentials, narrowly scoped
+network access entry, and copied Drivers SRV value; then set `MONGODB_URI` and
+`MONGODB_DB_NAME` in `ai-voice-realtime/.env` and restart the development
+profile. For the optional offline store, run `docker compose up -d mongodb`
+and use `mongodb://localhost:27017`. The account UI does not silently write
+names or emails to local storage.
 
 ### Open Memory Dashboard opens a 404 page
 

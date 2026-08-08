@@ -74,7 +74,7 @@ export function createAccountRouter({ accountRepository }) {
       response.status(503).json({
         error: {
           code: "ACCOUNT_STORAGE_UNAVAILABLE",
-          message: "MongoDB account storage is not configured on this server.",
+          message: "StreamSense account storage is temporarily unavailable.",
         },
       });
       return;

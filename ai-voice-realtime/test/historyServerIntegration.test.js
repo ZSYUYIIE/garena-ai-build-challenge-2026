@@ -37,7 +37,7 @@ test("the main server exposes history APIs and the built dashboard SPA", async (
   const sessionsResponse = await fetch(`${baseUrl}/api/sessions`);
   const sessions = await sessionsResponse.json();
   assert.equal(sessionsResponse.status, 200);
-  assert.equal(sessions.sessions.length, 3);
+  assert.equal(sessions.sessions.length, 5);
 
   const redirect = await fetch(`${baseUrl}/dashboard`, { redirect: "manual" });
   assert.equal(redirect.status, 308);

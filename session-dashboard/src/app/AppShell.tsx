@@ -283,16 +283,6 @@ export function AppShell() {
                 </NavLink>
               </li>
               <li>
-                <button
-                  className={buttonVariants({ variant: "ghost", size: "lg" })}
-                  type="button"
-                  onClick={focusGraph}
-                  aria-keyshortcuts="Alt+G"
-                >
-                  3D map
-                </button>
-              </li>
-              <li>
                 <NavLink
                   to="/search"
                   aria-keyshortcuts="Control+K"

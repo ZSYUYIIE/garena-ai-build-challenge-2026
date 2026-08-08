@@ -48,7 +48,7 @@ describe("dashboard account", () => {
     }));
   });
 
-  it("creates, edits, exposes, and signs out of a MongoDB-backed profile", async () => {
+  it("creates, edits, exposes, and signs out of a StreamSense profile", async () => {
     const user = userEvent.setup();
     const { container } = renderDashboard("/account");
 
@@ -56,19 +56,24 @@ describe("dashboard account", () => {
       screen.getByRole("heading", { name: "Create your StreamSense account" }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Prototype account notice")).toHaveTextContent(
-      "MongoDB prototype profile",
+      "Your StreamSense profile",
     );
     expect(screen.getByLabelText("Prototype account notice")).toHaveTextContent(
-      "no password authentication",
+      "does not use password sign-in",
     );
+    expect(screen.getByLabelText("Prototype account notice")).toHaveTextContent(
+      "saved in your StreamSense profile",
+    );
+    expect(container).not.toHaveTextContent(/MongoDB/i);
 
     await user.type(screen.getByLabelText("Display name"), "Maya Chen");
     await user.type(screen.getByLabelText("Email"), "Maya@Example.com");
-    await user.click(screen.getByRole("button", { name: "Create MongoDB account" }));
+    await user.click(screen.getByRole("button", { name: "Create StreamSense account" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "MongoDB account created",
+      "StreamSense account created",
     );
+    expect(container).not.toHaveTextContent(/MongoDB/i);
     expect(storedAccount).toMatchObject({
       displayName: "Maya Chen",
       email: "maya@example.com",
@@ -97,7 +102,7 @@ describe("dashboard account", () => {
     expect(readDashboardAccountId()).toBeNull();
     expect(storedAccount?.displayName).toBe("Maya C");
     expect(
-      screen.getByRole("button", { name: "Create MongoDB account" }),
+      screen.getByRole("button", { name: "Create StreamSense account" }),
     ).toBeEnabled();
 
     const accessibility = await axe.run(container, {

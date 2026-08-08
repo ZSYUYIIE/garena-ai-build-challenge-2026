@@ -37,10 +37,7 @@ describe("dashboard shell accessibility", () => {
     expect(within(navigation).getByRole("link", { name: "Account" })).toBeVisible();
     expect(within(navigation).queryByText(/explore/i)).not.toBeInTheDocument();
 
-    expect(within(navigation).getByRole("button", { name: "3D map" })).toHaveAttribute(
-      "aria-keyshortcuts",
-      "Alt+G",
-    );
+    expect(within(navigation).queryByRole("button", { name: "3D map" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /high contrast/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toHaveAttribute(
       "aria-keyshortcuts",

@@ -53,3 +53,35 @@ test("context graph uses bounded stable IDs for Unicode entity and topic labels"
   assert.equal(graph.nodes.some((node) => node.label === unicode), true);
   assert.equal(graph.nodes.every((node) => node.id.length <= 240), true);
 });
+
+test("context graph omits empty session shells until they have an archived event", () => {
+  const demo = createDemoHistory();
+  const populatedSession = demo.sessions[0];
+  const emptySession = demo.sessions[1];
+  const populatedEvents = demo.events.filter(
+    (event) => event.sessionId === populatedSession.sessionId,
+  );
+
+  const graph = buildContextGraph({
+    sessions: [emptySession, populatedSession],
+    sessionEvents: new Map([
+      [emptySession.sessionId, []],
+      [populatedSession.sessionId, populatedEvents],
+    ]),
+    limit: 80,
+  });
+
+  assert.equal(
+    graph.nodes.some(
+      (node) => node.type === "session" && node.sessionId === emptySession.sessionId,
+    ),
+    false,
+  );
+  assert.equal(
+    graph.nodes.some(
+      (node) =>
+        node.type === "session" && node.sessionId === populatedSession.sessionId,
+    ),
+    true,
+  );
+});

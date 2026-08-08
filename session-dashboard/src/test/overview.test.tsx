@@ -80,8 +80,12 @@ describe("history overview", () => {
       await screen.findByRole("heading", { name: "No session history yet" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "No connected moments are available" }),
+      screen.getByRole("img", {
+        name: /interactive 3d streamsense memory map/i,
+      }),
     ).toBeInTheDocument();
+    expect(screen.getByText("0 sessions · 0 moments · 0 populated lanes of 5")).toBeInTheDocument();
+    expect(screen.getAllByText(/No saved sessions/)).toHaveLength(5);
     expect(screen.queryByLabelText("Data source notice")).not.toBeInTheDocument();
   });
 
@@ -103,7 +107,7 @@ describe("history overview", () => {
     );
     expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
     expect(
-      screen.getByRole("heading", { name: "3D relationship map" }),
+      screen.getByRole("heading", { name: "Semantic relationship map" }),
     ).toBeInTheDocument();
   });
 
@@ -122,8 +126,14 @@ describe("history overview", () => {
     ).toBeInTheDocument();
 
     const graphHeading = screen.getByRole("heading", {
-      name: "3D relationship map",
+      name: "Semantic relationship map",
     });
+    expect(
+      screen.getByRole("img", {
+        name: /interactive 3d streamsense memory map/i,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 session · 1 moment · 1 populated lane of 5")).toBeInTheDocument();
     const overviewHeading = screen.getByRole("heading", {
       name: "This page of memory",
     });
@@ -171,6 +181,11 @@ describe("history overview", () => {
         }),
       ).toBe(true);
     });
+    expect(
+      await screen.findByRole("img", {
+        name: /interactive 2d streamsense memory map/i,
+      }),
+    ).toBeInTheDocument();
 
     expect(screen.getByLabelText("Data source notice")).toHaveTextContent(
       "Development demo data",

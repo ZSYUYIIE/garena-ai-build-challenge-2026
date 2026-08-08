@@ -88,7 +88,7 @@ export function AccountPage() {
       saveDashboardAccountId(savedAccount.accountId);
       setAccount(savedAccount);
       setDraft(accountToDraft(savedAccount));
-      setStatus(account ? "Account preferences updated." : "MongoDB account created.");
+      setStatus(account ? "Account preferences updated." : "StreamSense account created.");
     } catch (saveError) {
       setError(
         saveError instanceof z.ZodError
@@ -128,11 +128,12 @@ export function AccountPage() {
       </header>
 
       <aside className="account-privacy-note" aria-label="Prototype account notice">
-        <strong>MongoDB prototype profile.</strong>
+        <strong>Your StreamSense profile.</strong>
         <span>
-          {" "}The backend stores your name, email, and dashboard preferences.
-          This prototype has no password authentication yet and never stores
-          API keys or modifies the live narration pipeline.
+          {" "}Your name, email, and dashboard preferences are saved in your
+          StreamSense profile. This prototype does not use password
+          sign-in yet, and your profile never stores API keys or changes live
+          narration.
         </span>
       </aside>
 
@@ -142,7 +143,7 @@ export function AccountPage() {
             <p className="eyebrow">Identity</p>
             <h2 id="account-identity-heading">Profile details</h2>
             <p className="quiet-copy">
-              Stored by the StreamSense backend for dashboard personalization.
+              Used to personalize your StreamSense dashboard.
             </p>
           </div>
           <div className="account-fields">
@@ -181,7 +182,9 @@ export function AccountPage() {
                   }))
                 }
               />
-              <p className="field-hint">Stored in MongoDB; never used as an API credential.</p>
+              <p className="field-hint">
+                Used for your StreamSense profile; never used as an API credential.
+              </p>
             </div>
           </div>
         </section>
@@ -263,7 +266,7 @@ export function AccountPage() {
               ? "Saving account…"
               : account
                 ? "Save account changes"
-                : "Create MongoDB account"}
+                : "Create StreamSense account"}
           </Button>
           {account ? (
             <Button
@@ -289,7 +292,7 @@ function accountErrorMessage(error: unknown): string {
     }
     return error.message;
   }
-  return "The account could not be saved to MongoDB.";
+  return "The account could not be saved. Please try again.";
 }
 
 function accountToDraft(account: DashboardAccount): DashboardAccountDraft {

@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { ThreeGraphExplorer } from "../features/context/ThreeGraphExplorer";
+import type { GraphSceneScope } from "../features/context/graphModel";
 import type {
   GraphRendererController,
   GraphRendererFactory,
@@ -14,7 +15,7 @@ import { demoGraphResponse, secondEventId } from "./fixtures";
 function createRendererHarness() {
   const controller: GraphRendererController = {
     resetCamera: vi.fn(),
-    rotateCamera: vi.fn(),
+    setCameraView: vi.fn(),
     zoomCamera: vi.fn(),
     selectNode: vi.fn(),
     setPaused: vi.fn(),
@@ -32,12 +33,18 @@ function createRendererHarness() {
   };
 }
 
-function renderExplorer(rendererFactory: GraphRendererFactory) {
+function renderExplorer(
+  rendererFactory: GraphRendererFactory,
+  nodes = demoGraphResponse.nodes,
+  edges = demoGraphResponse.edges,
+  scope: GraphSceneScope = "filtered",
+) {
   return render(
     <MemoryRouter>
       <ThreeGraphExplorer
-        nodes={demoGraphResponse.nodes}
-        edges={demoGraphResponse.edges}
+        nodes={nodes}
+        edges={edges}
+        scope={scope}
         rendererFactory={rendererFactory}
       />
     </MemoryRouter>,
@@ -45,7 +52,7 @@ function renderExplorer(rendererFactory: GraphRendererFactory) {
 }
 
 describe("ThreeGraphExplorer", () => {
-  it("explains the sphere constellation without presenting fictional XYZ axes", () => {
+  it("explains semantic axes and an adaptive single-lane 2D view", () => {
     const harness = createRendererHarness();
     renderExplorer(harness.factory);
 
@@ -54,20 +61,48 @@ describe("ThreeGraphExplorer", () => {
     expect(harness.getOptions()?.model.edges).toHaveLength(2);
     expect(
       screen.getByRole("img", {
-        name: /interactive 3d streamsense memory constellation/i,
+        name: /interactive 2d streamsense memory map of progress and importance/i,
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/1 session and 1 significant moment/i)).toBeInTheDocument();
-    expect(screen.getByText(/memory hierarchy, not an xyz chart/i)).toBeInTheDocument();
+    expect(screen.getByText("1 session · 1 moment · 1 populated lane of 1")).toBeInTheDocument();
     expect(
-      screen.getByRole("list", { name: "Relationship map hierarchy" }),
-    ).toHaveTextContent("Domain island");
+      screen.getByText(/single-lane view uses an honest two-dimensional plot/i, {
+        selector: "#graph-layout-explanation",
+      }),
+    ).toHaveClass("visually-hidden");
+    expect(document.querySelector(".graph-layout-explanation")).toBeNull();
+    const hierarchy = screen.getByRole("list", {
+      name: "Relationship map hierarchy",
+    });
+    expect(hierarchy).toHaveTextContent("Memory");
+    expect(hierarchy).toHaveTextContent("Domains");
+    expect(hierarchy).toHaveTextContent("Sessions");
+    expect(
+      hierarchy,
+    ).toHaveTextContent("Moments and context");
+    expect(hierarchy).not.toHaveTextContent("largest sphere represents");
+    expect(
+      screen.getByRole("list", { name: "Graph node role legend" }),
+    ).toHaveTextContent("StreamSense Memory · largest root sphere");
     expect(
       screen.getByRole("list", { name: "Graph node role legend" }),
     ).toHaveTextContent("Event · filled sphere sized by importance");
     expect(
       screen.getByRole("list", { name: "Graph relationship legend" }),
     ).toHaveTextContent("Belongs to the same session");
+    expect(
+      screen.getByText(/events alone use exact progress and importance coordinates/i),
+    ).toBeInTheDocument();
+    const viewport = screen.getByRole("img").closest(".graph-visual-layout");
+    const details = screen
+      .getByRole("heading", { name: "Inspect a node" })
+      .closest("section");
+    expect(viewport).not.toBeNull();
+    expect(details).toHaveClass("graph-accessible-details");
+    expect(
+      viewport!.compareDocumentPosition(details!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(document.querySelector("aside.graph-details")).toBeNull();
   });
 
   it("supports DOM selection, describes first-hop edges, and exposes the timeline", async () => {
@@ -105,23 +140,70 @@ describe("ThreeGraphExplorer", () => {
     expect(screen.getAllByRole("status")).toHaveLength(1);
   });
 
-  it("provides native camera buttons as alternatives to dragging and scrolling", async () => {
+  it("forces a five-lane 3D overview without inventing sessions or moments", () => {
+    const harness = createRendererHarness();
+    renderExplorer(
+      harness.factory,
+      demoGraphResponse.nodes,
+      demoGraphResponse.edges,
+      "all-domains-overview",
+    );
+
+    const model = harness.getOptions()?.model;
+    expect(model?.projectionMode).toBe("three-dimensional");
+    expect(model?.domains).toHaveLength(5);
+    expect(model?.nodes).toHaveLength(demoGraphResponse.nodes.length);
+    expect(model?.edges).toHaveLength(demoGraphResponse.edges.length);
+    expect(screen.getByText("1 session · 1 moment · 1 populated lane of 5")).toBeInTheDocument();
+    expect(screen.getAllByText(/No saved sessions/)).toHaveLength(4);
+    expect(screen.getByRole("button", { name: "3D overview" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/reserves the five StreamSense entertainment lanes/i),
+    ).toHaveClass("visually-hidden");
+  });
+
+  it("provides semantic camera projections for a multi-domain graph", async () => {
     const user = userEvent.setup();
+    const harness = createRendererHarness();
+    renderExplorer(harness.factory, [
+      ...demoGraphResponse.nodes,
+      {
+        id: "session:esports",
+        type: "session",
+        label: "Esports final",
+        sessionId: "22222222-2222-4222-8222-222222222222",
+        metadata: { domain: "esports", durationSeconds: 100 },
+      },
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "3D overview" }));
+    await user.click(screen.getByRole("button", { name: "Progress × importance" }));
+    await user.click(screen.getByRole("button", { name: "Progress × entertainment" }));
+    await user.click(screen.getByRole("button", { name: "Importance × entertainment" }));
+    await user.click(screen.getByRole("button", { name: "Zoom in" }));
+    await user.click(screen.getByRole("button", { name: "Zoom out" }));
+    await user.click(screen.getByRole("button", { name: "Reset view" }));
+
+    expect(harness.controller.setCameraView).toHaveBeenNthCalledWith(1, "overview");
+    expect(harness.controller.setCameraView).toHaveBeenNthCalledWith(2, "progress-importance");
+    expect(harness.controller.setCameraView).toHaveBeenNthCalledWith(3, "progress-entertainment");
+    expect(harness.controller.setCameraView).toHaveBeenNthCalledWith(4, "importance-entertainment");
+    expect(harness.controller.zoomCamera).toHaveBeenNthCalledWith(1, 0.82);
+    expect(harness.controller.zoomCamera).toHaveBeenNthCalledWith(2, 1.22);
+    expect(harness.controller.resetCamera).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer 3D-only controls for a single entertainment lane", () => {
     const harness = createRendererHarness();
     renderExplorer(harness.factory);
 
-    await user.click(screen.getByRole("button", { name: "Rotate left" }));
-    await user.click(screen.getByRole("button", { name: "Tilt down" }));
-    await user.click(screen.getByRole("button", { name: "Zoom in" }));
-    await user.click(screen.getByRole("button", { name: "Zoom out" }));
-
-    expect(harness.controller.rotateCamera).toHaveBeenNthCalledWith(1, -0.24, 0);
-    expect(harness.controller.rotateCamera).toHaveBeenNthCalledWith(2, 0, 0.18);
-    expect(harness.controller.zoomCamera).toHaveBeenNthCalledWith(1, 0.82);
-    expect(harness.controller.zoomCamera).toHaveBeenNthCalledWith(2, 1.22);
+    expect(screen.queryByRole("button", { name: "3D overview" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Progress × entertainment" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Progress × importance" })).toBeInTheDocument();
+    expect(harness.getOptions()?.model.projectionMode).toBe("two-dimensional");
   });
 
-  it("accepts renderer selection and resets camera plus DOM detail", async () => {
+  it("accepts renderer selection and provides an explicit clear action", async () => {
     const user = userEvent.setup();
     const harness = createRendererHarness();
     renderExplorer(harness.factory);
@@ -131,9 +213,8 @@ describe("ThreeGraphExplorer", () => {
       await screen.findByRole("heading", { name: "Close-range shot saved" }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Reset view" }));
+    await user.click(screen.getByRole("button", { name: "Clear selection" }));
     expect(harness.controller.selectNode).toHaveBeenLastCalledWith(null);
-    expect(harness.controller.resetCamera).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/choose a labeled node or select a sphere/i)).toBeInTheDocument();
   });
 
@@ -173,7 +254,7 @@ describe("ThreeGraphExplorer", () => {
     };
     renderExplorer(factory);
 
-    expect(screen.getByText("3D view unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Visual map unavailable")).toBeInTheDocument();
     expect(screen.getByLabelText("Labeled graph node")).toBeEnabled();
     expect(screen.getByText(/complete readable relationship lists/i)).toBeInTheDocument();
   });

@@ -17,17 +17,20 @@ import {
 } from "../../components/AsyncState";
 import { RelationshipList } from "./RelationshipList";
 import { ThreeGraphExplorer } from "./ThreeGraphExplorer";
+import type { GraphSceneScope } from "./graphModel";
 
 type ContextGraphPanelProps = {
   options?: ContextGraphOptions;
   refreshIntervalMs?: number;
   showRelationships?: boolean;
+  scope?: GraphSceneScope;
 };
 
 export function ContextGraphPanel({
   options = { limit: 80 },
   refreshIntervalMs,
   showRelationships = false,
+  scope = "filtered",
 }: ContextGraphPanelProps) {
   const graphQuery = useQuery({
     queryKey: historyQueryKeys.graph(options),
@@ -61,7 +64,7 @@ export function ContextGraphPanel({
     );
   }
 
-  if (graphQuery.data.nodes.length === 0) {
+  if (graphQuery.data.nodes.length === 0 && scope === "filtered") {
     return (
       <EmptyState title="No connected moments are available">
         <p>Choose another entertainment domain or saved session.</p>
@@ -80,6 +83,7 @@ export function ContextGraphPanel({
       <ThreeGraphExplorer
         nodes={graphQuery.data.nodes}
         edges={graphQuery.data.edges}
+        scope={scope}
       />
     </div>
   );

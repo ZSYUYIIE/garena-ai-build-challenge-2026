@@ -68,7 +68,7 @@ describe("session detail", () => {
       screen.getByRole("heading", { name: "How this session connects" }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByRole("heading", { name: "3D relationship map" }),
+      await screen.findByRole("heading", { name: "Semantic relationship map" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", {
@@ -177,7 +177,7 @@ describe("session detail", () => {
         await screen.findByRole("heading", { level: 1, name: demoSession.title }),
       ).toBeInTheDocument();
       expect(
-        await screen.findByRole("heading", { name: "3D relationship map" }),
+        await screen.findByRole("heading", { name: "Semantic relationship map" }),
       ).toBeInTheDocument();
 
       await waitFor(

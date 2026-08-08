@@ -124,64 +124,88 @@ After Zod validation, the dashboard builds a deterministic scene model from the
 supplied arrays. It deduplicates IDs, omits dangling edges whose endpoint is not
 present, and preserves stable ordering.
 
-### Position is a memory hierarchy, not an XYZ measurement
+### Position uses semantic measurements
 
-The scene follows one stable order: entertainment domain, session, event, then
-entity/topic context. Session domain metadata maps into labeled entertainment
-islands: Sports, Esports and games, Concerts, Product launches, Creator
-livestreams, and Other entertainment. Island and session-system spacing is
-derived from their bounded footprints so sibling systems do not intersect.
+The scene follows one stable hierarchy: StreamSense Memory, entertainment
+domain, session, event, then entity/topic context. The Memory, domain, and
+session roots are derived layout scaffolding placed before the measured event
+region; they are not assigned invented progress or importance values.
 
-Each session is an anchor. Events form a deterministic clockwise arc around it,
-using timestamp order with stable ID tie-breakers. Single-session entities and
-topics occupy successive outer shells. Arc and shell radii account for bounded
-node count and maximum sphere size so dense siblings do not intersect. Context
-shared by several sessions in one domain uses packed rings outside that island.
-Multi-domain context becomes a pearl bridge in a dedicated lane above all
-islands; it is never positioned by an average that can land inside an unrelated
-domain. Reset framing includes sphere extents, island-label positions, and the
-current viewport aspect. Depth is only a small deterministic separation used to
-reduce overlap. Absolute X, Y, and Z coordinates are not quantities, and visual
-proximity without a supplied edge is not a relationship.
+Event coordinates are deterministic and inspectable:
+
+- X is normalized stream progress from 0–100%. Session duration is the primary
+  denominator; active or duration-less sessions fall back to the latest
+  recorded event. Exact timestamps remain in node details.
+- Y is the supplied event `importance`. A missing value occupies a labeled
+  **Not scored** band rather than a fabricated midpoint.
+- Z is the categorical entertainment lane: Sports, Esports and games,
+  Concerts, Product launches, Creator livestreams, or Other entertainment.
+  Multiple sessions use narrow stable sub-lanes inside that band.
+
+Entity and topic coordinates are weighted centroids of their connected events,
+with small deterministic offsets solely to keep coincident spheres separable.
+Multi-domain context uses the midpoint of the lanes it actually connects and
+retains the pearl surface. Visual proximity without a supplied edge is never a
+relationship.
+
+The unfiltered dashboard overview reserves five canonical domain lanes and
+defaults to the oblique 3D overview. Reserved empty lanes are renderer-only
+scaffolding: they create no API node, edge, session, event, coordinate, or
+relationship. Unclassified supplied history adds a sixth Other entertainment
+lane. A domain filter or session-scoped response remains data-driven and, with
+one lane, defaults to the honest progress × importance 2D projection and
+disables orbit. Fixed buttons restore **3D
+overview**, **Progress × importance**, **Progress × entertainment**, or
+**Importance × entertainment** as applicable.
 
 ### All-sphere node semantics
 
 Every node uses the same sphere geometry. Color identifies entertainment
-domain, while surface, halo, size, labels, and the DOM inspector convey role so
+domain, while surface, halo, size, labels, and DOM details convey role so
 meaning does not depend on color alone.
 
 | Node type | Sphere role and size meaning |
 | --- | --- |
-| `session` | Largest fixed-size anchor with a double halo. |
+| Derived Memory root | Largest luminous sphere; layout scaffolding rather than an API node. |
+| Derived domain root | Second-largest colored lane root; layout scaffolding rather than an API node. |
+| `session` | Medium fixed-size structural anchor with a double halo. |
 | `event` | Filled sphere; radius represents supplied `importance`, not confidence or similarity. |
 | `entity` | Wireframe sphere; radius represents the number of supplied connections to events, capped for display. |
 | `topic` | Translucent sphere; radius represents the number of supplied connections to events, capped for display. |
 
 ### Edge semantics
 
-Structural edge types retain the exact meanings defined above. Session,
-temporal, and entity relationships are solid lines with distinct legend
-colors. Shared-topic relationships use a short dashed line. A supplied
-`semantic_similarity` edge uses a separate dashed treatment. When the backend
-omits that edge, the client does not calculate or fabricate one. Selecting a
-sphere brightens only that node and its first-hop supplied relationships while
-unrelated content dims.
+Structural edge types retain the exact meanings defined above. Session and
+temporal relationships form the persistent overview skeleton. Entity, topic,
+and semantic links are hidden until their endpoint is selected, reducing edge
+crossings without removing them from the DOM alternative. Shared-topic and
+semantic relationships retain distinct dashed treatments. When the backend
+omits a relationship, the client does not calculate or fabricate one.
+
+The WebGL renderer adds the luminous Memory and domain roots, semantic rulers,
+and faint Memory-to-domain and domain-to-session hierarchy guides. These are
+layout scaffolding, not records in `nodes` or `edges`. They never appear as a
+supplied relationship and are described separately in the visual legend.
 
 Projected labels are priority-bounded and collision checked after every CSS2D
-render. Selected and hovered labels win, followed by domain, session, and the
-single default event label allowed per session. First-hop spheres and edges
-still brighten on selection, but connected labels are not all forced onscreen.
-This prevents a dense session from replacing the graph with overlapping text.
+render. Memory and domain roots carry the default overview; individual session,
+event, entity, and topic labels are disclosed on hover or selection. Each
+entertainment lane has a faint colored progress-by-importance grid, making the
+categorical Z separation visible without inventing a continuous score. First-hop
+spheres and edges still brighten on selection, but connected labels are not all
+forced onscreen. This prevents a dense session from replacing the graph with
+overlapping text.
 
-The canvas supports pointer orbit, zoom, and sphere selection, with visible
-rotate, tilt, zoom, and reset buttons. It is never the only access path. A
-labeled grouped node selector, semantic detail panel, first-hop relationship
-sentences, session/event links, legends, and status text expose the supplied
-information to keyboard and assistive-technology users. Session pages continue
-with complete readable node and relationship lists.
+The multi-domain canvas supports pointer orbit and sphere selection, with
+visible semantic projection, reset, and zoom buttons. Single-lane 2D views do
+not offer orbit. The canvas is never the only access path. A labeled grouped
+node selector, selected-node semantic coordinates, first-hop relationship
+sentences, session/event links, legends, and status text appear below the
+full-width canvas. Session pages continue with complete readable node and
+relationship lists.
 
 `Alt+G` focuses the labeled selector, and the dashboard also exposes visible
-shortcut help. One stable accessible theme covers both the DOM inspector and
+shortcut help. One stable accessible theme covers both the DOM details and
 WebGL scene; there is no separate dashboard contrast mode.
 `prefers-reduced-motion` disables camera easing and minimizes CSS motion. If
 WebGL initialization fails, the dashboard reports the optional view as

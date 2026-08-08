@@ -129,6 +129,7 @@ export function HistoryOverviewPage() {
               domain: graphDomain || undefined,
               limit: 80,
             }}
+            scope={graphDomain ? "filtered" : "all-domains-overview"}
           />
         </div>
 

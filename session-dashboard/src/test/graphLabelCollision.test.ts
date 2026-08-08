@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   graphCameraHome,
+  graphCameraPose,
+  graphAxisFrame,
   graphBackgroundColor,
   graphDomainLabelY,
+  graphDomainCoreRadius,
   graphEdgePresentation,
+  graphHierarchyGuides,
+  graphNodeDisplayLabel,
   resolveGraphRenderSize,
   selectNonOverlappingGraphLabelIds,
   shouldDimGraphNode,
@@ -89,13 +94,100 @@ describe("graph renderer accessibility presentation", () => {
     });
   });
 
-  it("positions domain labels above the complete island radius", () => {
+  it("positions domain labels directly above the dominant root sphere", () => {
     expect(
       graphDomainLabelY({
         position: { x: 4, y: 2, z: 0 },
         radius: 9,
       }),
-    ).toBe(12.25);
+    ).toBeCloseTo(12.05);
+  });
+
+  it("derives one non-semantic root-to-session hierarchy guide per session", () => {
+    const model = buildGraphSceneModel(
+      [
+        {
+          id: "session:guide:a",
+          type: "session",
+          label: "First sports session",
+          metadata: { domain: "sports" },
+        },
+        {
+          id: "session:guide:b",
+          type: "session",
+          label: "Second sports session",
+          metadata: { domain: "sports" },
+        },
+      ],
+      [],
+    );
+    const guides = graphHierarchyGuides(model);
+
+    expect(guides).toHaveLength(3);
+    expect(guides.filter((guide) => guide.kind === "domain-session").map((guide) => guide.sessionNodeId)).toEqual([
+      "session:guide:a",
+      "session:guide:b",
+    ]);
+    expect(guides.find((guide) => guide.kind === "memory-domain")?.source).toBe(
+      model.memoryRoot.position,
+    );
+    expect(model.edges).toHaveLength(0);
+    expect(graphDomainCoreRadius(model.domains[0]!)).toBeGreaterThan(
+      Math.max(...model.nodes.map((node) => node.radius)),
+    );
+  });
+
+  it("provides deterministic semantic projection camera poses", () => {
+    const model = buildGraphSceneModel(
+      [
+        {
+          id: "session:axes",
+          type: "session",
+          label: "Axes sports session",
+          metadata: { domain: "sports" },
+        },
+      ],
+      [],
+    );
+    const importanceEntertainment = graphCameraPose(model, 1, "importance-entertainment");
+    const progressEntertainment = graphCameraPose(model, 1, "progress-entertainment");
+    const progressImportance = graphCameraPose(model, 1, "progress-importance");
+    const overview = graphCameraPose(model, 1, "overview");
+
+    expect(importanceEntertainment.position.x).toBeGreaterThan(importanceEntertainment.target.x);
+    expect(importanceEntertainment.position.y).toBeCloseTo(importanceEntertainment.target.y);
+    expect(importanceEntertainment.position.z).toBeCloseTo(importanceEntertainment.target.z);
+    expect(progressEntertainment.position.y).toBeGreaterThan(progressEntertainment.target.y);
+    expect(progressImportance.position.z).toBeGreaterThan(progressImportance.target.z);
+    expect(overview.position.x).toBeGreaterThan(overview.target.x);
+    expect(overview.position.y).toBeGreaterThan(overview.target.y);
+    expect(overview.position.z).toBeGreaterThan(overview.target.z);
+    expect(importanceEntertainment.distance).toBeGreaterThan(0);
+    expect(progressEntertainment.distance).toBeGreaterThan(0);
+    expect(progressImportance.distance).toBeGreaterThan(0);
+    expect(graphAxisFrame(model).xMaximum).toBeGreaterThan(
+      graphAxisFrame(model).xMinimum,
+    );
+  });
+
+  it("replaces an uninformative live session canvas label with honest metadata", () => {
+    const model = buildGraphSceneModel(
+      [
+        {
+          id: "session:generic",
+          type: "session",
+          label: "StreamSense session",
+          metadata: {
+            domain: "football",
+            startedAt: "2026-08-08T10:00:00.000Z",
+          },
+        },
+      ],
+      [],
+    );
+
+    expect(graphNodeDisplayLabel(model.nodes[0]!)).toMatch(/^Sports · /);
+    expect(graphNodeDisplayLabel(model.nodes[0]!)).not.toBe("StreamSense session");
   });
 
   it("frames sphere radii and domain labels more conservatively on narrow screens", () => {
@@ -113,17 +205,17 @@ describe("graph renderer accessibility presentation", () => {
     const squareHome = graphCameraHome(model, 1);
     const narrowHome = graphCameraHome(model, 0.4);
 
-    expect(squareHome.target.y).toBeGreaterThan(0);
+    expect(Number.isFinite(squareHome.target.y)).toBe(true);
     expect(narrowHome.distance).toBeGreaterThan(squareHome.distance);
+    expect(squareHome.position.x).toBeCloseTo(squareHome.target.x);
+    expect(squareHome.position.y).toBeCloseTo(squareHome.target.y);
+    expect(squareHome.position.z).toBeGreaterThan(squareHome.target.z);
   });
 
-  it("keeps every default relationship color above 3:1 against the scene", () => {
+  it("keeps every persistent relationship color above 3:1 against the scene", () => {
     const relationshipTypes = [
       "same_session",
       "temporal_relation",
-      "shared_entity",
-      "shared_topic",
-      "semantic_similarity",
     ] as const;
 
     for (const type of relationshipTypes) {
@@ -142,6 +234,7 @@ describe("graph renderer accessibility presentation", () => {
   it("uses one stable graph presentation instead of a theme mode", () => {
     expect(graphBackgroundColor()).toBe(0x07111f);
     expect(graphEdgePresentation("same_session").opacity).toBe(0.6);
+    expect(graphEdgePresentation("shared_topic").opacity).toBe(0);
   });
 
   it("keeps a hovered node visible while another selected branch has focus", () => {

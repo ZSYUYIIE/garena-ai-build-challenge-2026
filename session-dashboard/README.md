@@ -36,7 +36,6 @@ session. From the repository root:
 
 ```bash
 npm install
-docker compose up -d mongodb
 npm run dev:dashboard
 ```
 
@@ -44,6 +43,12 @@ Open `http://127.0.0.1:5174/dashboard/`. Vite serves the React app on port
 `5174` and proxies relative `/api` requests to `http://127.0.0.1:8000`, so
 development does not require permissive CORS. The command supervises exactly
 one demo backend and one dashboard Vite process; Ctrl+C stops the profile.
+
+Account preferences use the backend's configured MongoDB Atlas connection.
+Copy `ai-voice-realtime/.env.example` to the ignored backend `.env`, then place
+the Atlas Drivers SRV value in `MONGODB_URI`. A dedicated Atlas database user is
+separate from the MongoDB Cloud sign-in. For offline development only, start
+`docker compose up -d mongodb` and use `mongodb://localhost:27017` instead.
 
 `start:dashboard-demo` is development-only and is refused when
 `NODE_ENV=production`. It seeds a fresh in-memory repository during backend
@@ -119,24 +124,38 @@ session repeats the same component with that session ID. The client validates,
 deduplicates, and renders only supplied nodes and edges; it does not infer
 missing relationships or semantic scores.
 
-This is a memory hierarchy, not an XYZ chart. The deterministic layout reads as
-`entertainment domain -> session -> chronological event -> entity/topic`.
-Entertainment domains occupy separated islands. Each session anchors a
-non-overlapping system, its events progress clockwise in timestamp order, and
-single-session entities and topics occupy successive outer shells. Shared
-multi-domain context occupies a dedicated bridge lane above every domain island
-so averaging cannot place it inside an unrelated island. Context shared by
-several sessions in one domain uses packed rings outside that island. Arc and
-shell radii are derived from bounded node count and maximum sphere size, keeping
-dense siblings separated. Reset framing includes sphere radii, island labels,
-and the current viewport aspect. Depth is only a small deterministic overlap
-separator; absolute X, Y, and Z values are not data.
+This is a measured memory hierarchy:
+`StreamSense Memory -> entertainment domain -> session -> chronological event
+-> entity/topic`. The Memory root is the largest luminous sphere, followed by
+progressively smaller domain, session, event, and context spheres. Memory,
+domain, and session roots sit before the measured plot and never receive fake
+data coordinates.
+
+Event X is normalized stream progress from 0–100%, Y is supplied importance,
+and Z is the labeled entertainment lane. Session duration supplies the progress
+denominator; active sessions fall back to their latest recorded event. Missing
+importance uses a visible **Not scored** band. Multiple sessions use bounded
+sub-lanes within their domain. Entity/topic positions derive from connected
+event centroids, while cross-domain context sits between the lanes it connects.
+
+While **All domains** is selected, the overview reserves Sports, Esports and
+games, Concerts, Product launches, and Creator livestreams and defaults to an
+oblique 3D view. Empty lanes say **No saved sessions** and create no fake API
+nodes, sessions, moments, coordinates, or relationships. Actual unclassified
+history retains a sixth **Other entertainment** lane. Explicit domain filters
+and session-scoped maps remain data-driven and default to the honest progress ×
+importance 2D view when only one lane is present. Semantic camera buttons
+restore **3D overview**, **Progress × importance**, **Progress ×
+entertainment**, and **Importance × entertainment** when those dimensions are
+available.
 
 Every node uses sphere geometry. Meaning is deliberately not color-only:
 
 | Role | Sphere treatment and size meaning |
 | --- | --- |
-| Session | Largest anchor sphere with a double halo. |
+| Memory root | Largest luminous sphere; derived hierarchy scaffold rather than an API node. |
+| Domain root | Second-largest colored lane root; derived from session metadata. |
+| Session | Medium structural anchor with a double halo. |
 | Event | Filled sphere; radius represents supplied event importance. |
 | Entity | Wireframe sphere; radius represents its supplied event-connection count. |
 | Topic | Translucent sphere; radius represents its supplied event-connection count. |
@@ -148,20 +167,30 @@ domain and role.
 
 Edges preserve the API contract: session membership, next event in time,
 shared entity, shared topic, and optional backend-supplied semantic similarity.
-Topic and semantic links use distinct dashed treatments; selection brightens
-the selected sphere and its first-hop supplied connections while unrelated
-content dims. Connected labels are not forced onscreen. A screen-space
-collision pass keeps the selected and hovered labels first, then domain,
-session, and bounded default labels. The readable inspector retains every
-first-hop relationship. Edge weight retains the API meaning and is never
-presented as confidence unless the backend contract explicitly says so.
+Session membership and chronology form the persistent skeleton. Entity, topic,
+and semantic links stay hidden until selection, then the selected sphere and its
+first-hop supplied connections brighten while unrelated content dims. Connected
+labels are not forced onscreen. Memory and domain roots carry the default
+overview; individual node labels appear on hover or selection and pass through
+screen-space collision suppression. Faint colored progress-by-importance grids
+make the categorical entertainment lanes legible in depth. The readable
+inspector retains every first-hop relationship.
+
+The renderer also draws semantic rulers plus faint Memory-to-domain and
+domain-to-session guides. These derived elements explain hierarchy but are not
+added to the backend graph contract or supplied-edge legend.
+
+Visible introduction copy is intentionally compact: session count, moment
+count, and populated-lane count plus the four headings Memory, Domains,
+Sessions, and Moments and context. The complete axis and layout description is
+kept as the canvas text alternative and repeated in the readable details below.
 
 The hierarchy and focus behavior are informed by the
 [Cone Trees hierarchy research](https://doi.org/10.1145/108844.108883), the
 empirical priority of
 [reducing edge crossings](https://doi.org/10.1007/3-540-63938-1_67), and
 [3D network perception research](https://scholars.unh.edu/ccom/182/). The
-adjacent summary, inspector, and relationship lists follow the W3C guidance for
+summary, below-canvas node details, and relationship lists follow the W3C guidance for
 [complex-image text alternatives](https://www.w3.org/WAI/tutorials/images/complex/).
 
 ## Shared extension design system
@@ -197,13 +226,14 @@ mode. Contrast, borders, text, and focus treatment are part of the default
 design. The stylesheet still respects the operating system's forced-colors
 mode. Shortcuts never replace standard Tab navigation.
 
-Pointer users can orbit, zoom, and select spheres, and visible buttons provide
-rotate, tilt, zoom, and reset operations. Keyboard and assistive-technology
+Pointer users can orbit the multi-domain view, zoom, and select spheres.
+Visible buttons restore named semantic projections and reset framing. The
+single-lane 2D view disables orbit. Keyboard and assistive-technology
 users can select every labeled node in a labeled, grouped control, inspect its
 role, domain, size meaning, and first-hop relationships, and follow its
-session/event link. Session pages continue with full readable node and
-relationship lists. On the overview, the selector, details, status, and
-legends provide the non-canvas inspection path.
+session/event link. The selector, selected-node details, and legends sit below
+the full-width canvas rather than in a scrolling side inspector. Session pages
+continue with complete readable node and relationship lists.
 
 `prefers-reduced-motion` disables camera easing and minimizes CSS animation and
 transitions. If WebGL cannot start, the app reports the optional visual view as

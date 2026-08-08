@@ -10,21 +10,25 @@ test("MemoryHistoryRepository lists bounded sessions with stable opaque cursors"
 
   const first = repository.listSessions({ limit: 2 });
   const second = repository.listSessions({ limit: 2, cursor: first.nextCursor });
+  const third = repository.listSessions({ limit: 2, cursor: second.nextCursor });
 
   assert.equal(first.items.length, 2);
-  assert.equal(second.items.length, 1);
+  assert.equal(second.items.length, 2);
+  assert.equal(third.items.length, 1);
   assert.ok(first.nextCursor);
-  assert.equal(second.nextCursor, null);
+  assert.ok(second.nextCursor);
+  assert.equal(third.nextCursor, null);
+  const sessions = [...first.items, ...second.items, ...third.items];
   assert.deepEqual(
-    [...first.items, ...second.items].map((session) => session.startedAt),
-    [...first.items, ...second.items]
+    sessions.map((session) => session.startedAt),
+    sessions
       .map((session) => session.startedAt)
       .toSorted()
       .reverse(),
   );
   assert.equal(
-    new Set([...first.items, ...second.items].map((session) => session.sessionId)).size,
-    3,
+    new Set(sessions.map((session) => session.sessionId)).size,
+    5,
   );
   assert.throws(
     () => repository.listSessions({ cursor: "not-a-cursor" }),
@@ -38,13 +42,13 @@ test("MemoryHistoryRepository isolates and chronologically paginates session eve
   await seedDemoHistory(repository);
   const sessionId = demo.sessions[0].sessionId;
 
-  const first = repository.listSessionEvents(sessionId, { limit: 5 });
+  const first = repository.listSessionEvents(sessionId, { limit: 3 });
   const second = repository.listSessionEvents(sessionId, {
-    limit: 5,
+    limit: 3,
     cursor: first.nextCursor,
   });
-  assert.equal(first.items.length, 5);
-  assert.equal(second.items.length, 5);
+  assert.equal(first.items.length, 3);
+  assert.equal(second.items.length, 2);
   const combined = [...first.items, ...second.items];
   assert.deepEqual(
     combined.map((event) => event.timestampSeconds),
@@ -53,7 +57,10 @@ test("MemoryHistoryRepository isolates and chronologically paginates session eve
   assert.equal(combined.every((event) => event.sessionId === sessionId), true);
 
   const goals = repository.listSessionEvents(sessionId, { eventType: "goal" });
-  assert.equal(goals.items.length, 2);
+  const expectedGoals = demo.events.filter(
+    (event) => event.sessionId === sessionId && event.eventType === "goal",
+  );
+  assert.equal(goals.items.length, expectedGoals.length);
   assert.equal(goals.items.every((event) => event.eventType === "goal"), true);
   assert.throws(
     () => repository.listSessionEvents(sessionId, {

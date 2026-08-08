@@ -25,7 +25,7 @@ flowchart LR
     Extension -->|"Open Memory Dashboard"| Dashboard["React Memory dashboard"]
     Dashboard -->|"bounded REST /api"| Backend
     Dashboard -->|"account REST"| Backend
-    Backend --> Mongo[("MongoDB dashboard_accounts")]
+    Backend --> Mongo[("MongoDB Atlas dashboard_accounts")]
 ```
 
 The toolbar action always opens the side panel. The dashboard handoff is an
@@ -62,22 +62,38 @@ The dashboard is a bounded workspace with a slim navigation rail. It reuses the
 extension's tokens and Button/Input/Label/Select primitives at build time while
 keeping wider-page layout and WebGL code dashboard-specific.
 
-The 3D graph is a semantic memory hierarchy:
+The relationship map is a semantic memory hierarchy:
 
 ```text
-Entertainment domain
-  └─ Session
-      └─ Chronological event
-          ├─ Entity context
-          └─ Topic context
+StreamSense Memory
+  └─ Entertainment domain
+      └─ Session
+          └─ Chronological event
+              ├─ Entity context
+              └─ Topic context
 ```
 
-Domain islands and count-aware shells prevent dense groups from colliding.
-Color, sphere size, halo treatment, readable legends, and adjacent text provide
-redundant meaning. Selection reveals supplied first-hop relationships; the
-client never fabricates a relationship. Screen-space collision suppression
-keeps projected labels bounded. The node selector, inspector, and full DOM
-relationship lists remain the keyboard and screen-reader equivalent.
+The largest luminous sphere is a derived StreamSense Memory root. Progressively
+smaller domain, session, event, and entity/topic spheres form the visual
+hierarchy. Structural roots sit before the measured event region. Event X is
+normalized stream progress from 0–100%, Y is supplied importance, and Z is a
+labeled entertainment lane. Multiple sessions use bounded sub-lanes inside
+their domain. Context is placed near the weighted centroid of its connected
+events; cross-domain context falls between the lanes it actually connects.
+
+Color, sphere size, surface treatment, depth, readable legends, and adjacent
+text provide redundant meaning. With **All domains** selected, the overview
+reserves the five canonical entertainment lanes and uses semantic 3D. Empty
+lanes remain labeled scaffolding without API records; real unclassified history
+adds a sixth Other entertainment lane. Explicit filters and session-scoped
+single-lane maps default to the truthful progress × importance 2D projection.
+Camera buttons name the comparisons they show rather
+than raw axes, and there is no automatic animation. Selection reveals supplied
+first-hop relationships, and the client never fabricates one. Each entertainment
+lane has a faint progress-by-importance grid; root labels remain visible while
+individual node labels are focus-disclosed and collision bounded. The node selector and
+details appear below the full-width canvas, and full DOM relationship lists
+remain the keyboard and screen-reader equivalent.
 
 ## Persistence and ownership
 
@@ -85,15 +101,16 @@ relationship lists remain the keyboard and screen-reader equivalent.
 | --- | --- | --- |
 | Realtime accepted events | SQLite event store | Backend-local event evidence. |
 | Dashboard session/history projection | In-memory repository | Lost on backend restart; demo mode is deterministic. |
-| Dashboard profile | MongoDB `dashboard_accounts` | Persists account UUID, display name, normalized email, preferences, and timestamps. |
+| Dashboard profile | MongoDB Atlas `dashboard_accounts` | Primary cloud persistence for account UUID, display name, normalized email, preferences, and timestamps; local Docker is an optional offline substitute. |
 | Browser profile state | Local storage | Opaque account UUID only. |
 | Raw mic/tab audio | Not stored | Streamed for processing and discarded. |
 | Captured-tab transcript context | Bounded memory | Cleared with the live session. |
 
 The current account route is a prototype profile, not authentication. Signing
-out forgets the local UUID but does not delete the MongoDB record. Production
-identity, recovery, account deletion, and per-user session authorization are
-future work.
+out forgets the local UUID but does not delete the Atlas record. The Atlas
+database user and SRV credential belong only to the backend environment; they
+are never browser credentials. Production identity, recovery, account deletion,
+and per-user session authorization are future work.
 
 ## Accessibility and visual design
 
@@ -134,9 +151,13 @@ From the repository root:
 
 ```powershell
 npm.cmd install
-docker compose up -d mongodb
 npm.cmd run dev
 ```
+
+Configure `MONGODB_URI` with an ignored MongoDB Atlas SRV connection string for
+the primary dashboard-profile path. For offline work only, start the optional
+local substitute with `docker compose up -d mongodb` and use the documented
+loopback URI.
 
 Use `npm.cmd run dev:dashboard` for deterministic Memory development without
 the extension. Use `npm.cmd run check` as the full pre-commit gate.
@@ -147,4 +168,5 @@ More detail:
 - `ai-voice-realtime/README.md` — backend providers, policies, and APIs.
 - `session-dashboard/README.md` — Memory routes, graph, accounts, and access.
 - `docs/context-graph-api.md` — graph contract and renderer semantics.
+- `docs/mongodb-atlas-handoff.md` — least-privilege teammate Atlas setup.
 - `docs/semantic-history-integration.md` — history and retrieval boundary.

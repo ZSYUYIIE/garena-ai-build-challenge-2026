@@ -102,6 +102,11 @@ export const demoGraphResponse: ContextGraphResponse = {
       type: "session",
       label: demoSession.title,
       sessionId,
+      metadata: {
+        domain: demoSession.domain,
+        startedAt: demoSession.startedAt,
+        durationSeconds: demoSession.durationSeconds,
+      },
     },
     {
       id: `event:${secondEventId}`,
@@ -110,6 +115,11 @@ export const demoGraphResponse: ContextGraphResponse = {
       sessionId,
       eventId: secondEventId,
       importance: 0.91,
+      metadata: {
+        timestamp: laterEvent.timestamp,
+        timestampSeconds: laterEvent.timestampSeconds,
+        eventType: laterEvent.eventType,
+      },
     },
     {
       id: "topic:defensive-save",

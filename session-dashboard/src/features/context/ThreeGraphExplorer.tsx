@@ -21,10 +21,12 @@ import {
 import {
   buildGraphSceneModel,
   type GraphSceneModel,
+  type GraphSceneScope,
   type PositionedGraphNode,
 } from "./graphModel";
 import {
   createThreeGraphRenderer,
+  graphNodeDisplayLabel,
   type GraphRendererController,
   type GraphRendererFactory,
 } from "./threeGraphRenderer";
@@ -32,15 +34,20 @@ import {
 export type ThreeGraphExplorerProps = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  scope?: GraphSceneScope;
   rendererFactory?: GraphRendererFactory;
 };
 
 export function ThreeGraphExplorer({
   nodes,
   edges,
+  scope = "filtered",
   rendererFactory = createThreeGraphRenderer,
 }: ThreeGraphExplorerProps) {
-  const model = useMemo(() => buildGraphSceneModel(nodes, edges), [nodes, edges]);
+  const model = useMemo(
+    () => buildGraphSceneModel(nodes, edges, { scope }),
+    [edges, nodes, scope],
+  );
   const reducedMotion = usePrefersReducedMotion();
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -52,6 +59,9 @@ export function ThreeGraphExplorer({
 
   const selectedNode =
     model.nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const selectedNodeLabel = selectedNode
+    ? graphNodeDisplayLabel(selectedNode)
+    : null;
   const selectedSession = selectedNode?.clusterSessionId
     ? model.nodes.find(
         (node) =>
@@ -73,7 +83,13 @@ export function ThreeGraphExplorer({
   useEffect(() => {
     const container = containerRef.current;
     const canvas = canvasRef.current;
-    if (!container || !canvas || model.nodes.length === 0) return;
+    if (
+      !container ||
+      !canvas ||
+      (model.nodes.length === 0 && model.domains.length === 0)
+    ) {
+      return;
+    }
 
     let controller: GraphRendererController;
     try {
@@ -106,18 +122,13 @@ export function ThreeGraphExplorer({
     controllerRef.current?.selectNode(nodeId);
   };
 
-  const resetView = () => {
-    selectNode(null);
-    controllerRef.current?.resetCamera();
-  };
-
-  if (model.nodes.length === 0) {
+  if (model.nodes.length === 0 && model.domains.length === 0) {
     return (
       <section className="graph-explorer" aria-labelledby="graph-explorer-heading">
         <div className="graph-explorer-heading">
           <div>
             <p className="eyebrow">StreamSense memory constellation</p>
-            <h2 id="graph-explorer-heading">3D relationship map</h2>
+            <h2 id="graph-explorer-heading">Semantic relationship map</h2>
           </div>
         </div>
         <p className="graph-empty">No graph nodes are available to visualize.</p>
@@ -138,17 +149,16 @@ export function ThreeGraphExplorer({
       <div className="graph-explorer-heading">
         <div className="graph-title-block">
           <p className="eyebrow">StreamSense memory constellation</p>
-          <h2 id="graph-explorer-heading">3D relationship map</h2>
+          <h2 id="graph-explorer-heading">Semantic relationship map</h2>
         </div>
         <div className="graph-introduction">
           <p id="graph-map-summary" className="graph-summary">
             {summary}
           </p>
-          <p id="graph-layout-explanation" className="graph-layout-explanation">
-            This is a memory hierarchy, not an XYZ chart. Horizontal placement
-            separates entertainment domains; each session anchors a system,
-            moments run clockwise in time, and entities and topics form the
-            outer context. Depth only helps separate overlapping spheres.
+          <p id="graph-layout-explanation" className="visually-hidden">
+            {model.projectionMode === "three-dimensional"
+              ? "This three-dimensional overview reserves the five StreamSense entertainment lanes. X measures stream progress, Y measures moment importance, and Z separates entertainment lanes. Empty lanes are labeled and contain no fabricated sessions or moments. The largest StreamSense Memory root branches to progressively smaller domain, session, event, and context spheres."
+              : "This single-lane view uses an honest two-dimensional plot: X measures stream progress and Y measures moment importance. Structural roots sit before the measured event region and are not assigned invented values."}
           </p>
         </div>
       </div>
@@ -156,67 +166,69 @@ export function ThreeGraphExplorer({
       <ol className="graph-hierarchy" aria-label="Relationship map hierarchy">
         <li>
           <span>1</span>
-          <strong>Domain island</strong>
-          <small>Sports, esports, and other entertainment stay distinct.</small>
+          <strong>Memory</strong>
         </li>
         <li>
           <span>2</span>
-          <strong>Session anchor</strong>
-          <small>The largest sphere is one captured viewing session.</small>
+          <strong>Domains</strong>
         </li>
         <li>
           <span>3</span>
-          <strong>Moment ring</strong>
-          <small>Events progress clockwise in timestamp order.</small>
+          <strong>Sessions</strong>
         </li>
         <li>
           <span>4</span>
-          <strong>Context shell</strong>
-          <small>Entities and topics sit outside the moments they connect.</small>
+          <strong>Moments and context</strong>
         </li>
       </ol>
 
-      <div className="graph-camera-controls" aria-label="3D map camera controls">
+      <div className="graph-camera-controls" aria-label="Memory map view controls">
+        {model.projectionMode === "three-dimensional" ? (
+          <Button
+            className="graph-control-button"
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={() => controllerRef.current?.setCameraView("overview")}
+            isDisabled={renderStatus === "unavailable"}
+          >
+            3D overview
+          </Button>
+        ) : null}
         <Button
           className="graph-control-button"
           variant="outline"
           size="sm"
           type="button"
-          onClick={() => controllerRef.current?.rotateCamera(-0.24, 0)}
+          onClick={() => controllerRef.current?.setCameraView("progress-importance")}
           isDisabled={renderStatus === "unavailable"}
         >
-          Rotate left
+          Progress × importance
         </Button>
-        <Button
-          className="graph-control-button"
-          variant="outline"
-          size="sm"
-          type="button"
-          onClick={() => controllerRef.current?.rotateCamera(0.24, 0)}
-          isDisabled={renderStatus === "unavailable"}
-        >
-          Rotate right
-        </Button>
-        <Button
-          className="graph-control-button"
-          variant="outline"
-          size="sm"
-          type="button"
-          onClick={() => controllerRef.current?.rotateCamera(0, -0.18)}
-          isDisabled={renderStatus === "unavailable"}
-        >
-          Tilt up
-        </Button>
-        <Button
-          className="graph-control-button"
-          variant="outline"
-          size="sm"
-          type="button"
-          onClick={() => controllerRef.current?.rotateCamera(0, 0.18)}
-          isDisabled={renderStatus === "unavailable"}
-        >
-          Tilt down
-        </Button>
+        {model.projectionMode === "three-dimensional" ? (
+          <>
+            <Button
+              className="graph-control-button"
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => controllerRef.current?.setCameraView("progress-entertainment")}
+              isDisabled={renderStatus === "unavailable"}
+            >
+              Progress × entertainment
+            </Button>
+            <Button
+              className="graph-control-button"
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => controllerRef.current?.setCameraView("importance-entertainment")}
+              isDisabled={renderStatus === "unavailable"}
+            >
+              Importance × entertainment
+            </Button>
+          </>
+        ) : null}
         <Button
           className="graph-control-button"
           variant="outline"
@@ -242,7 +254,7 @@ export function ThreeGraphExplorer({
           variant="outline"
           size="sm"
           type="button"
-          onClick={resetView}
+          onClick={() => controllerRef.current?.resetCamera()}
           isDisabled={renderStatus === "unavailable"}
         >
           Reset view
@@ -254,17 +266,30 @@ export function ThreeGraphExplorer({
           className="graph-viewport"
           ref={containerRef}
           data-render-status={renderStatus}
+          data-projection-mode={model.projectionMode}
         >
           <canvas
             ref={canvasRef}
             className="graph-canvas"
             role="img"
-            aria-label="Interactive 3D StreamSense memory constellation"
+            aria-label={
+              model.projectionMode === "three-dimensional"
+                ? "Interactive 3D StreamSense memory map of progress, importance, and entertainment"
+                : "Interactive 2D StreamSense memory map of progress and importance"
+            }
             aria-describedby="graph-map-summary graph-layout-explanation"
           />
+          <div className="graph-axis-key" aria-hidden="true">
+            <strong>{model.projectionMode === "three-dimensional" ? "Semantic 3D" : "Semantic 2D"}</strong>
+            <span><b>X</b> stream progress</span>
+            <span><b>Y</b> moment importance</span>
+            {model.projectionMode === "three-dimensional" ? (
+              <span><b>Z</b> entertainment lane</span>
+            ) : null}
+          </div>
           {renderStatus === "unavailable" ? (
             <div className="graph-fallback" role="status">
-              <strong>3D view unavailable</strong>
+              <strong>Visual map unavailable</strong>
               <span>
                 WebGL could not start in this browser. Use the node selector,
                 supplied connections, and readable relationship lists instead.
@@ -273,7 +298,13 @@ export function ThreeGraphExplorer({
           ) : null}
         </div>
 
-        <aside className="graph-details" aria-labelledby="graph-details-heading">
+      </div>
+
+      <section
+        className="graph-accessible-details"
+        aria-labelledby="graph-details-heading"
+      >
+        <div className="graph-inspection-panel">
           <h3 id="graph-details-heading">Inspect a node</h3>
           <Select
             className="field graph-node-selector"
@@ -297,9 +328,9 @@ export function ThreeGraphExplorer({
                     <SelectItem
                       key={node.id}
                       id={node.id}
-                      textValue={`${humanizeEventType(node.type)}: ${node.label}`}
+                      textValue={`${humanizeEventType(node.type)}: ${graphNodeDisplayLabel(node)}`}
                     >
-                      {humanizeEventType(node.type)}: {node.label}
+                      {humanizeEventType(node.type)}: {graphNodeDisplayLabel(node)}
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -319,28 +350,43 @@ export function ThreeGraphExplorer({
                 >
                   {humanizeEventType(selectedNode.type)} sphere
                 </span>
-                <h4>{selectedNode.label}</h4>
+                <h4>{selectedNodeLabel}</h4>
                 <dl>
                   <div>
-                    <dt>Entertainment domain</dt>
+                    <dt>Entertainment lane</dt>
                     <dd>{selectedNode.domainLabel}</dd>
                   </div>
+                  {selectedNode.progress !== null ? (
+                    <div>
+                      <dt>Stream progress</dt>
+                      <dd>{formatPercent(selectedNode.progress)}</dd>
+                    </div>
+                  ) : null}
                   {selectedNode.timestampSeconds !== null ? (
                     <div>
                       <dt>Session time</dt>
                       <dd>{formatElapsedTime(selectedNode.timestampSeconds)}</dd>
                     </div>
                   ) : null}
-                  {typeof selectedNode.importance === "number" ? (
+                  {selectedNode.importanceScore !== null ? (
                     <div>
-                      <dt>Importance</dt>
-                      <dd>{formatPercent(selectedNode.importance)}</dd>
+                      <dt>Moment importance</dt>
+                      <dd>{formatPercent(selectedNode.importanceScore)}</dd>
+                    </div>
+                  ) : selectedNode.type === "event" ? (
+                    <div>
+                      <dt>Moment importance</dt>
+                      <dd>Not scored</dd>
                     </div>
                   ) : null}
+                  <div>
+                    <dt>Position meaning</dt>
+                    <dd>{positionMeaning(selectedNode)}</dd>
+                  </div>
                   {selectedSession && selectedSession.id !== selectedNode.id ? (
                     <div>
                       <dt>Session</dt>
-                      <dd>{selectedSession.label}</dd>
+                    <dd>{graphNodeDisplayLabel(selectedSession)}</dd>
                     </div>
                   ) : null}
                   <div>
@@ -388,12 +434,35 @@ export function ThreeGraphExplorer({
             )}
           </div>
 
+          {selectedNode ? (
+            <Button
+              className="graph-clear-selection"
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => selectNode(null)}
+            >
+              Clear selection
+            </Button>
+          ) : null}
+        </div>
+
+        <div className="graph-legend-grid">
+
           <div className="graph-legend-section">
             <h4>Sphere meaning</h4>
             <ul className="graph-legend" aria-label="Graph node role legend">
               <li>
+                <span className="legend-sphere legend-domain-root" aria-hidden="true" />
+                StreamSense Memory · largest root sphere
+              </li>
+              <li>
+                <span className="legend-sphere legend-domain-root" aria-hidden="true" />
+                Domain · second-largest colored lane root
+              </li>
+              <li>
                 <span className="legend-sphere legend-session" aria-hidden="true" />
-                Session · largest anchor with a double halo
+                Session · medium structural anchor with a double halo
               </li>
               <li>
                 <span className="legend-sphere legend-event" aria-hidden="true" />
@@ -408,6 +477,12 @@ export function ThreeGraphExplorer({
                 Topic · translucent sphere sized by supplied connections
               </li>
             </ul>
+            <p className="graph-scaffold-note">
+              Memory, domain, and session roots form the hierarchy scaffold
+              before the measured plot. Events alone use exact progress and
+              importance coordinates; context positions are derived from their
+              connected events.
+            </p>
           </div>
 
           <div className="graph-legend-section">
@@ -420,7 +495,9 @@ export function ThreeGraphExplorer({
                     style={{ backgroundColor: `#${domain.color.toString(16).padStart(6, "0")}` }}
                     aria-hidden="true"
                   />
-                  {domain.label} · {domain.sessionCount} {domain.sessionCount === 1 ? "session" : "sessions"}
+                  {domain.label} · {domain.isEmpty
+                    ? "No saved sessions"
+                    : `${domain.sessionCount} ${domain.sessionCount === 1 ? "session" : "sessions"}`}
                 </li>
               ))}
               {hasCrossDomainNodes ? (
@@ -442,12 +519,12 @@ export function ThreeGraphExplorer({
               <li><span className="legend-line legend-line--semantic" aria-hidden="true" />Backend-supplied semantic similarity, when available</li>
             </ul>
           </div>
-        </aside>
-      </div>
+        </div>
+      </section>
 
       <p className="graph-status" role="status" aria-live="polite">
         {selectedNode
-          ? `${selectedNode.label} selected with ${selectedNode.connectionCount} supplied ${selectedNode.connectionCount === 1 ? "connection" : "connections"}.`
+          ? `${selectedNodeLabel} selected with ${selectedNode.connectionCount} supplied ${selectedNode.connectionCount === 1 ? "connection" : "connections"}.`
           : reducedMotion
             ? "Reduced motion is active. Camera easing is disabled."
             : `${model.nodes.length} spheres and ${model.edges.length} supplied relationships are ready.`}
@@ -484,17 +561,19 @@ function usePrefersReducedMotion(): boolean {
 function summarizeGraph(model: GraphSceneModel): string {
   const sessions = model.nodes.filter((node) => node.type === "session").length;
   const events = model.nodes.filter((node) => node.type === "event").length;
-  const entities = model.nodes.filter((node) => node.type === "entity").length;
-  const topics = model.nodes.filter((node) => node.type === "topic").length;
-  const domainNames = model.domains.map((domain) => domain.label);
-  return `${sessions} ${sessions === 1 ? "session" : "sessions"} and ${events} significant ${events === 1 ? "moment" : "moments"} across ${joinWithAnd(domainNames)}. ${entities} ${entities === 1 ? "entity" : "entities"} and ${topics} ${topics === 1 ? "topic" : "topics"} connect the supplied history.`;
+  const populatedDomains = model.domains.filter((domain) => !domain.isEmpty).length;
+  return `${sessions} ${sessions === 1 ? "session" : "sessions"} · ${events} ${events === 1 ? "moment" : "moments"} · ${populatedDomains} populated ${populatedDomains === 1 ? "lane" : "lanes"} of ${model.domains.length}`;
 }
 
-function joinWithAnd(values: string[]): string {
-  if (values.length === 0) return "no classified entertainment domains";
-  if (values.length === 1) return values[0]!;
-  if (values.length === 2) return `${values[0]} and ${values[1]}`;
-  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
+function positionMeaning(node: PositionedGraphNode): string {
+  switch (node.positionMeaning) {
+    case "measured-event":
+      return "Measured from this event's progress and supplied importance";
+    case "derived-context":
+      return "Derived from the connected events; small offsets prevent overlap";
+    case "structural":
+      return "Hierarchy scaffold outside the measured event region";
+  }
 }
 
 function groupNodesByDomain(
@@ -529,7 +608,9 @@ function describeRelationships(
       const other = nodeById.get(
         selectedIsSource ? edge.target : edge.source,
       );
-      const otherLabel = other?.label ?? "an unavailable node";
+      const otherLabel = other
+        ? graphNodeDisplayLabel(other)
+        : "an unavailable node";
       return {
         id: edge.id,
         text: relationshipText(edge.type, selectedIsSource, otherLabel),

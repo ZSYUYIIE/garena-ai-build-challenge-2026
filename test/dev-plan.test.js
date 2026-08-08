@@ -34,7 +34,7 @@ test("root build and demo scripts stay workspace-based and single-backend", () =
   assert.match(ROOT_PACKAGE.scripts["check:orchestration"], /^node --test /);
 });
 
-test("all profile starts one backend plus extension and dashboard on fixed ports", () => {
+test("all profile starts one demo-history backend plus extension and dashboard", () => {
   const plan = validateProcessPlan(
     buildProcessPlan("all", { viteCliPath: FAKE_VITE_CLI }),
   );
@@ -51,7 +51,10 @@ test("all profile starts one backend plus extension and dashboard on fixed ports
     plan.processes.filter(({ role }) => role === "backend").length,
     1,
   );
-  assert.deepEqual(plan.processes[0].args, ["--watch", "server.js"]);
+  assert.deepEqual(plan.processes[0].args, [
+    "--watch",
+    "scripts/startDashboardDemo.js",
+  ]);
   assert.equal(
     plan.processes[1].env.VITE_STREAMSENSE_DASHBOARD_URL,
     "http://127.0.0.1:5174/dashboard/",
@@ -91,6 +94,7 @@ test("realtime profile pins an empty dashboard override and runs no dashboard", 
   );
   assert.equal(extension.env.VITE_STREAMSENSE_DASHBOARD_URL, "");
   assert.deepEqual(extension.unsetEnv, []);
+  assert.deepEqual(plan.processes[0].args, ["--watch", "server.js"]);
 });
 
 test("realtime child environment overrides inherited dashboard values with empty", () => {

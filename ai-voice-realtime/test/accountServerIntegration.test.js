@@ -72,6 +72,11 @@ test("account API validates payloads, identity, duplicate email, and availabilit
   );
   assert.equal(response.status, 503);
   assert.equal(response.body.error.code, "ACCOUNT_STORAGE_UNAVAILABLE");
+  assert.equal(
+    response.body.error.message,
+    "StreamSense account storage is temporarily unavailable.",
+  );
+  assert.doesNotMatch(response.body.error.message, /MongoDB/i);
 });
 
 async function getJson(url) {

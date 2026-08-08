@@ -46,6 +46,8 @@ Configure `.env` without committing the populated file:
 | `GOOGLE_CLOUD_SPEECH_LOCATION` | Speech-to-Text recognizer location; defaults to `us`. |
 | `STREAMSENSE_EXTENSION_ID` | Exact 32-character Chrome extension ID allowed to open the production WebSocket. |
 | `STREAMSENSE_HISTORY_MODE` | Dashboard history mode: `memory` (default, empty at startup) or development-only `demo`. |
+| `MONGODB_URI` | MongoDB Atlas Drivers connection string for dashboard profiles; keep the populated URI only in `.env` or a secret manager. |
+| `MONGODB_DB_NAME` | Database containing the `dashboard_accounts` profile collection; defaults to `streamsense`. |
 | `HOST` / `PORT` | Local backend bind address and port; defaults to `127.0.0.1:8000`. |
 
 For local operator authentication, configure ADC outside the repository (for
@@ -72,25 +74,43 @@ For integrated development, run one of these commands from the repository root:
 
 | Command | Supervised processes |
 | --- | --- |
-| `npm run dev` | Normal backend `8000`, extension `5173`, dashboard `5174`. |
-| `npm run dev:realtime` | Normal backend `8000`, extension `5173`. |
+| `npm run dev` | Demo-history backend `8000`, extension `5173`, dashboard `5174`. |
+| `npm run dev:realtime` | Empty-history backend `8000`, extension `5173`. |
 | `npm run dev:dashboard` | Demo-history backend `8000`, dashboard `5174`. |
 
 Every profile preflights its fixed ports and starts exactly one backend. Do not
 start a package-scoped server at the same time.
 
-Before using the dashboard Account route, start MongoDB from the repository
-root and configure `MONGODB_URI`/`MONGODB_DB_NAME` in this package's `.env`:
+Before using the dashboard Account route, configure a MongoDB Atlas cluster:
 
-```bash
-docker compose up -d mongodb
-```
+1. In Atlas, create a dedicated database user. This is not the email or
+   password used to sign in to MongoDB Cloud.
+2. Add only the backend operator's current public IP to the Atlas network
+   access list. Avoid an unrestricted `0.0.0.0/0` rule.
+3. Choose **Connect > Drivers > Node.js**, copy the SRV connection string, and
+   replace its username and password placeholders. URL-encode special
+   characters in the database password.
+4. Put that value in `MONGODB_URI` inside this package's ignored `.env`, keep
+   `MONGODB_DB_NAME=streamsense`, and restart the backend. Never put the
+   populated URI in source, documentation, browser storage, or frontend code.
+
+MongoDB does not issue a separate StreamSense key: the Drivers URI itself
+contains database credentials. Teammates must use their own Atlas project
+invitation, narrowly scoped IP access, and personal database user. Follow
+[`../docs/mongodb-atlas-handoff.md`](../docs/mongodb-atlas-handoff.md) rather
+than sharing an existing URI.
+
+For offline development only, the repository still provides a loopback Docker
+service. Start it with `docker compose up -d mongodb` and use
+`MONGODB_URI=mongodb://localhost:27017` instead of the Atlas SRV URI.
 
 Profiles are stored in `dashboard_accounts` with unique account ID and
-normalized-email indexes. The backend exposes create/read/update operations at
-`/api/accounts`; it never stores passwords or provider credentials. Without a
-MongoDB URI, those endpoints return `503` while history and realtime routes
-remain available.
+normalized-email indexes. Atlas is the primary persistence path; the local
+container is an optional offline substitute using the same repository
+contract. The backend exposes create/read/update operations at `/api/accounts`;
+it never stores passwords or provider credentials. Without a MongoDB URI, or
+when Atlas cannot be reached, those endpoints return `503` while history and
+realtime routes remain available.
 
 For an intentionally backend-only stable run:
 
@@ -107,10 +127,12 @@ npm run dev --workspace ai-voice-realtime
 The backend listens on `http://127.0.0.1:8000` by default. Keep this terminal
 running while using the extension.
 
-Normal startup creates an empty `MemoryHistoryRepository`. Realtime sessions
-can add records to it, but those dashboard records are lost whenever the
-backend process restarts. The existing SQLite `EventStore` and the dashboard
-history repository are distinct persistence boundaries.
+Normal package startup and the root `dev:realtime` profile create an empty
+`MemoryHistoryRepository`. The root `dev` and `dev:dashboard` profiles instead
+load the development-only deterministic seed. Realtime sessions can add records
+to either repository, but those dashboard records are lost whenever the backend
+process restarts. The existing SQLite `EventStore` and the dashboard history
+repository are distinct persistence boundaries.
 
 ## Run the session dashboard without STT
 
@@ -126,11 +148,14 @@ npm run dev:dashboard
 Open `http://127.0.0.1:5174/dashboard/`. Vite proxies `/api` requests to this
 single demo backend at `127.0.0.1:8000`.
 
-`start:dashboard-demo` sets `STREAMSENSE_HISTORY_MODE=demo`, loads a fixed set
-of development sessions into a fresh in-memory repository, and starts the
-server. It is rejected when `NODE_ENV=production`. Restarting the process resets
-the same deterministic fixture. `STREAMSENSE_HISTORY_MODE=memory` is the normal
-default and starts empty; both modes are process-local and non-durable.
+`start:dashboard-demo` sets `STREAMSENSE_HISTORY_MODE=demo`, loads five named
+judge-facing sessions with five events each into a fresh in-memory repository,
+and starts the server. The root `dev` and `dev:dashboard` profiles both use this
+entry point so the relationship graph is meaningful on first load. It is
+rejected when `NODE_ENV=production`. Restarting the process resets the same
+deterministic fixture. `STREAMSENSE_HISTORY_MODE=memory` remains the normal
+package and production default and starts empty; both modes are process-local
+and non-durable.
 
 `npm run seed:dashboard --workspace ai-voice-realtime` is different: it only
 exports the deterministic
@@ -163,6 +188,10 @@ The backend mounts bounded, same-origin history routes:
 - `GET /api/sessions/:sessionId/events?limit=&cursor=&eventType=&eventId=`
 - `POST /api/search`
 - `GET /api/context-graph?sessionId=&query=&domain=&limit=`
+
+Sessions with no archived events remain available from the session endpoints,
+but are omitted from the context graph until their first event is recorded.
+This prevents generic zero-information nodes while preserving session history.
 
 Every successful response includes `meta.dataOrigin`; list responses use
 `sessions` or `events` plus nullable `nextCursor`, detail uses `session`, search
