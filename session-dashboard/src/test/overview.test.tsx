@@ -107,7 +107,7 @@ describe("history overview", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps metrics and the relationship map ahead of session history", async () => {
+  it("keeps the relationship map ahead of metrics and session history", async () => {
     const user = userEvent.setup();
     const fetchMock = createOverviewFetch();
     vi.stubGlobal("fetch", fetchMock);
@@ -132,13 +132,13 @@ describe("history overview", () => {
     });
     expect(
       Boolean(
-        overviewHeading.compareDocumentPosition(graphHeading) &
+        graphHeading.compareDocumentPosition(overviewHeading) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ),
     ).toBe(true);
     expect(
       Boolean(
-        graphHeading.compareDocumentPosition(sessionsHeading) &
+        overviewHeading.compareDocumentPosition(sessionsHeading) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ),
     ).toBe(true);

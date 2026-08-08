@@ -15,6 +15,12 @@ acknowledgement, so the extension can hand the exact saved session to Memory.
 This is shared-backend connectivity, not a second realtime client in the
 dashboard.
 
+The dashboard also includes an explicitly local prototype Account route for a
+display name and viewing preferences. It is stored only in that browser and is
+not presented as production authentication. It does not alter the extension's
+capture, speech recognition, Gemini, narration, interruption, or playback
+pipeline.
+
 ```text
 Chrome extension
   ├─ JPEG screen frames ────────────────┐

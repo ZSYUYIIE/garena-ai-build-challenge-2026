@@ -40,9 +40,10 @@ describe("dashboard shell accessibility", () => {
       "aria-keyshortcuts",
       "Control+K",
     );
+    expect(within(navigation).getByRole("link", { name: "Account" })).toBeVisible();
     expect(within(navigation).queryByText(/explore/i)).not.toBeInTheDocument();
 
-    expect(screen.getByRole("button", { name: "Focus map" })).toHaveAttribute(
+    expect(within(navigation).getByRole("button", { name: "3D map" })).toHaveAttribute(
       "aria-keyshortcuts",
       "Alt+G",
     );

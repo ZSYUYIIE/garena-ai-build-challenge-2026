@@ -83,6 +83,7 @@ no Vite server runs in this profile.
 - `/dashboard/sessions/:sessionId` — metadata, summary, a session-scoped
   relationship map and readable lists, then the chronological event timeline
 - `/dashboard/search` — natural-language historical search
+- `/dashboard/account` — a local prototype profile and dashboard preferences
 - `/dashboard/explore` — legacy compatibility redirect, not a separate page
 
 `/dashboard/explore?sessionId={validUuid}` redirects to
@@ -91,6 +92,21 @@ single valid source value it is preserved on that redirect. A missing or
 invalid session ID returns to the Memory overview, again preserving the valid
 extension source marker. New navigation should link to Memory or a session
 directly.
+
+## Prototype dashboard account
+
+The Account route creates an explicitly local prototype profile with a display
+name, email, primary entertainment preference, and preferred narration detail.
+The record is validated and stored in browser local storage under
+`streamsense.dashboard.account.v1`; malformed records are ignored. Saving and
+signing out update the account summary in the dashboard rail immediately.
+
+This is not server authentication. It does not upload credentials, partition
+the shared in-memory history repository, or pass preferences into the live
+extension. That boundary is deliberate: account UI can be demonstrated without
+changing tab capture, VAD, Gemini prompts, narration policy, or audio playback.
+A production identity provider and per-user history ownership remain a later
+backend integration.
 
 ## Relationship-map semantics
 

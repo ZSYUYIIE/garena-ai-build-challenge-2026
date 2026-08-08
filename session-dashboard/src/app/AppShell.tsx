@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { Button, buttonVariants } from "../components/StreamSenseUi";
+import {
+  accountInitials,
+  DASHBOARD_ACCOUNT_CHANGED_EVENT,
+  readDashboardAccount,
+  type DashboardAccount,
+} from "../features/account/accountStorage";
 
 const HIGH_CONTRAST_STORAGE_KEY = "streamsense.dashboard.highContrast";
 const FOCUS_WAIT_MILLISECONDS = 5_000;
@@ -23,6 +29,8 @@ export function AppShell() {
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [shortcutStatus, setShortcutStatus] = useState("");
   const [pendingFocus, setPendingFocus] = useState<PendingFocus | null>(null);
+  const [dashboardAccount, setDashboardAccount] =
+    useState<DashboardAccount | null>(readDashboardAccount);
   const searchParameters = new URLSearchParams(location.search);
   const fromExtension = searchParameters.get("source") === "extension";
   const extensionSessionHandoff =
@@ -59,6 +67,16 @@ export function AppShell() {
       delete root.dataset.streamsenseDashboardContrast;
     };
   }, [highContrast]);
+
+  useEffect(() => {
+    const refreshAccount = () => setDashboardAccount(readDashboardAccount());
+    window.addEventListener(DASHBOARD_ACCOUNT_CHANGED_EVENT, refreshAccount);
+    window.addEventListener("storage", refreshAccount);
+    return () => {
+      window.removeEventListener(DASHBOARD_ACCOUNT_CHANGED_EVENT, refreshAccount);
+      window.removeEventListener("storage", refreshAccount);
+    };
+  }, []);
 
   useEffect(() => {
     if (!pendingFocus) return;
@@ -279,6 +297,16 @@ export function AppShell() {
                 </NavLink>
               </li>
               <li>
+                <button
+                  className={buttonVariants({ variant: "ghost", size: "lg" })}
+                  type="button"
+                  onClick={focusGraph}
+                  aria-keyshortcuts="Alt+G"
+                >
+                  3D map
+                </button>
+              </li>
+              <li>
                 <NavLink
                   to="/search"
                   aria-keyshortcuts="Control+K"
@@ -292,8 +320,40 @@ export function AppShell() {
                   Search
                 </NavLink>
               </li>
+              <li>
+                <NavLink
+                  to="/account"
+                  className={({ isActive }) =>
+                    buttonVariants({
+                      variant: isActive ? "secondary" : "ghost",
+                      size: "lg",
+                    })
+                  }
+                >
+                  Account
+                </NavLink>
+              </li>
             </ul>
           </nav>
+          <NavLink
+            className="rail-account-summary"
+            to="/account"
+            aria-label={
+              dashboardAccount
+                ? `Account for ${dashboardAccount.displayName}`
+                : "Create a local dashboard account"
+            }
+          >
+            <span className="rail-account-avatar" aria-hidden="true">
+              {accountInitials(dashboardAccount)}
+            </span>
+            <span>
+              <small>Dashboard account</small>
+              <strong>
+                {dashboardAccount?.displayName ?? "Create your profile"}
+              </strong>
+            </span>
+          </NavLink>
           <p className="rail-section-label rail-tools-label" aria-hidden="true">
             Dashboard tools
           </p>
@@ -302,18 +362,6 @@ export function AppShell() {
             role="group"
             aria-label="Dashboard tools"
           >
-            <button
-              className={buttonVariants({
-                variant: "outline",
-                size: "lg",
-                className: "shell-control",
-              })}
-              type="button"
-              onClick={focusGraph}
-              aria-keyshortcuts="Alt+G"
-            >
-              Focus map
-            </button>
             <button
               className={buttonVariants({
                 variant: "outline",

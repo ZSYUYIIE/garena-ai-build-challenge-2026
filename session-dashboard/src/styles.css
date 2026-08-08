@@ -195,10 +195,69 @@ a {
   min-width: 0;
 }
 
-.primary-navigation a {
+.primary-navigation a,
+.primary-navigation button {
   width: 100%;
   justify-content: flex-start;
   text-decoration: none;
+}
+
+.primary-navigation button {
+  cursor: pointer;
+}
+
+.rail-account-summary {
+  display: flex;
+  min-width: 0;
+  margin-top: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+  padding: 0.7rem;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.rail-account-avatar,
+.account-avatar {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--foreground);
+  color: var(--background);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.rail-account-avatar {
+  width: 2rem;
+  height: 2rem;
+  font-size: 0.72rem;
+}
+
+.rail-account-summary > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.rail-account-summary small {
+  color: var(--muted-foreground);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rail-account-summary strong {
+  overflow: hidden;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .shell-actions {
@@ -484,6 +543,88 @@ kbd {
 .overview-strip-heading h2 {
   margin-top: 0.2rem;
   font-size: 1rem;
+}
+
+.account-page {
+  max-width: 68rem;
+}
+
+.account-page-header {
+  display: flex;
+  max-width: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.account-page-header > div:first-child {
+  max-width: 48rem;
+}
+
+.account-avatar {
+  width: clamp(4.5rem, 9vw, 6.5rem);
+  height: clamp(4.5rem, 9vw, 6.5rem);
+  font-size: clamp(1.35rem, 3vw, 2rem);
+}
+
+.account-privacy-note {
+  border: 1px solid var(--border-strong);
+  border-left: 5px solid var(--teal);
+  border-radius: var(--radius);
+  background: var(--teal-soft);
+  padding: 0.9rem 1rem;
+  color: #134e49;
+  line-height: 1.55;
+}
+
+.account-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.account-form-section {
+  display: grid;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: clamp(1rem, 2.5vw, 1.5rem);
+  grid-template-columns: minmax(12rem, 0.7fr) minmax(0, 1.3fr);
+  gap: clamp(1.25rem, 3vw, 2.5rem);
+}
+
+.account-form-section h2,
+.account-form-section .quiet-copy {
+  margin: 0;
+}
+
+.account-form-section .quiet-copy {
+  margin-top: 0.55rem;
+}
+
+.account-fields {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+}
+
+.account-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.account-form-message {
+  margin: 0;
+  border-radius: var(--radius);
+  background: var(--teal-soft);
+  padding: 0.75rem 0.9rem;
+  color: #134e49;
+  font-weight: 650;
+}
+
+.account-form-error {
+  background: var(--red-soft);
+  color: var(--red);
 }
 
 h1,
@@ -1717,8 +1858,14 @@ html[data-streamsense-dashboard-contrast="high"] {
     flex-direction: row;
   }
 
-  .primary-navigation a {
+  .primary-navigation a,
+  .primary-navigation button {
     width: auto;
+  }
+
+  .rail-account-summary {
+    margin-top: 0;
+    margin-left: auto;
   }
 
   .shell-actions {
@@ -1808,8 +1955,14 @@ html[data-streamsense-dashboard-contrast="high"] {
     overflow: visible;
   }
 
-  .primary-navigation a {
+  .primary-navigation a,
+  .primary-navigation button {
     white-space: nowrap;
+  }
+
+  .rail-account-summary {
+    width: 100%;
+    margin-left: 0;
   }
 
   .shell-actions {
@@ -1846,6 +1999,7 @@ html[data-streamsense-dashboard-contrast="high"] {
   .hero-section,
   .memory-hero-copy,
   .memory-map-heading,
+  .account-page-header,
   .detail-hero,
   .session-card-heading,
   .event-heading,
@@ -1853,6 +2007,14 @@ html[data-streamsense-dashboard-contrast="high"] {
   .graph-explorer-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .account-form-section {
+    grid-template-columns: 1fr;
+  }
+
+  .account-form-actions > * {
+    flex: 1 1 14rem;
   }
 
   .graph-explorer-heading {

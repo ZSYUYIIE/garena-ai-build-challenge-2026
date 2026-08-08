@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
+import { AccountPage } from "../features/account/AccountPage";
 import { SearchPage } from "../features/search/SearchPage";
 import { HistoryOverviewPage } from "../features/sessions/HistoryOverviewPage";
 import { SessionDetailPage } from "../features/sessions/SessionDetailPage";
@@ -16,6 +17,7 @@ export function DashboardRoutes() {
         <Route index element={<HistoryOverviewPage />} />
         <Route path="sessions/:sessionId" element={<SessionDetailPage />} />
         <Route path="search" element={<SearchPage />} />
+        <Route path="account" element={<AccountPage />} />
         <Route path="explore" element={<LegacyExploreRedirect />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
