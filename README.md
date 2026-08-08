@@ -15,9 +15,10 @@ acknowledgement, so the extension can hand the exact saved session to Memory.
 This is shared-backend connectivity, not a second realtime client in the
 dashboard.
 
-The dashboard also includes an explicitly local prototype Account route for a
-display name and viewing preferences. It is stored only in that browser and is
-not presented as production authentication. It does not alter the extension's
+The dashboard also includes a MongoDB-backed prototype Account route for a
+display name, email, and viewing preferences. The browser stores only the
+opaque account UUID; this is not password-based production authentication. It
+does not alter the extension's
 capture, speech recognition, Gemini, narration, interruption, or playback
 pipeline.
 
@@ -54,6 +55,8 @@ packages.
 - A Gemini API key with access to the configured vision and Live models.
 - A Google Cloud project with billing configured for Speech-to-Text V2.
 - The [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`).
+- Docker Desktop or another MongoDB 8-compatible local/server installation for
+  dashboard profile persistence.
 
 The Gemini and Google Cloud requirements apply to the realtime extension. The
 deterministic session-dashboard workflow below requires only Node.js and npm.
@@ -217,6 +220,9 @@ STREAMSENSE_EXTENSION_ID=the_exact_32_character_id_from_chrome
 STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=false
 STREAMSENSE_HISTORY_MODE=memory
 
+MONGODB_URI=mongodb://127.0.0.1:27017
+MONGODB_DB_NAME=streamsense
+
 HOST=127.0.0.1
 PORT=8000
 ```
@@ -229,6 +235,17 @@ Keep the Gemini API key in the backend only—never add it to extension code or 
 For isolated local debugging, `STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=true`
 temporarily relaxes the extension-origin check. Do not use that setting for a
 shared or production backend.
+
+Start the included loopback-only MongoDB service before StreamSense:
+
+```bash
+docker compose up -d mongodb
+```
+
+The `streamsense-mongodb` Docker volume keeps prototype account records across
+container restarts. If `MONGODB_URI` is omitted, the rest of StreamSense still
+starts, but account endpoints return a clear `503` instead of falling back to
+browser-only profile storage.
 
 ## 5. Start StreamSense
 
@@ -323,10 +340,10 @@ port `5174` and proxies `/api` to the one demo backend on port `8000`.
 `start:dashboard-demo` is an explicit development-only mode. It seeds a fresh
 in-memory repository every time the backend starts and is refused when
 `NODE_ENV=production`. Normal `npm start` uses an empty in-memory history
-repository. Neither mode is durable: dashboard history is lost at process
-restart. Durable MongoDB storage, vector embeddings/search, Redis current
-context, and retrieval ranking remain a separate integration workstream and are
-not implemented by the current in-memory composition.
+repository. Neither history mode is durable: dashboard sessions are lost at
+process restart. Account profiles are a separate MongoDB collection and do
+persist. Durable session/event storage, vector embeddings/search, Redis current
+context, and retrieval ranking remain separate integration work.
 
 Memory now leads with an optional Three.js relationship map before the recent
 session list. The former `/dashboard/explore` URL is a compatibility redirect:
@@ -410,6 +427,13 @@ Run commands from the repository root:
 | `npm run demo` | Builds both surfaces, then serves the deterministic dashboard through one backend on `8000`. |
 | `npm run check` | Runs orchestration tests, backend checks, extension tests/build, and dashboard tests/typecheck/build. |
 
+MongoDB helper commands:
+
+| Command | Purpose |
+| --- | --- |
+| `docker compose up -d mongodb` | Start the loopback-only profile database. |
+| `docker compose stop mongodb` | Stop it without deleting account data. |
+
 Reload the unpacked extension in `chrome://extensions` after extension build
 changes. Restart the relevant profile after changing `ai-voice-realtime/.env`.
 The dev runner uses strict ports and exits if any required port is already in
@@ -422,6 +446,12 @@ use; do not start a second backend beside it.
 The backend is not running, exited after startup, or is using a different port.
 Run the appropriate root development command and keep that terminal open. The
 extension manifest and default WebSocket URL expect port `8000`.
+
+### Account storage says MongoDB is unavailable
+
+Run `docker compose up -d mongodb`, set `MONGODB_URI` and `MONGODB_DB_NAME` in
+`ai-voice-realtime/.env`, and restart the development profile. The account UI
+does not silently write names or emails to local storage.
 
 ### Open Memory Dashboard opens a 404 page
 
@@ -504,6 +534,10 @@ its data directory is unavailable, and try the moment again.
 
 - `.env`, local ADC, event databases, build output, and `node_modules` are
   ignored by Git.
+- MongoDB stores prototype display names, normalized email addresses,
+  entertainment/narration preferences, opaque UUIDs, and timestamps. The
+  browser stores only the UUID. No passwords or provider credentials are
+  collected by this profile flow.
 - Raw microphone and captured-tab audio are streamed for processing and are not
   stored by StreamSense.
 - Captured-tab transcript context is bounded in memory and cleared with the

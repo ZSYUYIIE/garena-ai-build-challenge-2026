@@ -1,8 +1,9 @@
-import "dotenv/config";
-
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { config as loadEnvironment } from "dotenv";
 
+import { UnavailableAccountRepository } from "./src/accounts/accountRepository.js";
+import { MongoAccountRepository } from "./src/accounts/mongoAccountRepository.js";
 import { createStreamSenseServer } from "./src/server/createStreamSenseServer.js";
 import {
   createDemoSemanticResults,
@@ -15,6 +16,12 @@ import {
 } from "./src/history/semanticHistoryService.js";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+loadEnvironment({
+  path: [
+    path.join(moduleDirectory, ".env.local"),
+    path.join(moduleDirectory, ".env"),
+  ],
+});
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 8000);
 const historyMode = process.env.STREAMSENSE_HISTORY_MODE || "memory";
@@ -25,6 +32,13 @@ if (historyMode === "demo" && process.env.NODE_ENV === "production") {
   throw new Error("Dashboard demo history cannot run in production mode.");
 }
 const historyRepository = new MemoryHistoryRepository();
+let accountRepository = new UnavailableAccountRepository();
+if (process.env.MONGODB_URI) {
+  accountRepository = await MongoAccountRepository.connect({
+    uri: process.env.MONGODB_URI,
+    databaseName: process.env.MONGODB_DB_NAME || "streamsense",
+  });
+}
 let semanticHistoryService = new UnavailableSemanticHistoryService();
 if (historyMode === "demo") {
   const demo = await seedDemoHistory(historyRepository);
@@ -46,6 +60,7 @@ const runtime = createStreamSenseServer({
   databasePath:
     process.env.EVENT_DB_PATH ||
     path.join(moduleDirectory, "data", "streamsense.db"),
+  accountRepository,
   historyRepository,
   semanticHistoryService,
   onHistoryError: ({ operation }) => {

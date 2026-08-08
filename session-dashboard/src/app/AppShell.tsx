@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
+import {
+  AccountApiError,
+  accountClient,
+  type DashboardAccount,
+} from "../api/accountClient";
 import { Button, buttonVariants } from "../components/StreamSenseUi";
 import {
   accountInitials,
+  clearDashboardAccount,
   DASHBOARD_ACCOUNT_CHANGED_EVENT,
-  readDashboardAccount,
-  type DashboardAccount,
+  readDashboardAccountId,
 } from "../features/account/accountStorage";
 
 const HIGH_CONTRAST_STORAGE_KEY = "streamsense.dashboard.highContrast";
@@ -29,8 +34,7 @@ export function AppShell() {
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [shortcutStatus, setShortcutStatus] = useState("");
   const [pendingFocus, setPendingFocus] = useState<PendingFocus | null>(null);
-  const [dashboardAccount, setDashboardAccount] =
-    useState<DashboardAccount | null>(readDashboardAccount);
+  const [dashboardAccount, setDashboardAccount] = useState<DashboardAccount | null>(null);
   const searchParameters = new URLSearchParams(location.search);
   const fromExtension = searchParameters.get("source") === "extension";
   const extensionSessionHandoff =
@@ -69,10 +73,31 @@ export function AppShell() {
   }, [highContrast]);
 
   useEffect(() => {
-    const refreshAccount = () => setDashboardAccount(readDashboardAccount());
+    let active = true;
+    let requestId = 0;
+    const refreshAccount = () => {
+      requestId += 1;
+      const currentRequest = requestId;
+      const accountId = readDashboardAccountId();
+      if (!accountId) {
+        setDashboardAccount(null);
+        return;
+      }
+      void accountClient.getAccount(accountId).then((account) => {
+        if (active && currentRequest === requestId) setDashboardAccount(account);
+      }).catch((error) => {
+        if (!active || currentRequest !== requestId) return;
+        setDashboardAccount(null);
+        if (error instanceof AccountApiError && error.status === 404) {
+          clearDashboardAccount();
+        }
+      });
+    };
     window.addEventListener(DASHBOARD_ACCOUNT_CHANGED_EVENT, refreshAccount);
     window.addEventListener("storage", refreshAccount);
+    refreshAccount();
     return () => {
+      active = false;
       window.removeEventListener(DASHBOARD_ACCOUNT_CHANGED_EVENT, refreshAccount);
       window.removeEventListener("storage", refreshAccount);
     };
@@ -341,7 +366,7 @@ export function AppShell() {
             aria-label={
               dashboardAccount
                 ? `Account for ${dashboardAccount.displayName}`
-                : "Create a local dashboard account"
+                : "Create a StreamSense dashboard account"
             }
           >
             <span className="rail-account-avatar" aria-hidden="true">

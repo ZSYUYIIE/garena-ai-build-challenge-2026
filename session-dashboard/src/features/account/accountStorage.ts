@@ -1,82 +1,36 @@
 import { z } from "zod";
 
+import type { DashboardAccount } from "../../api/accountClient";
+
 export const DASHBOARD_ACCOUNT_STORAGE_KEY =
-  "streamsense.dashboard.account.v1";
+  "streamsense.dashboard.account.v2";
 export const DASHBOARD_ACCOUNT_CHANGED_EVENT =
   "streamsense:dashboard-account-changed";
 
-export const contentPreferences = [
-  "mixed",
-  "sports",
-  "esports",
-  "concerts",
-  "product_launches",
-  "creator_livestreams",
-] as const;
-
-export const narrationPreferences = [
-  "minimal",
-  "standard",
-  "detailed",
-  "question_only",
-] as const;
-
-const dashboardAccountSchema = z.object({
-  version: z.literal(1),
-  id: z.string().min(1).max(120),
-  displayName: z.string().trim().min(1).max(60),
-  email: z.string().trim().email().max(254),
-  contentPreference: z.enum(contentPreferences),
-  narrationPreference: z.enum(narrationPreferences),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+const storedIdentitySchema = z.object({
+  version: z.literal(2),
+  accountId: z.string().uuid(),
 });
 
-const dashboardAccountDraftSchema = dashboardAccountSchema.pick({
-  displayName: true,
-  email: true,
-  contentPreference: true,
-  narrationPreference: true,
-});
-
-export type DashboardAccount = z.infer<typeof dashboardAccountSchema>;
-export type DashboardAccountDraft = z.infer<
-  typeof dashboardAccountDraftSchema
->;
-
-export function readDashboardAccount(): DashboardAccount | null {
+export function readDashboardAccountId(): string | null {
   if (typeof window === "undefined") return null;
-
   try {
     const rawValue = window.localStorage.getItem(DASHBOARD_ACCOUNT_STORAGE_KEY);
     if (!rawValue) return null;
-    const parsed = dashboardAccountSchema.safeParse(JSON.parse(rawValue));
-    return parsed.success ? parsed.data : null;
+    const parsed = storedIdentitySchema.safeParse(JSON.parse(rawValue));
+    return parsed.success ? parsed.data.accountId : null;
   } catch {
     return null;
   }
 }
 
-export function saveDashboardAccount(
-  draft: DashboardAccountDraft,
-  existingAccount: DashboardAccount | null = readDashboardAccount(),
-): DashboardAccount {
-  const validatedDraft = dashboardAccountDraftSchema.parse(draft);
-  const now = new Date().toISOString();
-  const account = dashboardAccountSchema.parse({
-    ...validatedDraft,
-    version: 1,
-    id: existingAccount?.id ?? createLocalAccountId(),
-    createdAt: existingAccount?.createdAt ?? now,
-    updatedAt: now,
-  });
-
+export function saveDashboardAccountId(accountId: string): void {
+  const identity = storedIdentitySchema.parse({ version: 2, accountId });
   window.localStorage.setItem(
     DASHBOARD_ACCOUNT_STORAGE_KEY,
-    JSON.stringify(account),
+    JSON.stringify(identity),
   );
   notifyAccountChanged();
-  return account;
 }
 
 export function clearDashboardAccount(): void {
@@ -92,11 +46,6 @@ export function accountInitials(account: DashboardAccount | null): string {
     .slice(0, 2)
     .map((word) => word[0]?.toLocaleUpperCase("en-US") ?? "")
     .join("") || "?";
-}
-
-function createLocalAccountId(): string {
-  const randomUuid = globalThis.crypto?.randomUUID?.();
-  return randomUuid ? `local:${randomUuid}` : `local:${Date.now().toString(36)}`;
 }
 
 function notifyAccountChanged(): void {

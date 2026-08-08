@@ -6,7 +6,8 @@ directly. Capture, narration, questions, and interruptions remain there. A
 separate **Open Memory Dashboard** option inside that panel starts the handoff.
 Both surfaces use the same local backend, but Memory consumes only bounded REST
 endpoints. It never calls Gemini, MongoDB, an embedding provider, Redis, Cloud
-Speech-to-Text, or the realtime WebSocket directly.
+Speech-to-Text, or the realtime WebSocket directly; account REST endpoints let
+the backend mediate the MongoDB profile collection.
 
 After the protocol-v2 handshake, the backend gives Live the actual session
 UUID. **Open Memory Dashboard** then opens:
@@ -35,6 +36,7 @@ session. From the repository root:
 
 ```bash
 npm install
+docker compose up -d mongodb
 npm run dev:dashboard
 ```
 
@@ -50,9 +52,9 @@ startup. Restarting the process resets the same deterministic sessions.
 Normal backend startup (`npm start`, or `STREAMSENSE_HISTORY_MODE=memory`) uses
 an empty in-memory history repository. Realtime sessions may populate it, but
 both memory and demo history disappear when the backend restarts. Durable
-MongoDB storage, vector embeddings/search, Redis current context, and retrieval
-ranking remain a separate integration workstream and are not supplied by the
-current in-memory composition.
+session/event storage, vector embeddings/search, Redis current context, and
+retrieval ranking remain separate integration work. Dashboard profiles use a
+separate MongoDB collection and survive backend restarts.
 
 ### Export the fixture without starting the server
 
@@ -83,7 +85,7 @@ no Vite server runs in this profile.
 - `/dashboard/sessions/:sessionId` — metadata, summary, a session-scoped
   relationship map and readable lists, then the chronological event timeline
 - `/dashboard/search` — natural-language historical search
-- `/dashboard/account` — a local prototype profile and dashboard preferences
+- `/dashboard/account` — a MongoDB-backed prototype profile and dashboard preferences
 - `/dashboard/explore` — legacy compatibility redirect, not a separate page
 
 `/dashboard/explore?sessionId={validUuid}` redirects to
@@ -95,18 +97,19 @@ directly.
 
 ## Prototype dashboard account
 
-The Account route creates an explicitly local prototype profile with a display
-name, email, primary entertainment preference, and preferred narration detail.
-The record is validated and stored in browser local storage under
-`streamsense.dashboard.account.v1`; malformed records are ignored. Saving and
-signing out update the account summary in the dashboard rail immediately.
+The Account route creates a profile containing display name, normalized email,
+primary entertainment preference, preferred narration detail, UUID, and
+timestamps. The dashboard validates the response from `/api/accounts`; the
+backend validates the request again and stores it in MongoDB collection
+`dashboard_accounts`. Unique indexes protect both `accountId` and normalized
+email. Browser local storage contains only `{ version: 2, accountId }` under
+`streamsense.dashboard.account.v2`.
 
-This is not server authentication. It does not upload credentials, partition
-the shared in-memory history repository, or pass preferences into the live
-extension. That boundary is deliberate: account UI can be demonstrated without
-changing tab capture, VAD, Gemini prompts, narration policy, or audio playback.
-A production identity provider and per-user history ownership remain a later
-backend integration.
+This is not password authentication and it does not partition the shared
+in-memory history repository or pass preferences into the live extension.
+Signing out only forgets the UUID on that browser; it does not delete the
+MongoDB record. A production identity provider, recovery flow, deletion API,
+and per-user history ownership remain later backend work.
 
 ## Relationship-map semantics
 

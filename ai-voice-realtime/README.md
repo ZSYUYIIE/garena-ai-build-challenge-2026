@@ -79,6 +79,19 @@ For integrated development, run one of these commands from the repository root:
 Every profile preflights its fixed ports and starts exactly one backend. Do not
 start a package-scoped server at the same time.
 
+Before using the dashboard Account route, start MongoDB from the repository
+root and configure `MONGODB_URI`/`MONGODB_DB_NAME` in this package's `.env`:
+
+```bash
+docker compose up -d mongodb
+```
+
+Profiles are stored in `dashboard_accounts` with unique account ID and
+normalized-email indexes. The backend exposes create/read/update operations at
+`/api/accounts`; it never stores passwords or provider credentials. Without a
+MongoDB URI, those endpoints return `503` while history and realtime routes
+remain available.
+
 For an intentionally backend-only stable run:
 
 ```bash
@@ -126,8 +139,8 @@ not start the server, seed a running process, or make `npm start` load that file
 
 Durable MongoDB session/event storage, vector embeddings and search, Redis
 current context, and production retrieval ranking remain separate integration
-work. The current composition supplies repository and semantic-adapter
-boundaries but does not implement or claim those integrations.
+work. MongoDB profile persistence is implemented independently and does not
+make session history durable.
 
 ### Serve the built one-backend demo
 

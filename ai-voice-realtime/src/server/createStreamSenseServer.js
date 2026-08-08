@@ -5,6 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 
+import { UnavailableAccountRepository } from "../accounts/accountRepository.js";
+import { createAccountRouter } from "../accounts/accountRouter.js";
 import { EventStore } from "../events/eventStore.js";
 import { HistoryArchiveQueue } from "../history/historyArchiveQueue.js";
 import { createHistoryRouter } from "../history/historyRouter.js";
@@ -30,6 +32,7 @@ export function createStreamSenseServer({
   allowAnyExtensionOrigin = false,
   databasePath = ":memory:",
   eventStore = new EventStore({ databasePath }),
+  accountRepository = new UnavailableAccountRepository(),
   historyRepository,
   historyService,
   historyArchive,
@@ -73,6 +76,7 @@ export function createStreamSenseServer({
   const sessionClosures = new WeakMap();
   let closing = false;
 
+  app.use("/api/accounts", createAccountRouter({ accountRepository }));
   app.use("/api", createHistoryRouter({ historyService: activeHistoryService }));
   const dashboardIndex = path.join(dashboardDirectory, "index.html");
   if (fs.existsSync(dashboardIndex)) {
@@ -197,6 +201,7 @@ export function createStreamSenseServer({
       if (historyDrained) {
         await Promise.resolve(activeHistoryService.close?.()).catch(() => {});
       }
+      await Promise.resolve(accountRepository.close?.()).catch(() => {});
       eventStore.close();
     })();
     return closePromise;
@@ -207,6 +212,7 @@ export function createStreamSenseServer({
     httpServer,
     browserWss,
     eventStore,
+    accountRepository,
     historyRepository: activeHistoryRepository,
     historyService: activeHistoryService,
     historyArchive: activeHistoryArchive,
