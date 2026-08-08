@@ -475,6 +475,98 @@ test("uses Live once for typed text and preserves attributed transcript chunks",
   assert.equal(fixture.browser.messages.some((message) => message.type === "turn_complete" && message.turnId === turnId && message.retryable === false), true);
 });
 
+test("Deep Research composes outside Live, then automatically speaks the final summary through Live", async (t) => {
+  let now = 0;
+  const live = new FakeLiveSession();
+  const researchCalls = [];
+  const deepResearch = {
+    async answer(question, { onProgress }) {
+      researchCalls.push(question);
+      onProgress({ stage: "understand", status: "completed", detail: "resolved query" });
+      onProgress({ stage: "synthesize", status: "completed", detail: "voice ready" });
+      return {
+        answer: "Final researched answer with citation [1].",
+        summary: "Final researched answer with citation [1].",
+        voiceSummary: "Final researched answer with citation.",
+      };
+    },
+  };
+  const fixture = createFixture({ liveSessionFactory: () => live, deepResearch, now: () => now });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "session_config", narrationLevel: "standard", researchMode: "deep_research",
+  })), false);
+  const deepTurnId = "30303030-3030-4030-8030-303030303030";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "typed_question", turnId: deepTurnId, text: "Research this topic",
+  })), false);
+  await flushAsyncWork();
+  await flushAsyncWork();
+
+  assert.deepEqual(researchCalls, ["Research this topic"]);
+  assert.deepEqual(live.typedQuestions, []);
+  assert.deepEqual(fixture.browser.messages.find((message) => (
+    message.type === "answer_update" && message.turnId === deepTurnId
+  )), {
+    type: "answer_update", turnId: deepTurnId, mode: "answer",
+    text: "Final researched answer with citation [1].", finished: true,
+  });
+  assert.deepEqual(live.researchVoices, [{
+    turnId: deepTurnId,
+    text: "Final researched answer with citation.",
+  }]);
+  live.callbacks.onInputTranscript({ turnId: deepTurnId, text: "APP_RESEARCH_VOICE", finished: true });
+  live.callbacks.onOutputTranscript({ turnId: deepTurnId, text: "duplicate transcript", finished: true });
+  live.callbacks.onAudio({ turnId: deepTurnId, data: "AQI=", mimeType: "audio/pcm;rate=24000" });
+  live.callbacks.onTurnComplete({ turnId: deepTurnId });
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "user_transcript" && message.turnId === deepTurnId
+    && message.text === "APP_RESEARCH_VOICE"
+  )), false);
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "answer_update" && message.turnId === deepTurnId
+    && message.text === "duplicate transcript"
+  )), false);
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "model_audio" && message.turnId === deepTurnId
+    && message.mimeType === "audio/pcm;rate=24000"
+  )), true);
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "turn_complete" && message.turnId === deepTurnId && message.retryable === false
+  )), true);
+
+  const replayTurnId = "35353535-3535-4535-8535-353535353535";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "play_research_voice", sourceTurnId: deepTurnId, turnId: replayTurnId,
+  })), false);
+  assert.deepEqual(live.researchVoices.at(-1), {
+    turnId: replayTurnId,
+    text: "Final researched answer with citation.",
+  });
+  live.callbacks.onOutputTranscript({ turnId: replayTurnId, text: "duplicate transcript", finished: true });
+  live.callbacks.onAudio({ turnId: replayTurnId, data: "AQI=", mimeType: "audio/pcm;rate=24000" });
+  live.callbacks.onTurnComplete({ turnId: replayTurnId });
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "answer_update" && message.turnId === replayTurnId
+  )), false);
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "model_audio" && message.turnId === replayTurnId
+  )), true);
+
+  now = 3_000;
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "session_config", narrationLevel: "standard", researchMode: "normal",
+  })), false);
+  const normalTurnId = "40404040-4040-4040-8040-404040404040";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "typed_question", turnId: normalTurnId, text: "Continue normally",
+  })), false);
+  assert.deepEqual(live.typedQuestions, [{ turnId: normalTurnId, text: "Continue normally" }]);
+});
+
 test("rejects an answer immediately after Live GoAway without leaving an active turn or replaying it", async (t) => {
   const reconnectDelay = deferred();
   const callbacks = [];
@@ -1999,6 +2091,7 @@ function createFixture({
   transcriberFactory,
   timers,
   historyArchive,
+  deepResearch,
 } = {}) {
   const browser = new FakeBrowser();
   const eventStore = new EventStore();
@@ -2027,6 +2120,7 @@ function createFixture({
     }),
     timers,
     historyArchive,
+    deepResearch,
   });
   return { browser, eventStore, session };
 }
@@ -2037,6 +2131,7 @@ class FakeLiveSession {
     this.microphoneWrites = [];
     this.tabWrites = [];
     this.typedQuestions = [];
+    this.researchVoices = [];
     this.narrations = [];
     this.discarded = [];
     this.videoWrites = [];
@@ -2047,6 +2142,7 @@ class FakeLiveSession {
   endUserActivity() {}
   sendMicrophonePcm(pcm) { this.microphoneWrites.push(Buffer.from(pcm)); }
   askTyped(turnId, text) { this.typedQuestions.push({ turnId, text }); }
+  speakResearchVoice(turnId, text) { this.researchVoices.push({ turnId, text }); }
   speakNarration(turnId, text) { this.narrations.push({ turnId, text }); }
   discardOutput(turnId) {
     this.discarded.push(turnId);

@@ -21,6 +21,7 @@ flowchart LR
     Extension -->|"JPEG frames + separate mic/tab PCM"| Backend["Express + WebSocket backend"]
     Backend --> Gemini["Gemini visual + Live models"]
     Backend --> STT["Google Cloud Speech-to-Text"]
+    Backend -->|"Deep Research only"| Exa["Exa public web search"]
     Backend --> Events["SQLite event store + in-memory history projection"]
     Extension -->|"Open Memory Dashboard"| Dashboard["React Memory dashboard"]
     Dashboard -->|"bounded REST /api"| Backend
@@ -51,6 +52,22 @@ Automatic narration follows a fail-closed sequence:
 
 Typed and microphone questions use Gemini Live and can interrupt narration.
 Captured-tab audio is never presented as user speech.
+
+Normal and Deep Research share one visible chat but have separate generation
+paths. The selected mode is snapshotted per admitted question. Normal uses the
+session's conversational Gemini Live path. Deep Research uses non-live
+Gemini Interactions to resolve the query, Exa retrieves public passages, a second
+Interaction produces the final cited answer, then the persistent Gemini Live
+connection immediately speaks the concise answer body without its inline
+citations or linked sources. The backend appends the readable source list
+deterministically and streams strict progress events to the side panel
+throughout. The Live connection remains open and resumes when
+Normal is selected, preserving the Live context from before the research turn.
+The search query, plan, sources, and answer remain
+session-only and do not enter dashboard history or MongoDB.
+Completed research turns retain only a bounded summary cache for the manual
+debug replay button. That explicit action creates a separate Live audio turn,
+suppresses its output transcript, and clears with the browser session.
 
 ## Memory dashboard
 
@@ -105,6 +122,7 @@ remain the keyboard and screen-reader equivalent.
 | Browser profile state | Local storage | Opaque account UUID only. |
 | Raw mic/tab audio | Not stored | Streamed for processing and discarded. |
 | Captured-tab transcript context | Bounded memory | Cleared with the live session. |
+| Deep Research query, sources, answer, and voice summary | Bounded request/session memory | Search and composition use non-live requests; the summary is spoken by Live and discarded with the session. Never archived or stored in MongoDB. |
 
 The current account route is a prototype profile, not authentication. Signing
 out forgets the local UUID but does not delete the Atlas record. The Atlas

@@ -41,6 +41,11 @@ test("backend accepts every extension command fixture", () => {
       turnId: "123e4567-e89b-42d3-a456-426614174000",
     },
     {
+      type: "play_research_voice",
+      sourceTurnId: "123e4567-e89b-42d3-a456-426614174000",
+      turnId: "223e4567-e89b-42d3-a456-426614174000",
+    },
+    {
       type: "session_hello",
       protocolVersion: 2,
       tabAudioState: "captured",
@@ -64,6 +69,7 @@ test("backend accepts every extension command fixture", () => {
       "video_frame",
       "session_config",
       "typed_question",
+      "play_research_voice",
       "session_hello",
       "media_state",
       "tab_audio_activity",
@@ -242,6 +248,7 @@ test("parses a strict fixture for every advertised server message type", () => {
     },
     { type: "playback_clear", turnId, mode: "answer" },
     { type: "provider_health", provider: "tab_stt", state: "degraded", message: "gap" },
+    { type: "research_progress", turnId, stage: "search", status: "active", detail: "Searching public sources." },
     { type: "narration_update", turnId, mode: "narration", text: "live narration", finished: true, languageCode: "en-US" },
     { type: "status", mode: "narrating" },
     { type: "status_text", text: "connected" },

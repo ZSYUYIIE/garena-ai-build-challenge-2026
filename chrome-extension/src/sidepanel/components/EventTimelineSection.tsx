@@ -10,8 +10,8 @@ type EventTimelineSectionProps = {
 
 export function EventTimelineSection({ events }: EventTimelineSectionProps) {
   return (
-    <div>
-      <h3 className="mb-2.5">Timeline</h3>
+    <section className="flex min-h-0 flex-1 flex-col">
+      <h3 className="mb-1.5 shrink-0">Timeline</h3>
       {events.length > 0 ? (
         <EventTimelineList events={events} />
       ) : (
@@ -19,16 +19,16 @@ export function EventTimelineSection({ events }: EventTimelineSectionProps) {
           Events will appear here as the video plays.
         </p>
       )}
-    </div>
+    </section>
   );
 }
 
 function EventTimelineList({ events }: { events: TimelineEvent[] }) {
   return (
-    <div className="relative max-h-40 overflow-y-auto pl-4">
+    <div className="relative min-h-0 flex-1 overflow-y-auto pl-4 pr-1">
       <div className="absolute left-[7px] top-1 bottom-1 w-px bg-border" />
       {events.map((event, index) => (
-        <div key={event.id} className="relative mb-3.5 last:mb-0">
+        <div key={event.id} className="relative mb-2.5 last:mb-0">
           <span
             className={`absolute -left-4 top-1 h-1.5 w-1.5 rounded-full ${
               index === 0 ? "bg-narrating" : "bg-border"

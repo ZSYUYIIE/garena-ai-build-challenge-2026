@@ -5,7 +5,10 @@ side panel uses `/ws`, and the History dashboard uses `/api` plus the optional
 built `/dashboard/` route. For realtime sessions it connects to Gemini
 Interactions for grounded screen-change analysis, Gemini Live for questions
 and native voice replies, and Google Cloud Speech-to-Text V2 for captured-tab
-context.
+context. When the user selects Deep Research, the backend searches Exa,
+finalizes the answer with Gemini Interactions, and immediately sends only its
+concise answer body to Gemini Live for native voice playback. Sources remain
+visible as links and are not spoken.
 
 ```text
 screen frames + user microphone -> StreamSense backend -> Gemini
@@ -21,6 +24,7 @@ not as user speech.
 
 - A current Node.js release with npm.
 - A Gemini API key for Gemini Interactions and Gemini Live.
+- An Exa API key to enable the optional Deep Research mode.
 - A Google Cloud project with Speech-to-Text V2 enabled and Application
   Default Credentials (ADC) available to the backend process.
 - Google Chrome for the extension demo.
@@ -42,6 +46,7 @@ Configure `.env` without committing the populated file:
 | `GOOGLE_API_KEY` | Backend-only Gemini credential used for vision analysis and Live voice. |
 | `GEMINI_VISION_MODEL` | Gemini Interactions model used for atomic screen-change analysis. |
 | `GEMINI_LIVE_MODEL` | Gemini Live model used for questions, native voice, and approved narration. |
+| `EXA_API_KEY` | Backend-only Exa credential used by session-only Deep Research; Normal mode does not require it. |
 | `GOOGLE_CLOUD_PROJECT` | Google Cloud project that owns the Speech-to-Text V2 request. |
 | `GOOGLE_CLOUD_SPEECH_LOCATION` | Speech-to-Text recognizer location; defaults to `us`. |
 | `STREAMSENSE_EXTENSION_ID` | Exact 32-character Chrome extension ID allowed to open the production WebSocket. |
@@ -126,6 +131,26 @@ npm run dev --workspace ai-voice-realtime
 
 The backend listens on `http://127.0.0.1:8000` by default. Keep this terminal
 running while using the extension.
+
+### Normal and Deep Research answers
+
+Both answer modes share one visible chat, and the extension sends the selected
+mode as session configuration. The backend snapshots that mode when a typed or
+microphone turn is admitted. Normal mode follows the existing persistent Gemini
+Live session. Deep Research does not ask Live to generate its answer: it uses
+non-live Gemini Interactions to resolve the query, Exa to retrieve
+public sources, and Gemini Interactions to produce the final cited answer. The
+backend appends a deterministic linked source list, then immediately asks the
+existing Gemini Live session to speak only the concise answer body. Inline
+citations and linked sources are excluded from speech. Spoken deep questions
+are transcribed through the same non-live path.
+The Live connection stays open and resumes its existing Normal-mode context
+when Normal is selected again.
+For playback diagnosis, the side panel can replay the bounded, session-cached
+research summary through Gemini Live. This manual turn emits audio without
+another chat answer and the cache is cleared at close.
+Queries, progress, results, and answers are not written to MongoDB or the
+history repository by this flow.
 
 Normal package startup and the root `dev:realtime` profile create an empty
 `MemoryHistoryRepository`. The root `dev` and `dev:dashboard` profiles instead
