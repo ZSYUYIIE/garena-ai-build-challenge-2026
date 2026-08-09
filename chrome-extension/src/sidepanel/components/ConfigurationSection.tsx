@@ -60,9 +60,13 @@ export function ConfigurationSection() {
         </label>
         <Select
           aria-label="Narration level"
-          value={options.narrationLevel}
-          onChange={(val) => {
-            setOptions({ ...options, narrationLevel: val as NarrationMode });
+          selectedKey={options.narrationLevel}
+          onSelectionChange={(value) => {
+            if (!narrationModes.includes(value as NarrationMode)) return;
+            setOptions((current) => ({
+              ...current,
+              narrationLevel: value as NarrationMode,
+            }));
           }}
         >
           <SelectTrigger
@@ -77,8 +81,6 @@ export function ConfigurationSection() {
               <SelectItem
                 id={mode}
                 key={mode}
-                value={mode}
-                onClick={() => setOptions({ ...options, narrationLevel: mode })}
                 className="text-sm"
               >
                 {mode}
@@ -96,8 +98,8 @@ export function ConfigurationSection() {
         </label>
         <Select
           aria-label="Voice narration"
-          value={options.voiceNarrationMode}
-          onChange={(value) => {
+          selectedKey={options.voiceNarrationMode}
+          onSelectionChange={(value) => {
             if (isVoiceNarrationMode(value)) changeVoiceNarrationMode(value);
           }}
         >
@@ -111,10 +113,8 @@ export function ConfigurationSection() {
           <SelectContent>
             {VOICE_NARRATION_MODES.map((mode) => (
               <SelectItem
-                id={`voice-${mode}`}
+                id={mode}
                 key={mode}
-                value={mode}
-                onClick={() => changeVoiceNarrationMode(mode)}
                 className="text-sm"
               >
                 {VOICE_NARRATION_MODE_LABELS[mode]}
