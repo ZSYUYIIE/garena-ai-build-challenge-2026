@@ -25,5 +25,7 @@ test("ships only the permissions and entry points used by the side-panel demo", 
     "sidePanel",
     "storage",
     "tabCapture",
+    "tts",
   ]);
+  assert.equal(manifest.permissions?.includes("ttsEngine"), false);
 });

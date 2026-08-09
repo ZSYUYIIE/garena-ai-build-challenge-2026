@@ -36,7 +36,7 @@ export function createExtensionManifest(
     side_panel: {
       default_path: "src/sidepanel/index.html",
     },
-    permissions: ["activeTab", "sidePanel", "storage", "tabCapture"],
+    permissions: ["activeTab", "sidePanel", "storage", "tabCapture", "tts"],
     host_permissions: [
       "http://127.0.0.1:8000/*",
       "http://localhost:8000/*",
