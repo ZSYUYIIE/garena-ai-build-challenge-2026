@@ -47,6 +47,7 @@ export class SpeechCoordinator {
   private active: ActiveTurn | null = null;
   private tabActive = false;
   private voiceNarrationMode: VoiceNarrationMode;
+  private timelineNarrationActive = false;
   private tabGain: TabGain = 1;
   private stopped = false;
 
@@ -111,6 +112,16 @@ export class SpeechCoordinator {
       return;
     }
     this.syncTabGain();
+  }
+
+  setTimelineNarrationActive(active: boolean): void {
+    if (this.stopped || active === this.timelineNarrationActive) return;
+    this.timelineNarrationActive = active;
+    this.syncTabGain();
+  }
+
+  answerOwnsSpeech(): boolean {
+    return this.active?.mode === "answer";
   }
 
   modelAudio(chunk: ModelAudioChunk): boolean {
@@ -180,6 +191,7 @@ export class SpeechCoordinator {
     this.stopped = true;
     this.cancelTimers(this.active);
     this.active = null;
+    this.timelineNarrationActive = false;
     this.options.playback.stop();
     this.syncTabGain();
   }
@@ -257,7 +269,7 @@ export class SpeechCoordinator {
       return this.active.userSpeaking ? 0 : 0.3;
     }
     if (
-      this.active?.mode === "narration"
+      (this.active?.mode === "narration" || this.timelineNarrationActive)
       && this.voiceNarrationMode === "over_audio"
     ) {
       return 0.4;

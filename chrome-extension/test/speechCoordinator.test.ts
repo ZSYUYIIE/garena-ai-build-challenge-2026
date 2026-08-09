@@ -280,3 +280,38 @@ test("stop restores muted Narration only playback before teardown", () => {
   f.coordinator.stop();
   assert.deepEqual(f.gainCalls.at(-1), { gain: 1, fadeMs: 250 });
 });
+
+test("Chrome timeline narration ducks over-audio gain only while lifecycle is active", () => {
+  const f = fixture("over_audio");
+  f.coordinator.setTimelineNarrationActive(true);
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 0.4, fadeMs: 150 });
+
+  f.coordinator.setTimelineNarrationActive(false);
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 1, fadeMs: 250 });
+});
+
+test("Chrome timeline narration never changes Narration only mute", () => {
+  const f = fixture("narration_only");
+  f.coordinator.setTimelineNarrationActive(true);
+  f.coordinator.setTimelineNarrationActive(false);
+  assert.deepEqual(f.gainCalls, [{ gain: 0, fadeMs: 50 }]);
+});
+
+test("answers own speech from admission through failure or playback idle", () => {
+  const f = fixture("over_audio");
+  assert.equal(f.coordinator.answerOwnsSpeech(), false);
+  f.coordinator.setTimelineNarrationActive(true);
+  f.coordinator.typedQuestionStarted("answer-1");
+  assert.equal(f.coordinator.answerOwnsSpeech(), true);
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 0.3, fadeMs: 150 });
+
+  f.coordinator.failTurn("answer-1", "failed");
+  assert.equal(f.coordinator.answerOwnsSpeech(), false);
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 0.4, fadeMs: 150 });
+
+  f.coordinator.typedQuestionStarted("answer-2");
+  f.coordinator.turnComplete({ turnId: "answer-2", mode: "answer" });
+  assert.equal(f.coordinator.answerOwnsSpeech(), true);
+  f.emitPlaybackIdle("answer-2");
+  assert.equal(f.coordinator.answerOwnsSpeech(), false);
+});

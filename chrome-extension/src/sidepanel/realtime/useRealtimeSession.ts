@@ -42,6 +42,11 @@ import {
 } from "./sessionLifecycle";
 import { SpeechCoordinator } from "./speechCoordinator";
 import {
+  createChromeTimelineTtsPort,
+  TimelineNarrator,
+} from "./timelineNarrator";
+import { routeTimelineEvent } from "./timelineEventAdmission";
+import {
   canAskRealtime,
   dispatchTypedQuestion,
   questionAvailabilityFor,
@@ -118,6 +123,8 @@ export function useRealtimeSession(
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [researchMode, setResearchModeState] = useState<ResearchMode>("normal");
   const [researchProgress, setResearchProgress] = useState<ResearchProgress[]>([]);
+  const eventsRef = useRef<StreamEvent[]>(events);
+  eventsRef.current = events;
 
   const statusRef = useRef(status);
   statusRef.current = status;
@@ -150,6 +157,7 @@ export function useRealtimeSession(
   const mediaAudioRef = useRef<RealtimeMediaAudio | null>(null);
   const retryMicrophoneRef = useRef<(() => Promise<MicrophoneState>) | null>(null);
   const speechCoordinatorRef = useRef<SpeechCoordinator | null>(null);
+  const timelineNarratorRef = useRef<TimelineNarrator | null>(null);
   const activeTurnRef = useRef<TurnRoleState | null>(null);
   const settlingTurnRef = useRef<TurnRoleState | null>(null);
   const speakingTurnIdRef = useRef<string | null>(null);
@@ -213,6 +221,7 @@ export function useRealtimeSession(
 
     websocketRef.current = null;
     speechCoordinatorRef.current = null;
+    timelineNarratorRef.current = null;
     mediaAudioRef.current = null;
     retryMicrophoneRef.current = null;
     mediaStreamRef.current = null;
@@ -429,6 +438,24 @@ export function useRealtimeSession(
     });
     speechCoordinatorRef.current = coordinator;
     resourceLifecycle.register(() => coordinator.stop());
+    const timelineNarrator = new TimelineNarrator({
+      tts: createChromeTimelineTtsPort(),
+      voiceNarrationMode: voiceNarrationModeRef.current,
+      automaticNarrationEnabled: narrationLevelRef.current !== "question_only",
+      onActiveChange: (active) => {
+        callbackGate.run(() => coordinator.setTimelineNarrationActive(active));
+      },
+      onError: (message) => {
+        callbackGate.run(() => setError(`Timeline narration unavailable: ${message}`));
+      },
+    });
+    timelineNarratorRef.current = timelineNarrator;
+    resourceLifecycle.register(() => {
+      timelineNarrator.stop();
+      if (timelineNarratorRef.current === timelineNarrator) {
+        timelineNarratorRef.current = null;
+      }
+    });
 
     const runFrameCapture = async ({ force }: { force: boolean }): Promise<void> => {
       const websocket = websocketRef.current;
@@ -501,6 +528,7 @@ export function useRealtimeSession(
       },
       onUserActivityStart: () => {
         if (!callbackGate.allows() || !voiceStateRef.current.helloAccepted || !voiceStateRef.current.liveReady) return;
+        timelineNarrator.interruptForQuestion();
         const turnId = crypto.randomUUID();
         setResearchProgress([]);
         nextVoiceTurnIdRef.current = turnId;
@@ -563,6 +591,7 @@ export function useRealtimeSession(
     setStatusText("Capturing the active tab without the StreamSense panel.");
     setError(null);
     setActiveSessionId(null);
+    eventsRef.current = [];
     setEvents([]);
     setMessages([]);
     setDescription("Waiting for the first description...");
@@ -599,6 +628,7 @@ export function useRealtimeSession(
         onTabActivity: (active) => {
           callbackGate.run(() => {
             coordinator.tabActivity(active);
+            timelineNarrator.setTabActivity(active);
             safelySend(() => protocol.sendTabActivity(active));
           });
         },
@@ -794,7 +824,19 @@ export function useRealtimeSession(
               setDescription(text);
             }
             break;
-          case "event": if (message.event) setEvents((current) => current.some((item) => item.id === message.event!.id) ? current : [message.event!, ...current].slice(0, 100)); break;
+          case "event":
+            if (message.event) {
+              routeTimelineEvent(eventsRef.current, message.event, {
+                answerOwnsSpeech: coordinator.answerOwnsSpeech(),
+                commit: (nextEvents) => {
+                  eventsRef.current = nextEvents;
+                  setEvents(nextEvents);
+                  setDescription(message.event!.description);
+                },
+                offer: (inserted) => timelineNarrator.offer(inserted),
+              });
+            }
+            break;
           case "error": setError(message.text ?? "The realtime session reported an error."); setStatus("error"); break;
           case "analysis_error": setError(message.text ?? "The current frame could not be analyzed."); break;
           case "status":
@@ -833,6 +875,7 @@ export function useRealtimeSession(
       voiceStateRef.current.helloAccepted,
       liveProviderStateRef.current,
     )) return false;
+    timelineNarratorRef.current?.interruptForQuestion();
     return retireMicrophoneBeforeTypedAdmission(
       () => retireMicrophoneTurnRef.current?.(undefined, {
         notifyBackend: true,
@@ -893,6 +936,7 @@ export function useRealtimeSession(
         liveProviderStateRef.current,
       )
     ) return false;
+    timelineNarratorRef.current?.interruptForQuestion();
     const turnId = crypto.randomUUID();
     activeTurnRef.current = createTurnRoleState(turnId, {
       userFinished: true,
@@ -992,6 +1036,9 @@ export function useRealtimeSession(
 
   useEffect(() => {
     narrationLevelRef.current = narrationLevel;
+    timelineNarratorRef.current?.setAutomaticNarrationEnabled(
+      narrationLevel !== "question_only",
+    );
     const websocket = websocketRef.current;
     if (websocket?.readyState === WebSocket.OPEN) websocket.send(JSON.stringify({
       type: "session_config",
@@ -1004,6 +1051,7 @@ export function useRealtimeSession(
   useEffect(() => {
     voiceNarrationModeRef.current = voiceNarrationMode;
     speechCoordinatorRef.current?.setVoiceNarrationMode(voiceNarrationMode);
+    timelineNarratorRef.current?.setVoiceNarrationMode(voiceNarrationMode);
     const websocket = websocketRef.current;
     if (websocket?.readyState === WebSocket.OPEN) websocket.send(JSON.stringify({
       type: "session_config",
