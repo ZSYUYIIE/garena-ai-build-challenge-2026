@@ -27,6 +27,8 @@ Authorized browser tab
   -> backend --> Gemini visual and Live models
   -> backend --> Cloud Speech-to-Text V2 for tab commentary
   -> backend --> SQLite evidence + in-memory history projection
+  -> backend -- recorded protocol-v2 event --> side-panel timeline
+  -> side panel -- exact event description --> Chrome / OS TTS
 
 Side panel -- Open Memory Dashboard --> Memory dashboard -- REST --> backend
 Memory dashboard -- account REST --> backend --> MongoDB profiles
@@ -40,7 +42,7 @@ context and is never presented as the user's speech.
 
 | Directory | Purpose |
 | --- | --- |
-| `chrome-extension/` | Manifest V3 extension, side-panel UI, tab capture, push-to-talk, and Gemini audio playback. |
+| `chrome-extension/` | Manifest V3 extension, side-panel UI, tab capture, push-to-talk, Chrome timeline TTS, and Gemini answer playback. |
 | `ai-voice-realtime/` | Express and WebSocket backend, Gemini Interactions/Live clients, Cloud Speech-to-Text, and event storage. |
 | `session-dashboard/` | Accessible React dashboard for previous sessions, timeline search, and context exploration. |
 | `docs/` | Design notes and verification material. |
@@ -339,12 +341,13 @@ Gemini replies, then to 100% after playback finishes. Muting playback does not
 stop screen capture or the separate captured-tab transcription stream.
 
 Voice narration is independent from Narration level. Smart narration speaks
-only after the tab has been quiet under the existing speech policy. Narrate
-over audio speaks a newly recorded timeline event while the tab continues at
-40 percent volume during narration. Narration only keeps local tab playback
-muted for the session while capture and tab transcription continue. Selecting
-Question only under Narration level disables automatic voice in all three
-Voice narration modes.
+only after the extension's local tab-activity detector has reported 750
+milliseconds of continuous silence. Narrate over audio speaks a newly recorded
+timeline event while the tab continues at 40 percent volume only during the
+Chrome TTS lifecycle. Narration only keeps local tab playback muted for the
+session while capture and tab transcription continue. Selecting Question only
+under Narration level disables Chrome timeline TTS in all three Voice narration
+modes without suppressing timeline events.
 
 ## Grounded narration and timeline behavior
 
@@ -356,18 +359,19 @@ Automatic narration now follows one fail-closed path:
 2. StreamSense rejects self-descriptions, inferred user actions, and results
    from a frame that has already been superseded.
 3. The accepted moment must be recorded and published to the current-session
-   timeline before it can be offered for speech. If local event persistence
-   fails, the panel shows a warning and skips that narration.
+   timeline. The side panel then deduplicates and inserts the new event before
+   offering its exact recorded description to Chrome/OS TTS. If local event
+   persistence fails, the panel shows a warning and skips that narration.
 4. Captured-tab transcript is compared only after the visual fact is grounded,
    so it may suppress a redundant description but cannot create one.
 
-The panel builds its displayed description from Gemini Live's turn-bound output
-transcript, which follows the audio actually generated, rather than displaying
-the earlier visual-analysis sentence as if it had already been spoken. The
-label reads **Now describing** only during model playback, **Latest
-description** while the session is otherwise running, and **Video description**
-when stopped. Reload the unpacked extension after rebuilding; legacy unowned
-`answer` and `narration` WebSocket messages are rejected by the current panel.
+Gemini Live does not synthesize automatic timeline events. It remains available
+for Normal questions and native answers plus the existing Deep Research voice
+path. Typed and microphone questions interrupt Chrome timeline TTS and clear
+pending work before admission; events arriving while a user answer owns speech
+remain visible but are not replayed. Reload the unpacked extension after
+rebuilding; the manifest requires the consumer permission `tts` and never
+`ttsEngine`.
 
 ## Memory dashboard development without Speech-to-Text
 
@@ -464,8 +468,8 @@ development-only backend with deterministic history. Open
 `http://127.0.0.1:8000/dashboard/`; load `chrome-extension/dist` for the Live
 surface. There is no separate Vite server in this profile. Dashboard-only use
 does not start provider sessions, but this workflow is not evidence that
-physical Chrome capture, Gemini, or Cloud Speech-to-Text works in the current
-environment.
+physical Chrome capture, Chrome/OS TTS, Gemini, or Cloud Speech-to-Text works in
+the current environment.
 
 ## Development
 
@@ -548,14 +552,16 @@ Speech-to-Text; the service uses ADC separately.
 Run `gcloud auth login`, select the correct account, set the project, and retry
 the enable command.
 
-### Tab speech context unavailable / Smart narration paused
+### Tab speech context unavailable
 
 Confirm that `speech.googleapis.com` is enabled, ADC has the correct quota
 project, `GOOGLE_CLOUD_PROJECT` is correct, and the active account can use the
 Speech-to-Text API. Restart the backend after fixing credentials. Typed and
-microphone questions can still work without captured-tab speech context. Smart
-narration pauses because it cannot safely judge commentary overlap; Narrate
-over audio and Narration only can continue when Gemini Live remains ready.
+microphone questions can still work without captured-tab speech context. Chrome
+timeline TTS is independent of Cloud Speech-to-Text health: Smart uses the
+extension's local tab-activity detector, while Narrate over audio and Narration
+only do not wait for tab silence. Gemini Live health gates questions and answers,
+not automatic timeline narration.
 
 ### Microphone permission denied
 

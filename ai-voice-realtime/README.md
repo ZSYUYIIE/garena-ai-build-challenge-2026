@@ -10,6 +10,12 @@ finalizes the answer with Gemini Interactions, and immediately sends only its
 concise answer body to Gemini Live for native voice playback. Sources remain
 visible as links and are not spoken.
 
+The backend records and publishes grounded automatic timeline events but never
+asks Gemini Live to speak them. After side-panel insertion, the extension uses
+Chrome/OS TTS for that exact recorded description. Gemini Live remains the
+question/answer and existing Deep Research voice provider. The extension
+manifest must include the consumer permission `tts`, never `ttsEngine`.
+
 ```text
 screen frames + user microphone -> StreamSense backend -> Gemini
 captured-tab audio              -> StreamSense backend -> Cloud Speech-to-Text
@@ -45,7 +51,7 @@ Configure `.env` without committing the populated file:
 | --- | --- |
 | `GOOGLE_API_KEY` | Backend-only Gemini credential used for vision analysis and Live voice. |
 | `GEMINI_VISION_MODEL` | Gemini Interactions model used for atomic screen-change analysis. |
-| `GEMINI_LIVE_MODEL` | Gemini Live model used for questions, native voice, and approved narration. |
+| `GEMINI_LIVE_MODEL` | Gemini Live model used for questions, native answers, and the existing Deep Research voice path; not automatic timeline narration. |
 | `EXA_API_KEY` | Backend-only Exa credential used by session-only Deep Research; Normal mode does not require it. |
 | `GOOGLE_CLOUD_PROJECT` | Google Cloud project that owns the Speech-to-Text V2 request. |
 | `GOOGLE_CLOUD_SPEECH_LOCATION` | Speech-to-Text recognizer location; defaults to `us`. |
@@ -283,21 +289,18 @@ transitions such as a verified score change.
 An atomic result from a superseded frame may still be archived at its original
 timestamp, but it cannot be spoken or become grounded context for a newer
 request. Self-descriptions and inferred user interactions are rejected before
-they reach the state cache or speech policy. Captured-tab transcript overlap is
-evaluated locally after the frame result exists; it can mark narration as
-already covered but cannot justify an unseen claim.
+they reach the state cache or event publication. Captured-tab transcript
+overlap is evaluated locally after the frame result exists; it can mark
+narration as already covered but cannot justify an unseen claim.
 
-Every automatic spoken candidate must first receive `status: recorded` from the
-SQLite `EventStore` and be published as an `event` message. A duplicate or
-failed write does not start speech. Failures emit a bounded user-facing
+Every automatic event must first receive `status: recorded` from the SQLite
+`EventStore` and be published as an `event` message. A duplicate or failed write
+does not become eligible for extension TTS. Failures emit a bounded user-facing
 `analysis_error`; the separate asynchronous dashboard archive remains
-best-effort and cannot block realtime publication.
-
-The backend no longer sends the canonical vision sentence as a premature
-`narration_update`. Only turn-owned Gemini Live output transcription is sent to
-the extension for the **Now describing** text, so the displayed sentence tracks
-the audio output rather than the prompt submitted to the generative voice
-model.
+best-effort and cannot block realtime publication. The backend does not offer
+the recorded event to `GeminiLiveSession.speakNarration`; the side panel reads
+the exact published description with Chrome/OS TTS after deduplicated timeline
+insertion.
 
 ## Audio, privacy, and playback behavior
 
@@ -315,9 +318,9 @@ model.
   returns to 30 percent while Gemini answers and to full volume after Gemini's
   local PCM playback queue is idle. Typed questions use the 30-percent answer
   level directly.
-- Smart narration leaves tab playback at full volume and is suppressed or
-  cancelled while local tab-audio detection or Cloud Speech-to-Text reports
-  speech.
+- Smart narration leaves tab playback at full volume and waits for 750
+  milliseconds of continuous silence from the extension's local tab-audio
+  detector. Cloud Speech-to-Text health is not a timeline-TTS gate.
 - Narrate over audio allows a newly recorded event to be spoken during tab
   speech and lowers local tab playback to 40 percent only during that
   narration. Narration only keeps local tab playback at 0 percent. Neither mode
@@ -332,12 +335,14 @@ model.
 - If the captured tab has no audio track, visual context and user Q&A continue,
   and meaningful-change narration may run during visual silence rules.
 - If an audio-bearing tab loses Speech-to-Text health or audio continuity, tab
-  speech context is shown as unavailable and Smart narration pauses. Narrate
-  over audio and Narration only can continue when Gemini Live remains ready.
-  User Q&A remains available using microphone/typed input and current frames.
+  speech context is shown as unavailable, but Chrome timeline TTS remains
+  available. Smart continues to use the extension's local activity detector;
+  Narrate over audio and Narration only speak without waiting. User Q&A remains
+  available when Gemini Live is ready.
 - If Gemini Live is connecting or degraded, microphone VAD is disarmed so audio
   is not admitted into an unsafe partial turn. The UI remains stoppable and
-  typed input remains visible; affected turns receive a retryable failure.
+  typed input remains visible; affected question turns receive a retryable
+  failure. Recorded timeline events can still use Chrome TTS.
 - Ending the video track or changing the authorized tab stops the realtime
   session. A microphone-only failure degrades voice without ending tab capture.
 

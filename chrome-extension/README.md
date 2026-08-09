@@ -20,7 +20,9 @@ npm run build
 Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
 and select `chrome-extension/dist`. Copy the generated extension ID to
 `ai-voice-realtime/.env` as `STREAMSENSE_EXTENSION_ID`, then reload the
-extension after rebuilding.
+extension after rebuilding. The manifest requires Chrome's `tts` permission so
+the side panel can consume the default Chrome/OS voice; it does not request
+`ttsEngine` because StreamSense does not provide a speech engine.
 
 On an ordinary HTTP or HTTPS page, click the StreamSense toolbar icon to
 authorize that exact tab and open the side panel. Chrome internal pages and the
@@ -84,20 +86,20 @@ connectivity.
 
 ## Realtime description and timeline ownership
 
-The side panel accepts only protocol-v2, turn-owned narration updates. It
-merges incremental Gemini Live output-transcript chunks for one narration turn
-and uses the accumulated spoken transcript as the visible description. Legacy
-unowned `answer` and `narration` messages are rejected. The label distinguishes
-active playback, the latest completed description, and the stopped state.
-The description is presented as a collapsed-by-default disclosure with its
-latest text still visible in the summary row. Expanding it reveals the full
-bounded description and provider status. The current-session timeline scrolls
-inside a bounded region so the answer-mode control, chat history, and composer
-remain visible at ordinary side-panel heights.
+The side panel accepts strict protocol-v2 `event` messages and displays the
+newest recorded event description in its collapsed-by-default description
+disclosure. Expanding it reveals the full bounded description and provider
+status. Legacy unowned `answer` and `narration` messages remain rejected. The
+current-session timeline scrolls inside a bounded region so the answer-mode
+control, chat history, and composer remain visible at ordinary side-panel
+heights.
 
 Current-session timeline events arrive independently as strict `event`
-messages. The backend publishes a recorded event before automatic narration is
-eligible, so a spoken visual moment cannot silently bypass the live timeline.
+messages. The backend grounds, validates, records, and publishes each event.
+Only after the side panel deduplicates and inserts a new event can its exact
+recorded `description` be offered to Chrome/OS TTS. Gemini Live never rephrases
+or synthesizes automatic timeline events, so a spoken visual moment cannot
+silently bypass the live timeline.
 The separate Memory dashboard reads archived session/event projections over
 REST; the extension does not rehydrate old sessions into its compact timeline.
 The dashboard's Memory-first relationship map, search, accessibility shortcuts,
@@ -109,11 +111,11 @@ single accessible theme, and readable relationship alternatives are documented i
 Voice narration is a side-panel-only preference and is separate from the
 Narration level selector:
 
-- **Smart narration** preserves the commentary-aware behavior: automatic voice
-  waits until the captured tab is not speaking.
+- **Smart narration** waits for 750 milliseconds of continuous silence from the
+  extension's existing local tab-activity detector.
 - **Narrate over audio** speaks the newest recorded timeline event even during
-  tab speech. Local tab playback fades to 40 percent only while narration is
-  playing.
+  tab speech. Local tab playback fades to 40 percent only from the Chrome TTS
+  `start` event through `end`, `interrupted`, `cancelled`, or `error`.
 - **Narration only** speaks new timeline events while local tab playback stays
   muted. Tab capture and the separate Speech-to-Text stream continue.
 
@@ -122,6 +124,12 @@ Press `N` while the side panel has focus to cycle the three Voice narration
 modes. The shortcut ignores editable controls, modifier keys, and key repeat;
 the visible selector remains its accessible equivalent. The selection is saved
 locally and applied immediately to an active session.
+
+Typed and microphone questions interrupt an active Chrome timeline utterance
+and clear its one pending event before admission. Events received while a user
+answer owns speech remain visible but are not spoken later. Gemini Live and
+Cloud Speech-to-Text health do not gate timeline TTS; Cloud transcription and
+captured-tab PCM continue independently.
 
 ## Answer modes
 
@@ -153,4 +161,6 @@ npm run check
 For focused extension iteration, `npm test --workspace chrome-extension` and
 `npm run build --workspace chrome-extension` remain available. Automated tests
 and a successful build do not prove real Chrome capture permissions, microphone
-behavior, Gemini Live audio, or Cloud Speech-to-Text in the current environment.
+behavior, Chrome/OS TTS, Gemini Live audio, or Cloud Speech-to-Text in the current
+environment. Reload the unpacked extension and perform a physical TTS smoke test
+after changing narration behavior.

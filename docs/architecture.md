@@ -19,6 +19,8 @@ surfaces:
 flowchart LR
     Video["Authorized video tab"] --> Extension["Chrome extension\nStreamSense Live"]
     Extension -->|"JPEG frames + separate mic/tab PCM"| Backend["Express + WebSocket backend"]
+    Backend -->|"recorded protocol-v2 events"| Extension
+    Extension --> ChromeTTS["Chrome / OS text-to-speech"]
     Backend --> Gemini["Gemini visual + Live models"]
     Backend --> STT["Google Cloud Speech-to-Text"]
     Backend -->|"Deep Research only"| Exa["Exa public web search"]
@@ -48,18 +50,27 @@ Automatic narration follows a fail-closed sequence:
 2. Reject stale, unsupported, repeated, or self-referential output.
 3. Compare grounded visual facts with commentary only to suppress redundancy.
 4. Persist and publish the accepted event to the current timeline.
-5. Offer that event to speech only after persistence succeeds.
+5. Let the side panel deduplicate and insert the published event, then offer its
+   exact recorded description to Chrome/OS text-to-speech.
 
-The side panel has a separate Voice narration preference. Smart narration keeps
-the existing commentary-aware silence checks. Narrate over audio speaks the
-newest recorded timeline event even while the tab is speaking and lowers only
-local tab playback to 40 percent during narration. Narration only uses the same
-event-driven speech path while keeping local tab playback muted. Captured-tab
-PCM still flows to its separate transcription path in every mode. The
-Narration level preference remains responsible for description detail, and its
-Question only value suppresses automatic voice in every Voice narration mode.
+Automatic timeline speech is owned by the extension's `chrome.tts` client, not
+Gemini Live. The required Manifest V3 permission is `tts`, never `ttsEngine`;
+Chrome and the operating system choose the default voice. The side panel's
+separate Voice narration preference controls only client-side timing and local
+tab gain. Smart waits for 750 milliseconds of continuous silence from the
+existing local tab-activity detector. Narrate over audio speaks immediately and
+lowers only local tab playback to 40 percent from the Chrome TTS start event to
+its terminal event. Narration only uses the same event-driven speech path while
+keeping local tab playback muted for the capture session. Captured-tab PCM still
+flows to its separate transcription path in every mode. The Narration level
+preference remains responsible for description detail, and its Question only
+value suppresses Chrome timeline TTS without suppressing timeline events.
 
-Typed and microphone questions use Gemini Live and can interrupt narration.
+Typed and microphone questions use Gemini Live and interrupt Chrome timeline
+TTS before question admission. Gemini Live continues to own questions, answers,
+and the existing Deep Research voice path, but never synthesizes automatic
+timeline events. Gemini Live or Cloud Speech-to-Text availability is therefore
+not a gate for timeline TTS; Smart depends only on local tab activity.
 Captured-tab audio is never presented as user speech.
 
 Normal and Deep Research share one visible chat but have separate generation
