@@ -12,6 +12,7 @@ import {
 } from "../../services/microphonePermission";
 import { configuredBackendWebSocketUrl } from "../../services/backendUrls";
 import type { NarrationMode } from "../context/ConfigurationContext";
+import type { VoiceNarrationMode } from "../voiceNarration";
 import {
   calculateFrameDimensions,
   commitRetainedFrame,
@@ -97,7 +98,10 @@ export function delay(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-export function useRealtimeSession(narrationLevel: NarrationMode) {
+export function useRealtimeSession(
+  narrationLevel: NarrationMode,
+  voiceNarrationMode: VoiceNarrationMode,
+) {
   const captureTarget = useCaptureTarget();
   const captureTargetRef = useRef(captureTarget);
   captureTargetRef.current = captureTarget;
@@ -120,6 +124,8 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const errorRef = useRef(error);
   errorRef.current = error;
   const narrationLevelRef = useRef(narrationLevel);
+  const voiceNarrationModeRef = useRef(voiceNarrationMode);
+  voiceNarrationModeRef.current = voiceNarrationMode;
   const researchModeRef = useRef<ResearchMode>(researchMode);
   researchModeRef.current = researchMode;
 
@@ -403,6 +409,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     });
     const coordinator = new SpeechCoordinator({
       playback,
+      voiceNarrationMode: voiceNarrationModeRef.current,
       setTabGain: (gain, fadeMs) => mediaAudio.setTabGain(gain, fadeMs),
       onFailTurn: (turnId, reason) => {
         callbackGate.run(() => {
@@ -634,7 +641,12 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         if (!isCurrent()) { websocket.close(1000, "Stale extension session"); return; }
         protocol.open(mediaState);
         websocket.send(JSON.stringify({ type: "capture_source", source: "screen" }));
-        websocket.send(JSON.stringify({ type: "session_config", narrationLevel: narrationLevelRef.current, researchMode: researchModeRef.current }));
+        websocket.send(JSON.stringify({
+          type: "session_config",
+          narrationLevel: narrationLevelRef.current,
+          voiceNarrationMode: voiceNarrationModeRef.current,
+          researchMode: researchModeRef.current,
+        }));
         void captureFrame({ force: false });
         frameTimerRef.current = window.setInterval(() => { void captureFrame({ force: false }); }, VIDEO_FRAME_INTERVAL_MS);
       });
@@ -905,7 +917,12 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     if (mode === "normal") setResearchProgress([]);
     const websocket = websocketRef.current;
     if (websocket?.readyState === WebSocket.OPEN) {
-      websocket.send(JSON.stringify({ type: "session_config", narrationLevel: narrationLevelRef.current, researchMode: mode }));
+      websocket.send(JSON.stringify({
+        type: "session_config",
+        narrationLevel: narrationLevelRef.current,
+        voiceNarrationMode: voiceNarrationModeRef.current,
+        researchMode: mode,
+      }));
     }
   }, []);
 
@@ -976,8 +993,25 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   useEffect(() => {
     narrationLevelRef.current = narrationLevel;
     const websocket = websocketRef.current;
-    if (websocket?.readyState === WebSocket.OPEN) websocket.send(JSON.stringify({ type: "session_config", narrationLevel, researchMode: researchModeRef.current }));
+    if (websocket?.readyState === WebSocket.OPEN) websocket.send(JSON.stringify({
+      type: "session_config",
+      narrationLevel,
+      voiceNarrationMode: voiceNarrationModeRef.current,
+      researchMode: researchModeRef.current,
+    }));
   }, [narrationLevel]);
+
+  useEffect(() => {
+    voiceNarrationModeRef.current = voiceNarrationMode;
+    speechCoordinatorRef.current?.setVoiceNarrationMode(voiceNarrationMode);
+    const websocket = websocketRef.current;
+    if (websocket?.readyState === WebSocket.OPEN) websocket.send(JSON.stringify({
+      type: "session_config",
+      narrationLevel: narrationLevelRef.current,
+      voiceNarrationMode,
+      researchMode: researchModeRef.current,
+    }));
+  }, [voiceNarrationMode]);
 
   useEffect(() => {
     const cleanup = () => releaseResources();

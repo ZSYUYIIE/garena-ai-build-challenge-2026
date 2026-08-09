@@ -34,7 +34,12 @@ test("backend accepts every extension command fixture", () => {
       mimeType: "image/jpeg",
       data: "AQID",
     },
-    { type: "session_config", narrationLevel: "standard" },
+    {
+      type: "session_config",
+      narrationLevel: "standard",
+      voiceNarrationMode: "over_audio",
+      researchMode: "normal",
+    },
     {
       type: "typed_question",
       text: "What is visible?",

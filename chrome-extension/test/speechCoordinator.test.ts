@@ -5,6 +5,7 @@ import {
   SpeechCoordinator,
   type PlaybackController,
 } from "../src/sidepanel/realtime/speechCoordinator.ts";
+import type { VoiceNarrationMode } from "../src/sidepanel/voiceNarration.ts";
 
 type Timer = { at: number; callback: () => void; cancelled: boolean };
 
@@ -36,9 +37,9 @@ function modelChunk(turnId: string, mode: "answer" | "narration" = "answer") {
   };
 }
 
-function fixture() {
+function fixture(voiceNarrationMode: VoiceNarrationMode = "smart") {
   const clock = new FakeClock();
-  const gainCalls: Array<{ gain: 0 | 0.3 | 1; fadeMs: number }> = [];
+  const gainCalls: Array<{ gain: 0 | 0.3 | 0.4 | 1; fadeMs: number }> = [];
   const failures: Array<{ turnId: string; reason: string }> = [];
   const clears: Array<string | undefined> = [];
   const completions: string[] = [];
@@ -57,6 +58,7 @@ function fixture() {
   };
   const coordinator = new SpeechCoordinator({
     playback,
+    voiceNarrationMode,
     setTabGain: (gain, fadeMs) => gainCalls.push({ gain, fadeMs }),
     onFailTurn: (turnId, reason) => failures.push({ turnId, reason }),
     setTimeout: clock.setTimeout,
@@ -109,6 +111,67 @@ test("tab activity clears narration without changing tab gain", () => {
   f.coordinator.tabActivity(true);
   assert.equal(f.clears.includes("narration-1"), true);
   assert.equal(f.gainCalls.length, gainsBefore);
+});
+
+test("Narrate over audio accepts narration during tab speech and mixes the tab at 40 percent", () => {
+  const f = fixture("over_audio");
+  f.coordinator.tabActivity(true);
+
+  assert.equal(
+    f.coordinator.modelAudio(modelChunk("narration-1", "narration")),
+    true,
+  );
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 0.4, fadeMs: 150 });
+
+  f.coordinator.turnComplete({ turnId: "narration-1", mode: "narration" });
+  f.emitPlaybackIdle("narration-1");
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 1, fadeMs: 250 });
+});
+
+test("Narration only keeps local tab playback muted through narration and answers", () => {
+  const f = fixture("narration_only");
+  assert.deepEqual(f.gainCalls, [{ gain: 0, fadeMs: 50 }]);
+
+  f.coordinator.tabActivity(true);
+  assert.equal(
+    f.coordinator.modelAudio(modelChunk("narration-1", "narration")),
+    true,
+  );
+  f.coordinator.clearPlayback("narration-1");
+  f.coordinator.typedQuestionStarted("answer-1");
+  f.coordinator.turnComplete({ turnId: "answer-1", mode: "answer" });
+  f.emitPlaybackIdle("answer-1");
+
+  assert.deepEqual(f.gainCalls, [{ gain: 0, fadeMs: 50 }]);
+});
+
+test("live mode changes immediately recompute tab gain and Smart cancels narration during tab speech", () => {
+  const f = fixture("over_audio");
+  f.coordinator.tabActivity(true);
+  assert.equal(
+    f.coordinator.modelAudio(modelChunk("narration-1", "narration")),
+    true,
+  );
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 0.4, fadeMs: 150 });
+
+  f.coordinator.setVoiceNarrationMode("narration_only");
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 0, fadeMs: 50 });
+
+  f.coordinator.setVoiceNarrationMode("smart");
+  assert.equal(f.clears.includes("narration-1"), true);
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 1, fadeMs: 250 });
+});
+
+test("answers override the over-audio mix, then restore the selected mode target", () => {
+  const f = fixture("over_audio");
+  f.coordinator.modelAudio(modelChunk("narration-1", "narration"));
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 0.4, fadeMs: 150 });
+
+  f.coordinator.typedQuestionStarted("answer-1");
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 0.3, fadeMs: 150 });
+  f.coordinator.turnComplete({ turnId: "answer-1", mode: "answer" });
+  f.emitPlaybackIdle("answer-1");
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 1, fadeMs: 250 });
 });
 
 test("typed questions duck and failed or empty answers restore volume", () => {
@@ -209,5 +272,11 @@ test("ends a sixty-second local speech turn retryably and stop restores gain and
   f.coordinator.typedQuestionStarted("answer-2");
   f.coordinator.stop();
   assert.equal(f.clears.includes("stop"), true);
+  assert.deepEqual(f.gainCalls.at(-1), { gain: 1, fadeMs: 250 });
+});
+
+test("stop restores muted Narration only playback before teardown", () => {
+  const f = fixture("narration_only");
+  f.coordinator.stop();
   assert.deepEqual(f.gainCalls.at(-1), { gain: 1, fadeMs: 250 });
 });

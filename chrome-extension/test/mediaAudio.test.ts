@@ -268,6 +268,14 @@ test("routes tab audio to full-volume playback and a separate STT callback", asy
   assert.equal(media.context.sources[0].destinations.includes(media.context.worklets[0]), true);
 });
 
+test("applies a tab-gain target selected before the capture graph starts", async () => {
+  const media = fixture();
+  media.audio.setTabGain(0, 50);
+  await startBoth(media);
+
+  assert.equal(media.context.gains[0].gain.value, 0);
+});
+
 test("cancels held tab-gain automation before every rapid duck and restore ramp", async () => {
   const { media } = await startBoth();
   const gain = media.context.gains[0];
@@ -275,6 +283,7 @@ test("cancels held tab-gain automation before every rapid duck and restore ramp"
 
   media.audio.setTabGain(0, 50);
   media.audio.setTabGain(0.3, 150);
+  media.audio.setTabGain(0.4, 150);
   media.audio.setTabGain(1, 250);
   media.audio.setTabGain(0.3, 150);
 
@@ -283,6 +292,7 @@ test("cancels held tab-gain automation before every rapid duck and restore ramp"
     [
       { method: "hold", time: 1 }, { method: "ramp", value: 0, time: 1.05 },
       { method: "hold", time: 1 }, { method: "ramp", value: 0.3, time: 1.15 },
+      { method: "hold", time: 1 }, { method: "ramp", value: 0.4, time: 1.15 },
       { method: "hold", time: 1 }, { method: "ramp", value: 1, time: 1.25 },
       { method: "hold", time: 1 }, { method: "ramp", value: 0.3, time: 1.15 },
     ],

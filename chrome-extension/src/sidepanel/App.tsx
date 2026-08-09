@@ -21,7 +21,10 @@ export default function App() {
 
 function StreamSensePanel() {
   const { options } = useConfigurationOptions();
-  const session = useRealtimeSession(options.narrationLevel);
+  const session = useRealtimeSession(
+    options.narrationLevel,
+    options.voiceNarrationMode,
+  );
 
   const handleRunningChange = useCallback(
     (shouldRun: boolean) => {
