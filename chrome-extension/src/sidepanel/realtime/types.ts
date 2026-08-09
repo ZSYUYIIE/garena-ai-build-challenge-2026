@@ -24,6 +24,15 @@ export type RealtimeChatMessage = {
   text: string;
 };
 
+export type ResearchMode = "normal" | "deep_research";
+export type ResearchStage = "understand" | "search" | "review" | "synthesize";
+export type ResearchProgress = {
+  turnId: string;
+  stage: ResearchStage;
+  status: "active" | "completed" | "failed";
+  detail?: string;
+};
+
 export type VoiceStatus =
   | "off"
   | "listening"
@@ -221,6 +230,7 @@ export const SUPPORTED_SERVER_MESSAGE_TYPES = Object.freeze([
   "model_audio",
   "playback_clear",
   "provider_health",
+  "research_progress",
   "narration_update",
   "status",
   "status_text",
@@ -266,6 +276,7 @@ export type ServerMessage =
   | TranscriptServerMessage
   | { type: "connected"; protocolVersion: 2; sessionId: string; model?: string }
   | { type: "event"; event?: StreamEvent }
+  | ({ type: "research_progress" } & ResearchProgress)
   | {
       type: "model_audio";
       turnId: string;
@@ -401,6 +412,13 @@ export function parseServerMessage(rawText: string): ServerMessage {
     case "event":
       requireExactKeys(value, ["type"], ["event"]);
       if (value.event !== undefined) requireEvent(value.event);
+      return value as ServerMessage;
+    case "research_progress":
+      requireExactKeys(value, ["type", "turnId", "stage", "status"], ["detail"]);
+      if (!isUuid(requireString(value.turnId))) invalidServerMessage();
+      if (!( ["understand", "search", "review", "synthesize"] as const).includes(value.stage as never)) invalidServerMessage();
+      if (!( ["active", "completed", "failed"] as const).includes(value.status as never)) invalidServerMessage();
+      requireOptionalString(value.detail);
       return value as ServerMessage;
     case "status":
       requireExactKeys(value, ["type"], ["mode"]);

@@ -58,6 +58,7 @@ const runtime = createStreamSenseServer({
   apiKey: process.env.GOOGLE_API_KEY || "",
   model: process.env.GEMINI_VISION_MODEL || "gemini-3.6-flash",
   liveModel: process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview",
+  exaApiKey: process.env.EXA_API_KEY || "",
   speechProjectId: process.env.GOOGLE_CLOUD_PROJECT || "",
   speechLocation: process.env.GOOGLE_CLOUD_SPEECH_LOCATION || "us",
   extensionId: process.env.STREAMSENSE_EXTENSION_ID || "",
