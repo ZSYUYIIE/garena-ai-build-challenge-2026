@@ -58,6 +58,40 @@ test("routes Live telemetry diagnostics outside provider readiness health", asyn
   });
 });
 
+test("injects session-scoped semantic context into the Live prompt lookup", async (t) => {
+  const matches = [{ description: "A close-range shot was saved." }];
+  const lookups = [];
+  const observations = [];
+  const live = new FakeLiveSession();
+  const fixture = createFixture({
+    getPromptContext: async (sessionId, text, limit) => {
+      lookups.push({ sessionId, text, limit });
+      return matches;
+    },
+    onEmbeddingRetrieved: (payload) => observations.push(payload),
+    liveSessionFactory: () => live,
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+
+  const result = await live.callbacks.getPromptContext({
+    text: "What happened earlier?",
+  });
+
+  assert.deepEqual(result, matches);
+  assert.deepEqual(lookups, [
+    {
+      sessionId: fixture.session.sessionId,
+      text: "What happened earlier?",
+      limit: 5,
+    },
+  ]);
+  assert.deepEqual(observations, [
+    { text: "What happened earlier?", matches },
+  ]);
+});
+
 test("closes malformed and non-object JSON as a client policy violation", async () => {
   for (const raw of ["{", "null", "[]"]) {
     const fixture = createFixture();
@@ -2092,6 +2126,8 @@ function createFixture({
   timers,
   historyArchive,
   deepResearch,
+  getPromptContext,
+  onEmbeddingRetrieved,
 } = {}) {
   const browser = new FakeBrowser();
   const eventStore = new EventStore();
@@ -2121,6 +2157,8 @@ function createFixture({
     timers,
     historyArchive,
     deepResearch,
+    getPromptContext,
+    onEmbeddingRetrieved,
   });
   return { browser, eventStore, session };
 }

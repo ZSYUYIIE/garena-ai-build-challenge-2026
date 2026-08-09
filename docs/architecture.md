@@ -117,6 +117,7 @@ remain the keyboard and screen-reader equivalent.
 | Data | Current store | Lifetime and ownership |
 | --- | --- | --- |
 | Realtime accepted events | SQLite event store | Backend-local event evidence. |
+| Semantic event copies | MongoDB `events` vector index | Best-effort, session-scoped context for Live typed prompts; not canonical dashboard history. |
 | Dashboard session/history projection | In-memory repository | Lost on backend restart; demo mode is deterministic. |
 | Dashboard profile | MongoDB Atlas `dashboard_accounts` | Primary cloud persistence for account UUID, display name, normalized email, preferences, and timestamps; local Docker is an optional offline substitute. |
 | Browser profile state | Local storage | Opaque account UUID only. |

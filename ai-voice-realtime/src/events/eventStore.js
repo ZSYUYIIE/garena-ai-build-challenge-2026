@@ -11,7 +11,12 @@ import {
 import { eventRecordInputSchema, formatTimestamp } from "./eventSchema.js";
 
 export class EventStore {
-  constructor({ databasePath = ":memory:" } = {}) {
+  constructor({ databasePath = ":memory:", saveContextData = null } = {}) {
+    if (saveContextData !== null && typeof saveContextData !== "function") {
+      throw new TypeError("saveContextData must be a function or null");
+    }
+    this.saveContextData = saveContextData;
+    this.pendingContextWrites = new Set();
     if (databasePath !== ":memory:") {
       fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     }
@@ -79,7 +84,7 @@ export class EventStore {
       .all(
         candidate.sessionId,
         Math.max(0, candidate.timestampSeconds - duplicateWindowSeconds),
-        25
+        25,
       )
       .map(toEvent);
 
@@ -96,6 +101,21 @@ export class EventStore {
       timestamp: formatTimestamp(candidate.timestampSeconds),
     };
 
+    if (this.saveContextData) {
+      const contextWrite = Promise.resolve().then(() =>
+        this.saveContextData({ ...event }),
+      );
+      this.pendingContextWrites.add(contextWrite);
+      void contextWrite
+        .catch(() => {
+          console.warn(
+            `Semantic context storage degraded for event ${event.id}.`,
+          );
+        })
+        .finally(() => this.pendingContextWrites.delete(contextWrite));
+    }
+
+    // TODO: remove the sqlite storage as we are migrating to mongodb
     this.insertStatement.run(
       event.id,
       event.sessionId,
@@ -104,7 +124,7 @@ export class EventStore {
       JSON.stringify(event.entities),
       event.description,
       event.importance,
-      event.confidence
+      event.confidence,
     );
 
     return { status: "recorded", event };
@@ -113,6 +133,22 @@ export class EventStore {
   listBySession(sessionId, { limit = 100 } = {}) {
     const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
     return this.listStatement.all(sessionId, safeLimit).map(toEvent);
+  }
+
+  async drainContext({ timeoutMs = 2_000 } = {}) {
+    const pending = [...this.pendingContextWrites];
+    if (pending.length === 0) return true;
+    let timeout;
+    try {
+      return await Promise.race([
+        Promise.allSettled(pending).then(() => true),
+        new Promise((resolve) => {
+          timeout = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   close() {

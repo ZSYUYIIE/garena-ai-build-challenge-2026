@@ -287,8 +287,9 @@ Do not claim the following as working yet:
   events and opens the History dashboard for archived reads, but the current
   normal/demo dashboard repositories are process-local memory;
 - production semantic retrieval: the built-in demo adapter is deterministic,
-  while durable storage, embeddings/vector search, Redis current context, and
-  calibrated semantic scoring remain integration boundaries;
+  while the realtime backend's best-effort MongoDB embeddings only support
+  session-scoped Live prompt context. Durable dashboard storage, Redis current
+  context, and calibrated semantic scoring remain integration boundaries;
 - physical accessibility and GPU acceptance for the optional Three.js view:
   automated tests do not replace keyboard, contrast, reduced-motion, WebGL
   fallback, and cleanup inspection in a real browser;

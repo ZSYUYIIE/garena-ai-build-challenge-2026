@@ -75,8 +75,8 @@ work—not as implemented features—in the architecture document.
 - A Gemini API key with access to the configured vision and Live models.
 - A Google Cloud project with billing configured for Speech-to-Text V2.
 - The [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`).
-- A MongoDB Atlas cluster for dashboard profile persistence. Docker Desktop is
-  optional when an offline local profile store is preferred.
+- A MongoDB Atlas cluster for dashboard profiles and semantic event retrieval.
+  Docker Desktop is optional when an offline local store is preferred.
 
 The Gemini and Google Cloud requirements apply to the realtime extension. The
 deterministic session-dashboard workflow below requires only Node.js and npm.
@@ -257,7 +257,8 @@ For isolated local debugging, `STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=true`
 temporarily relaxes the extension-origin check. Do not use that setting for a
 shared or production backend.
 
-MongoDB Atlas is the primary profile store. In Atlas, create a dedicated
+MongoDB Atlas stores prototype profiles and the session-scoped semantic event
+index used to add earlier moments to Live prompts. In Atlas, create a dedicated
 database user (separate from the MongoDB Cloud sign-in), allow only the current
 backend operator IP, and copy the Node.js SRV value from **Connect > Drivers**.
 Replace every URI placeholder, URL-encode special characters in the database
@@ -374,9 +375,11 @@ profiles. It seeds a fresh in-memory repository every time the backend starts
 and is refused when `NODE_ENV=production`. `npm run dev:realtime`, normal
 `npm start`, and production startup retain an empty in-memory history
 repository. Neither history mode is durable: dashboard sessions are lost at
-process restart. Account profiles are a separate MongoDB collection and do
-persist. Durable session/event storage, vector embeddings/search, Redis current
-context, and retrieval ranking remain separate integration work.
+process restart. Account profiles persist in MongoDB. Accepted event evidence
+still writes to SQLite and is also copied to MongoDB on a best-effort basis with
+768-dimensional embeddings for session-scoped Live prompt retrieval. Durable
+per-user dashboard history, Redis current context, and production identity and
+retention controls remain separate integration work.
 
 Memory now leads with an optional Three.js relationship map before the recent
 session list. The former `/dashboard/explore` URL is a compatibility redirect:

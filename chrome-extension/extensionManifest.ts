@@ -12,14 +12,22 @@ export function createExtensionManifest(
 ): StaticManifest {
   return {
     manifest_version: 3,
-    name: pkg.name,
+    name: "StreamSense",
+    short_name: "StreamSense",
+    description: "Live screen narration and conversational assistance for blind and low-vision viewers.",
     version: pkg.version,
     icons: {
-      48: "public/logo.png",
+      16: "public/assets/streamsense.png",
+      32: "public/assets/streamsense.png",
+      48: "public/assets/streamsense.png",
+      128: "public/assets/streamsense.png",
     },
     action: {
       default_icon: {
-        48: "public/logo.png",
+        16: "public/assets/streamsense.png",
+        32: "public/assets/streamsense.png",
+        48: "public/assets/streamsense.png",
+        128: "public/assets/streamsense.png",
       },
     },
     background: {

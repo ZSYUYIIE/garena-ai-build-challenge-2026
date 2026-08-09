@@ -187,10 +187,13 @@ exports the deterministic
 fixture to the Git-ignored `data/dashboard-demo.json` for inspection. It does
 not start the server, seed a running process, or make `npm start` load that file.
 
-Durable MongoDB session/event storage, vector embeddings and search, Redis
-current context, and production retrieval ranking remain separate integration
-work. MongoDB profile persistence is implemented independently and does not
-make session history durable.
+MongoDB profile persistence is implemented independently and does not make
+dashboard session history durable. When MongoDB is configured, each accepted
+event is also copied on a best-effort basis with a 768-dimensional embedding;
+Live typed prompts can retrieve up to five matches from the current session.
+That prototype path is not the dashboard's semantic-search adapter. Durable
+per-user history, Redis current context, and production retrieval ranking remain
+separate integration work.
 
 ### Serve the built one-backend demo
 

@@ -533,9 +533,12 @@ rejected rather than silently reset.
 Semantic search is an injected `SemanticHistoryService`. The normal memory mode
 uses an unavailable adapter and keeps list/detail/timeline reads healthy. Demo
 mode uses deterministic fixture matching and does not generate embeddings or
-exercise a vector database. MongoDB persistence, vector embeddings/search,
-Redis current context, and retrieval ranking remain behind a separate durable
-integration boundary and are incomplete.
+exercise a vector database. Separately, a configured realtime backend copies
+accepted event evidence to MongoDB with 768-dimensional embeddings and performs
+session-scoped retrieval for Live typed prompts. That best-effort path is not
+the dashboard's canonical history repository or `SemanticHistoryService`.
+Durable per-user history, Redis current context, and production retrieval
+ranking remain behind a separate integration boundary and are incomplete.
 The handoff is defined in `docs/semantic-history-integration.md`.
 
 The context graph is a bounded structural projection of session, event, entity,
@@ -785,9 +788,11 @@ current end-to-end proof.
   separate dashboard.
 - The dashboard's normal and demo repositories are in-memory and lose/reset
   data at backend restart. The exported demo JSON is not a runtime datastore.
-- Durable MongoDB history, vector embedding/search, Redis current context,
-  retrieval ranking, and production score calibration remain separate
-  integration work. No physical integration with those services is claimed.
+- Durable MongoDB history, Redis current context, dashboard semantic retrieval,
+  and production score calibration remain separate integration work. The
+  realtime path has a best-effort MongoDB embedding copy and session-scoped Live
+  prompt lookup, but it is not canonical history and does not make the
+  dashboard durable.
 - `semantic_similarity` context edges are reserved but not emitted until a
   verified, normalized semantic score is supplied; structural edges are used
   instead of fabricated similarity.

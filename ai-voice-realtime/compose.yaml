@@ -1,0 +1,11 @@
+name: streamsense-persistence
+services:
+  mongodb:
+    image: mongodb/mongodb-atlas-local:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./data/mongodb_data:/data/db
+      - ./data/mongodb_config:/data/configdb
+
+    restart: unless-stopped

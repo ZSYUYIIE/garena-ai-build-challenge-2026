@@ -4,6 +4,11 @@ import { config as loadEnvironment } from "dotenv";
 
 import { UnavailableAccountRepository } from "./src/accounts/accountRepository.js";
 import { MongoAccountRepository } from "./src/accounts/mongoAccountRepository.js";
+import {
+  closeContextDataStore,
+  getContextData,
+  saveContextData,
+} from "./src/context-builder/contextstore.js";
 import { createStreamSenseServer } from "./src/server/createStreamSenseServer.js";
 import {
   createDemoSemanticResults,
@@ -61,6 +66,11 @@ const runtime = createStreamSenseServer({
   databasePath:
     process.env.EVENT_DB_PATH ||
     path.join(moduleDirectory, "data", "streamsense.db"),
+  saveContextData: process.env.MONGODB_URI ? saveContextData : undefined,
+  getPromptContext: process.env.MONGODB_URI ? getContextData : undefined,
+  closeContextStore: process.env.MONGODB_URI
+    ? closeContextDataStore
+    : undefined,
   accountRepository,
   historyRepository,
   semanticHistoryService,
