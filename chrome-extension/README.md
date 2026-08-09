@@ -139,10 +139,11 @@ clear existing messages. The selection applies equally to typed and
 push-to-talk questions. During Deep Research, the existing chat displays an
 accessible four-step plan with the current query, source count, review state,
 and synthesis state. Its active step uses a reduced-motion-safe loading
-animation and completed steps transition to checkmarks. The concise researched text appears above a linked source
-list in the same chat. Non-live Gemini text-to-speech speaks only the answer
-body, not citations or source links; Gemini Live does not generate the Deep
-Research answer. Selecting Normal resumes the existing Live session.
+animation and completed steps transition to checkmarks. The concise researched
+text appears above a linked source list in the same chat. A non-live Gemini
+request generates the answer, then the persistent Gemini Live connection speaks
+only the answer body, not citations or source links. Selecting Normal resumes
+the existing Live session.
 Each completed researched answer also exposes a manual **Debug: Play with
 Gemini Live** control. Pressing it reads the session-cached concise answer over
 the existing Live connection, suppresses the duplicate transcript, and does

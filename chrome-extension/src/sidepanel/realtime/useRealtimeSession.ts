@@ -88,6 +88,7 @@ const LATE_TRANSCRIPT_SETTLEMENT_MS = 15_000;
 type PendingPcm = { pcm: Int16Array; timestampMs: number };
 type VoiceTurn = {
   turnId: string;
+  deepResearch: boolean;
   pending: boolean;
   ended: boolean;
   packets: PendingPcm[];
@@ -532,7 +533,14 @@ export function useRealtimeSession(
         const turnId = crypto.randomUUID();
         setResearchProgress([]);
         nextVoiceTurnIdRef.current = turnId;
-        const turn: VoiceTurn = { turnId, pending: true, ended: false, packets: [], bytes: 0 };
+        const turn: VoiceTurn = {
+          turnId,
+          deepResearch: researchModeRef.current === "deep_research",
+          pending: true,
+          ended: false,
+          packets: [],
+          bytes: 0,
+        };
         microphoneTurns.claim(turn);
         activeTurnRef.current = createTurnRoleState(turnId);
         settlingTurnRef.current = null;
@@ -559,7 +567,7 @@ export function useRealtimeSession(
           turn.bytes = 0;
           if (turn.ended) {
             safelySend(() => protocol.endUserActivity());
-            coordinator.userEnded(turnId);
+            coordinator.userEnded(turnId, { deepResearch: turn.deepResearch });
             publishVoiceStatus({ userSpeaking: false });
           }
         })();
@@ -571,7 +579,7 @@ export function useRealtimeSession(
           turn.ended = true;
           if (turn.pending) return;
           safelySend(() => protocol.endUserActivity());
-          coordinator.userEnded(turn.turnId);
+          coordinator.userEnded(turn.turnId, { deepResearch: turn.deepResearch });
           publishVoiceStatus({ userSpeaking: false });
         });
       },
@@ -735,6 +743,7 @@ export function useRealtimeSession(
             }
             break;
           case "research_progress":
+            coordinator.answerProgress(message.turnId);
             setResearchProgress((current) => [
               ...current.filter((item) => item.turnId === message.turnId && item.stage !== message.stage),
               message,
@@ -890,7 +899,9 @@ export function useRealtimeSession(
           window.clearTimeout(settlingTurnTimerRef.current);
           settlingTurnTimerRef.current = null;
         }
-        coordinator.typedQuestionStarted(turnId);
+        coordinator.typedQuestionStarted(turnId, {
+          deepResearch: researchModeRef.current === "deep_research",
+        });
         setError(null);
         speakingTurnIdRef.current = null;
         publishVoiceStatus({ geminiSpeaking: false });

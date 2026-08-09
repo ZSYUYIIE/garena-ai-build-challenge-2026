@@ -40,7 +40,9 @@ class FakeTts implements TimelineTtsPort {
   callbacks: Array<(event: TimelineTtsEvent) => void> = [];
   stopCalls = 0;
   rejection: Error | null = null;
+  stopRejection: Error | null = null;
   throwOnSpeak = false;
+  throwOnStop = false;
 
   speak(text: string, onEvent: (event: TimelineTtsEvent) => void): void | Promise<void> {
     this.spokenText.push(text);
@@ -49,7 +51,11 @@ class FakeTts implements TimelineTtsPort {
     if (this.rejection) return Promise.reject(this.rejection);
   }
 
-  stop() { this.stopCalls += 1; }
+  stop(): void | Promise<void> {
+    this.stopCalls += 1;
+    if (this.throwOnStop) throw new Error("synchronous stop failure");
+    if (this.stopRejection) return Promise.reject(this.stopRejection);
+  }
 
   emit(index: number, type: string, errorMessage?: string) {
     this.callbacks[index]?.({ type, errorMessage });
@@ -222,4 +228,20 @@ test("mode changes re-evaluate pending work and Smart interrupts during tab acti
   f.narrator.setVoiceNarrationMode("smart");
   assert.equal(f.tts.stopCalls, 1);
   assert.deepEqual(f.activeChanges, [true, false]);
+});
+
+test("contains synchronous and rejected Chrome stop failures", async () => {
+  const sync = fixture({ mode: "over_audio" });
+  sync.narrator.offer(event("sync-stop"));
+  sync.tts.throwOnStop = true;
+  sync.narrator.interruptForQuestion();
+  assert.deepEqual(sync.errors, ["Chrome could not stop timeline narration."]);
+
+  const rejected = fixture({ mode: "over_audio" });
+  rejected.narrator.offer(event("rejected-stop"));
+  rejected.tts.stopRejection = new Error("stop rejected");
+  rejected.narrator.interruptForQuestion();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(rejected.errors, ["stop rejected"]);
 });

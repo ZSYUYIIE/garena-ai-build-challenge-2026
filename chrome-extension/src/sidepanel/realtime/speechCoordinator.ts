@@ -32,11 +32,13 @@ type ActiveTurn = {
   turnId: string;
   mode: PlaybackMode;
   userSpeaking: boolean;
+  responseTimeoutMs: number;
   localSpeechTimer: unknown | null;
   responseTimer: unknown | null;
 };
 
 const RESPONSE_TIMEOUT_MS = 15_000;
+const DEEP_RESEARCH_RESPONSE_TIMEOUT_MS = 120_000;
 const MAX_LOCAL_SPEECH_MS = 60_000;
 
 /** Applies the user-answer priority rules around a cancellable model PCM queue. */
@@ -67,18 +69,25 @@ export class SpeechCoordinator {
     this.replaceWithAnswer(turnId, true);
   }
 
-  userEnded(turnId: string): void {
+  userEnded(turnId: string, options: { deepResearch?: boolean } = {}): void {
     if (!this.isActiveAnswer(turnId)) return;
     const active = this.active!;
     active.userSpeaking = false;
+    active.responseTimeoutMs = options.deepResearch
+      ? DEEP_RESEARCH_RESPONSE_TIMEOUT_MS
+      : RESPONSE_TIMEOUT_MS;
     this.syncTabGain();
     this.cancelLocalSpeechTimer(active);
     this.resetResponseTimer(active);
   }
 
-  typedQuestionStarted(turnId: string): void {
+  typedQuestionStarted(turnId: string, options: { deepResearch?: boolean } = {}): void {
     if (this.stopped) return;
-    this.replaceWithAnswer(turnId, false);
+    this.replaceWithAnswer(
+      turnId,
+      false,
+      options.deepResearch ? DEEP_RESEARCH_RESPONSE_TIMEOUT_MS : RESPONSE_TIMEOUT_MS,
+    );
     this.resetResponseTimer(this.active!);
   }
 
@@ -136,6 +145,7 @@ export class SpeechCoordinator {
           turnId: chunk.turnId,
           mode: "narration",
           userSpeaking: false,
+          responseTimeoutMs: RESPONSE_TIMEOUT_MS,
           localSpeechTimer: null,
           responseTimer: null,
         };
@@ -196,12 +206,17 @@ export class SpeechCoordinator {
     this.syncTabGain();
   }
 
-  private replaceWithAnswer(turnId: string, userSpeaking: boolean): void {
+  private replaceWithAnswer(
+    turnId: string,
+    userSpeaking: boolean,
+    responseTimeoutMs = RESPONSE_TIMEOUT_MS,
+  ): void {
     this.clearActive();
     this.active = {
       turnId,
       mode: "answer",
       userSpeaking,
+      responseTimeoutMs,
       localSpeechTimer: null,
       responseTimer: null,
     };
@@ -239,7 +254,7 @@ export class SpeechCoordinator {
       if (this.active === active && !active.userSpeaking) {
         this.failTurn(active.turnId, "Model response timed out.");
       }
-    }, RESPONSE_TIMEOUT_MS);
+    }, active.responseTimeoutMs);
   }
 
   private cancelTimers(active: ActiveTurn | null): void {

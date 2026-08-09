@@ -315,3 +315,33 @@ test("answers own speech from admission through failure or playback idle", () =>
   f.emitPlaybackIdle("answer-2");
   assert.equal(f.coordinator.answerOwnsSpeech(), false);
 });
+
+test("Deep Research retains answer ownership beyond 15 seconds and refreshes from progress", () => {
+  const f = fixture("over_audio");
+  f.coordinator.typedQuestionStarted("research-1", { deepResearch: true });
+  f.clock.advance(16_000);
+  assert.equal(f.coordinator.answerOwnsSpeech(), true);
+  assert.deepEqual(f.failures, []);
+
+  f.clock.advance(100_000);
+  f.coordinator.answerProgress("research-1");
+  f.clock.advance(100_000);
+  assert.equal(f.coordinator.answerOwnsSpeech(), true);
+  assert.deepEqual(f.failures, []);
+  assert.equal(f.coordinator.modelAudio(modelChunk("research-1")), true);
+});
+
+test("Deep Research microphone release uses the bounded long-response watchdog", () => {
+  const f = fixture();
+  f.coordinator.userStarted("research-mic");
+  f.coordinator.userEnded("research-mic", { deepResearch: true });
+  f.clock.advance(16_000);
+  assert.equal(f.coordinator.answerOwnsSpeech(), true);
+  assert.deepEqual(f.failures, []);
+  f.clock.advance(104_000);
+  assert.equal(f.coordinator.answerOwnsSpeech(), false);
+  assert.deepEqual(f.failures, [{
+    turnId: "research-mic",
+    reason: "Model response timed out.",
+  }]);
+});

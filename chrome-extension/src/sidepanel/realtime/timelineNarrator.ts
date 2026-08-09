@@ -207,9 +207,12 @@ export class TimelineNarrator {
     this.token += 1;
     if (active.started) this.options.onActiveChange?.(false);
     try {
-      void this.options.tts.stop();
+      const stopped = this.options.tts.stop();
+      void Promise.resolve(stopped).catch((cause) => {
+        this.options.onError?.(boundedError(cause));
+      });
     } catch {
-      // The stale utterance token already prevents unsafe lifecycle callbacks.
+      this.options.onError?.("Chrome could not stop timeline narration.");
     }
   }
 
