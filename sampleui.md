@@ -1,4 +1,12 @@
-```
+# Early Side-Panel UI Concept (Historical)
+
+This ASCII mockup predates the current StreamSense Live implementation. Names,
+controls, replay actions, narration levels, and layout below are exploratory
+only; they are not supported behavior or an acceptance specification. See
+[`chrome-extension/README.md`](chrome-extension/README.md) for the current
+side-panel contract.
+
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  VISION CO-PILOT                   [ 🔴 LIVE ] [ End Session ]  │
 ├─────────────────────────────────────────────────────────────────┤

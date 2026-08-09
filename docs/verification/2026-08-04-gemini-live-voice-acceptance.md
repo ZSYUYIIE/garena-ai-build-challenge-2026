@@ -18,6 +18,12 @@ text, or signed-in account details.
 | Extension ID | Redacted by design |
 | Provider configuration | Gemini Live credential configured for sanitized connect/close; Cloud Speech project/ADC prerequisite absent; identifiers and credentials redacted |
 
+The metadata and automated evidence table below are a frozen record of the
+identified 2026-08-05 checkout. They are not a passing result for the current
+checkout. The still-pending manual criteria were reconciled on 2026-08-09 with
+the current extension-owned Chrome timeline TTS architecture; no pending case
+was promoted to PASS.
+
 Status vocabulary:
 
 - **PASS**: observed result met every listed criterion.
@@ -68,31 +74,34 @@ transcripts, account names, request payloads, credentials, or local ADC paths.
 
 | # | Scenario and pass criteria | Status | Timestamp | Sanitized observed evidence |
 | --- | --- | --- | --- | --- |
-| 1 | **Silent slide/UI change.** One grounded Gemini narration describes one meaningful change; captured-tab gain remains 100 percent throughout. | PENDING | Pending | Real Chrome/provider run required. |
-| 2 | **Continuously narrated sports.** While local tab detection or Cloud STT reports tab speech, Gemini emits no automatic narration. | PENDING | Pending | Real Chrome/provider run required. |
-| 3 | **User voice question during sports.** Tab playback fades to 30 percent; Live uses the current screen and recent labeled tab transcript when relevant; gain returns to 100 percent only after the local Gemini PCM queue is idle. | PENDING | Pending | Real Chrome/provider run required. |
+| 1 | **Silent slide/UI change.** One grounded event is recorded and inserted into the timeline before Chrome/OS TTS reads its exact description; Smart narration leaves captured-tab gain at 100 percent. | PENDING | Pending | Real Chrome/provider and Chrome/OS TTS run required. |
+| 2 | **Continuously narrated sports and mode behavior.** Smart narration waits for 750 milliseconds of continuous silence from local tab activity; Narrate over audio can speak immediately and holds local tab gain at 40 percent only from the Chrome TTS `start` event to a terminal event; Narration only keeps local playback muted without stopping captured-tab PCM. | PENDING | Pending | Real Chrome/provider run required in all three modes. |
+| 3 | **User voice question during sports.** Any active Chrome timeline utterance and pending event are cleared before question admission; tab playback fades to 0 percent while the user speaks and 30 percent while Live answers; Live uses the current screen and recent labeled tab transcript when relevant; gain returns to the mode baseline only after the local Gemini PCM queue is idle. | PENDING | Pending | Real Chrome/provider run required. |
 | 4 | **User interruption.** New independent user speech stops the old Gemini audio immediately; stale chunks from the displaced turn never resume. | PENDING | Pending | Real Chrome/provider run required. |
 | 5 | **Captured-tab dialogue isolation.** Tab speech may update media context but never creates a user chat entry or Gemini Live user-activity turn. | PENDING | Pending | Real Chrome/provider run required. |
 | 6 | **Microphone denial.** Denying the first permission prompt reports voice degraded, preserves tab capture, and leaves typed questions available. | PENDING | Pending | Real Chrome/provider run required. |
-| 7 | **No tab-audio track.** Q&A and visual frames continue; meaningful visual narration remains eligible while the no-audio tab is otherwise silent. | PENDING | Pending | Real Chrome/provider run required. |
-| 8 | **Forced STT failure.** An audio-bearing tab shows speech context degraded and disables automatic narration without disabling user Q&A. | PENDING | Pending | Real Chrome/provider run required. |
+| 7 | **No tab-audio track.** Q&A and visual frames continue; a recorded timeline event remains eligible for Chrome TTS, with Smart relying only on local tab activity. | PENDING | Pending | Real Chrome/provider and Chrome/OS TTS run required. |
+| 8 | **Forced STT failure.** An audio-bearing tab shows speech context degraded without disabling Chrome timeline TTS or user Q&A. Smart continues to use local tab activity, while the other Voice narration modes do not wait for silence. | PENDING | Pending | Real Chrome/provider run required. |
 | 9 | **Live reconnect.** Observe a real `GoAway`, or explicitly record a test-only forced reconnect; resume with current context and no microphone PCM replay. The deterministic resumption unit test remains the release gate. | PENDING | Pending | Real Chrome/provider run or documented test-only trigger required. |
 | 10 | **STT rotation.** At least six minutes of tab speech crosses the pre-five-minute stream rotation with no duplicated final segment. | PENDING | Pending | Real Cloud STT run required. Do not record transcript text. |
-| 11 | **Lifecycle cleanup.** Verify Stop, captured-tab switch/end, and side-panel close separately; capture, mic, Gemini playback, Live, STT, timers, and transcript memory all stop or clear. | PENDING | Pending | Real Chrome/provider run required for all three paths. |
+| 11 | **Lifecycle cleanup.** Verify Stop, captured-tab switch/end, and side-panel close separately; capture, mic, Chrome timeline TTS, Gemini playback, Live, STT, timers, and transcript memory all stop or clear. | PENDING | Pending | Real Chrome/provider run required for all three paths. |
 | 12 | **Acoustic isolation and barge-in.** With speakers, tab/Gemini playback alone does not open a user turn when AEC and the echo-aware gate are healthy; independent speech still interrupts. Repeat with headphones as the reliable baseline and record any residual speaker-mode limitation. | PENDING | Pending | Real speaker and headphone runs required. |
 
 ## Permission decision record
 
-No manifest permission change is justified by automated tests. The existing
-manifest remains unchanged while the real supported-Chrome microphone prompt is
-unobserved. If the side panel cannot present the prompt, first record the Chrome
-version, exact sanitized error, reproduction steps, and permission state here.
-Only that evidence may justify a narrowly scoped manifest or permission-page
-change. Do not add `audioCapture`, `offscreen`, broad host permissions, or a
-remote-code CSP allowance speculatively.
+The original 2026-08-05 snapshot did not justify a microphone-related manifest
+change. The current architecture subsequently added the consumer permission
+`tts` so the extension can use installed Chrome/OS voices for recorded timeline
+events; StreamSense does not provide a speech engine and must not request
+`ttsEngine`. Physical Chrome/OS TTS acceptance remains pending. If the side
+panel cannot present the microphone prompt, first record the Chrome version,
+exact sanitized error, reproduction steps, and permission state here. Do not
+add `audioCapture`, `offscreen`, broad host permissions, or a remote-code CSP
+allowance speculatively.
 
 ## Release disposition
 
-- Automated gates: **PASS**
+- Recorded automated gates for the identified 2026-08-05 snapshot: **PASS**
+- Current-checkout automated gates in this record: **NOT RUN**
 - Manual matrix: **PENDING (12/12)**
 - Release acceptance: **PENDING real Chrome/provider evidence**

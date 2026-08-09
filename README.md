@@ -27,6 +27,7 @@ Authorized browser tab
   -> backend --> Gemini visual and Live models
   -> backend --> Cloud Speech-to-Text V2 for tab commentary
   -> backend --> SQLite evidence + in-memory history projection
+  -> backend -- best-effort semantic event copies --> MongoDB
   -> backend -- recorded protocol-v2 event --> side-panel timeline
   -> side panel -- exact event description --> Chrome / OS TTS
 
@@ -45,7 +46,7 @@ context and is never presented as the user's speech.
 | `chrome-extension/` | Manifest V3 extension, side-panel UI, tab capture, push-to-talk, Chrome timeline TTS, and Gemini answer playback. |
 | `ai-voice-realtime/` | Express and WebSocket backend, Gemini Interactions/Live clients, Cloud Speech-to-Text, and event storage. |
 | `session-dashboard/` | Accessible React dashboard for previous sessions, timeline search, and context exploration. |
-| `docs/` | Design notes and verification material. |
+| `docs/` | Current architecture/API guides, integration handoffs, historical design records, and verification material. |
 
 The repository root is an npm workspace and the supported starting point for
 installing, developing, building, demonstrating, and checking all three
@@ -53,8 +54,10 @@ packages.
 
 ## Architecture and contributor guidance
 
-[`docs/architecture.md`](docs/architecture.md) is the current cross-package
-architecture and product-direction reference. [`AGENTS.md`](AGENTS.md) defines
+[`docs/README.md`](docs/README.md) is the documentation index and authority
+map. [`docs/architecture.md`](docs/architecture.md) is the current
+cross-package architecture and product-direction reference.
+[`AGENTS.md`](AGENTS.md) defines
 the product boundaries, safety rules, Git workflow, and verification contract
 that AI coding agents and human reviewers should enforce. Tool-specific entry
 points—[`CLAUDE.md`](CLAUDE.md), [`GEMINI.md`](GEMINI.md), and
@@ -74,7 +77,10 @@ work—not as implemented features—in the architecture document.
 
 - macOS, Linux, or Windows with Google Chrome.
 - Node.js `20.19+` or `22.12+` and npm.
-- A Gemini API key with access to the configured vision and Live models.
+- A Gemini API key with access to the configured Interactions and Live models;
+  the backend also uses it for semantic embeddings when MongoDB context storage
+  is configured.
+- An Exa API key only when using the optional Deep Research answer mode.
 - A Google Cloud project with billing configured for Speech-to-Text V2.
 - The [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`).
 - A MongoDB Atlas cluster for dashboard profiles and semantic event retrieval.
@@ -255,6 +261,11 @@ values such as `true`, an extension name, or a placeholder will be rejected.
 Keep the Gemini API key in the backend only—never add it to extension code or a
 `VITE_` variable.
 
+`GEMINI_VISION_MODEL` names the non-live Interactions model. The backend uses
+that same model for atomic visual analysis and for Deep Research query
+rewriting, answer synthesis, and microphone-question transcription. Automatic
+timeline speech still uses Chrome/OS TTS, not this model.
+
 For isolated local debugging, `STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=true`
 temporarily relaxes the extension-origin check. Do not use that setting for a
 shared or production backend.
@@ -270,12 +281,18 @@ For a least-privilege teammate setup, use the
 [Atlas handoff guide](docs/mongodb-atlas-handoff.md); StreamSense has no
 separate MongoDB key, and teammates must create their own database user and URI.
 
-For offline development only, start the included loopback service with
+For offline development only, start the root-level loopback service with
 `docker compose up -d mongodb` and use
 `MONGODB_URI=mongodb://localhost:27017`. Its `streamsense-mongodb` Docker volume
-keeps prototype account records across container restarts. If `MONGODB_URI` is
-omitted or unavailable, the rest of StreamSense still starts, but account
-endpoints return `503` instead of falling back to browser-only profile storage.
+keeps prototype account records and semantic event copies across container
+restarts; it does not make the in-memory Memory projection durable. If
+`MONGODB_URI` is
+omitted, the rest of StreamSense starts and account endpoints return `503`
+instead of falling back to browser-only profile storage. If a configured URI
+cannot be reached during the initial account-repository connection, backend
+startup fails so an operator does not unknowingly run with a broken configured
+database. Later semantic event-copy failures remain best-effort and do not
+block the recorded realtime timeline.
 
 ## 5. Start StreamSense
 

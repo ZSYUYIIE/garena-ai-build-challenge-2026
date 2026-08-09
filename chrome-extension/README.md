@@ -26,6 +26,11 @@ the side panel can consume installed Chrome/OS voices; it does not request
 timeline narration prefers Alex, then Samantha, then another compatible English
 voice, and supplies `en-US`, rate `0.9`, and pitch `0.9`.
 
+The complete runtime permission set is `activeTab`, `sidePanel`, `storage`,
+`tabCapture`, and `tts`. Host permissions and extension-page connections are
+limited to the loopback backend on port `8000`; there is no content script or
+broad page-injection permission.
+
 On an ordinary HTTP or HTTPS page, click the StreamSense toolbar icon to
 authorize that exact tab and open the side panel. Chrome internal pages and the
 Chrome Web Store cannot be captured. Use the side-panel switch to start or stop
@@ -44,8 +49,13 @@ Run integrated commands from the repository root:
 | `npm run demo` | Builds both frontends and starts one demo-history backend on `8000`. |
 
 The extension always connects to `ws://127.0.0.1:8000/ws` unless a validated
-build-time WebSocket URL overrides it. In the full `dev` profile, the Memory
-Dashboard action uses `http://127.0.0.1:5174/dashboard/` as its validated root.
+build-time `VITE_STREAMSENSE_WS_URL` overrides it. The URL must use `ws` or
+`wss`, end at `/ws`, and contain no credentials, query, or fragment; a remote
+value still requires an intentional manifest host/CSP security change. In the
+full `dev` profile, the Memory Dashboard action uses
+`http://127.0.0.1:5174/dashboard/` as its validated root.
+That optional build-time value is `VITE_STREAMSENSE_DASHBOARD_URL`; it accepts
+only loopback HTTP(S) URLs whose path is exactly `/dashboard/`.
 In `dev:realtime`, it falls back to `http://127.0.0.1:8000/dashboard/`, which
 requires a previously built `session-dashboard/dist`. The built `demo` serves
 that route directly from its single backend.
@@ -155,8 +165,10 @@ Each completed researched answer also exposes a manual **Debug: Play with
 Gemini Live** control. Pressing it reads the session-cached concise answer over
 the existing Live connection, suppresses the duplicate transcript, and does
 not rerun or persist the research.
-Deep Research requires `EXA_API_KEY` on the backend and stores no search state
-in the extension or database.
+Deep Research requires `EXA_API_KEY` on the backend and does not persist search
+state. The side panel and backend retain only bounded in-memory
+turn/progress data for the browser session; research queries, sources, and
+answers never enter MongoDB or the dashboard history repository.
 
 ## Checks and acceptance caveat
 

@@ -58,14 +58,24 @@ administrator to allow the Atlas endpoints; do not broaden the Atlas rule to
 credentials.
 
 The dashboard-only profile needs only the MongoDB variables for account
-persistence. Running the live Chrome extension, Gemini narration, or Cloud
-Speech-to-Text requires separately provisioned credentials and the extension
-origin configuration described in the root README.
+persistence. Running the live Chrome extension requires the extension-origin
+configuration described in the root README; Gemini analysis/answers, semantic
+embeddings, and Cloud Speech-to-Text require their separately provisioned
+credentials. Chrome timeline narration consumes installed Chrome/OS voices and
+does not require a provider credential.
 
 ## Data boundary
 
-MongoDB currently stores prototype dashboard profiles only: account UUID,
-display name, normalized email, entertainment preference, narration-detail
-preference, and timestamps. It does not store passwords, Gemini credentials,
-raw media, or the in-memory session/event history. The collection has unique
-indexes for account ID and normalized email.
+MongoDB stores two separate prototype boundaries:
+
+- `dashboard_accounts` contains account UUID, display name, normalized email,
+  entertainment preference, narration-detail preference, and timestamps. It
+  has unique indexes for account ID and normalized email.
+- `events` contains best-effort accepted-event copies plus 768-dimensional
+  embeddings for current-session Live prompt retrieval. It is not canonical
+  dashboard history, does not make Memory durable, and is not used by the
+  dashboard search adapter.
+
+MongoDB does not store passwords, Gemini credentials, raw media, or captured-tab
+transcripts. The in-memory dashboard session/event projection still disappears
+when the backend restarts.

@@ -28,7 +28,7 @@ flowchart LR
     Extension -->|"Open Memory Dashboard"| Dashboard["React Memory dashboard"]
     Dashboard -->|"bounded REST /api"| Backend
     Dashboard -->|"account REST"| Backend
-    Backend --> Mongo[("MongoDB Atlas dashboard_accounts")]
+    Backend --> Mongo[("MongoDB Atlas\ndashboard_accounts + events")]
 ```
 
 The toolbar action always opens the side panel. The dashboard handoff is an
@@ -86,10 +86,10 @@ Interaction produces the final cited answer, then the persistent Gemini Live
 connection immediately speaks the concise answer body without its inline
 citations or linked sources. The backend appends the readable source list
 deterministically and streams strict progress events to the side panel
-throughout. The Live connection remains open and resumes when
-Normal is selected, preserving the Live context from before the research turn.
-The search query, plan, sources, and answer remain
-session-only and do not enter dashboard history or MongoDB.
+throughout. The Live connection remains open and resumes when Normal is
+selected, preserving the Live context from before the research turn. The search
+query, plan, sources, and answer remain session-only and do not enter dashboard
+history or MongoDB.
 Completed research turns retain only a bounded summary cache for the manual
 debug replay button. That explicit action creates a separate Live audio turn,
 suppresses its output transcript, and clears with the browser session.
@@ -129,23 +129,23 @@ reserves the five canonical entertainment lanes and uses semantic 3D. Empty
 lanes remain labeled scaffolding without API records; real unclassified history
 adds a sixth Other entertainment lane. Explicit filters and session-scoped
 single-lane maps default to the truthful progress × importance 2D projection.
-Camera buttons name the comparisons they show rather
-than raw axes, and there is no automatic animation. Selection reveals supplied
+Camera buttons name the comparisons they show rather than raw axes, and there
+is no automatic animation. Selection reveals supplied
 first-hop relationships, and the client never fabricates one. Each entertainment
 lane has a faint progress-by-importance grid; root labels remain visible while
-individual node labels are focus-disclosed and collision bounded. The node selector and
-details appear below the full-width canvas, and full DOM relationship lists
-remain the keyboard and screen-reader equivalent.
+individual node labels are focus-disclosed and collision bounded. The node
+selector and details appear below the full-width canvas, and full DOM
+relationship lists remain the keyboard and screen-reader equivalent.
 
 ## Persistence and ownership
 
 | Data | Current store | Lifetime and ownership |
 | --- | --- | --- |
 | Realtime accepted events | SQLite event store | Backend-local event evidence. |
-| Semantic event copies | MongoDB `events` vector index | Best-effort, session-scoped context for Live typed prompts; not canonical dashboard history. |
+| Semantic event copies | MongoDB `events` collection with vector index | Best-effort, session-scoped context for Live typed prompts; not canonical dashboard history. |
 | Dashboard session/history projection | In-memory repository | Lost on backend restart; demo mode is deterministic. |
 | Dashboard profile | MongoDB Atlas `dashboard_accounts` | Primary cloud persistence for account UUID, display name, normalized email, preferences, and timestamps; local Docker is an optional offline substitute. |
-| Browser profile state | Local storage | Opaque account UUID only. |
+| Browser account-profile state | Local storage | Opaque account UUID only. |
 | Raw mic/tab audio | Not stored | Streamed for processing and discarded. |
 | Captured-tab transcript context | Bounded memory | Cleared with the live session. |
 | Deep Research query, sources, answer, and voice summary | Bounded request/session memory | Search and composition use non-live requests; the summary is spoken by Live and discarded with the session. Never archived or stored in MongoDB. |
@@ -155,6 +155,14 @@ out forgets the local UUID but does not delete the Atlas record. The Atlas
 database user and SRV credential belong only to the backend environment; they
 are never browser credentials. Production identity, recovery, account deletion,
 and per-user session authorization are future work.
+
+When `MONGODB_URI` is absent, the backend deliberately uses an unavailable
+account repository and account endpoints return `503`; realtime and history
+routes remain available. When a configured URI cannot be reached during the
+initial account-repository connection, backend startup fails. Semantic event
+copies are scheduled asynchronously and remain non-canonical; event publication
+still requires the SQLite write to succeed. A later embedding or MongoDB write
+failure does not retract a recorded realtime event or block its publication.
 
 ## Accessibility and visual design
 
@@ -199,15 +207,17 @@ npm.cmd run dev
 ```
 
 Configure `MONGODB_URI` with an ignored MongoDB Atlas SRV connection string for
-the primary dashboard-profile path. For offline work only, start the optional
-local substitute with `docker compose up -d mongodb` and use the documented
-loopback URI.
+the dashboard profile and realtime semantic-context prototypes. For offline
+work only, start the optional local substitute with
+`docker compose up -d mongodb` and use the documented loopback URI.
 
 Use `npm.cmd run dev:dashboard` for deterministic Memory development without
 the extension. Use `npm.cmd run check` as the full pre-commit gate.
 
 More detail:
 
+- `docs/README.md` — documentation authority, current guides, and historical
+  records.
 - `chrome-extension/README.md` — Live UI, capture, audio, and handoff.
 - `ai-voice-realtime/README.md` — backend providers, policies, and APIs.
 - `session-dashboard/README.md` — Memory routes, graph, accounts, and access.

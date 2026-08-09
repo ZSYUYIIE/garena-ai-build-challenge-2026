@@ -1,7 +1,7 @@
 # StreamSense Realtime Voice Backend
 
 This is the shared local backend for both StreamSense surfaces: the Live Chrome
-side panel uses `/ws`, and the History dashboard uses `/api` plus the optional
+side panel uses `/ws`, and the Memory dashboard uses `/api` plus the optional
 built `/dashboard/` route. For realtime sessions it connects to Gemini
 Interactions for grounded screen-change analysis, Gemini Live for questions
 and native voice replies, and Google Cloud Speech-to-Text V2 for captured-tab
@@ -28,8 +28,10 @@ not as user speech.
 
 ## Prerequisites
 
-- A current Node.js release with npm.
-- A Gemini API key for Gemini Interactions and Gemini Live.
+- Node.js `20.19+` or `22.12+` with npm (the workspace frontend build uses
+  Vite 8 even when you are primarily changing the backend).
+- A Gemini API key for Gemini Interactions, Gemini Live, and optional semantic
+  embeddings when MongoDB context storage is configured.
 - An Exa API key to enable the optional Deep Research mode.
 - A Google Cloud project with Speech-to-Text V2 enabled and Application
   Default Credentials (ADC) available to the backend process.
@@ -49,16 +51,17 @@ Configure `.env` without committing the populated file:
 
 | Setting | Purpose |
 | --- | --- |
-| `GOOGLE_API_KEY` | Backend-only Gemini credential used for vision analysis and Live voice. |
-| `GEMINI_VISION_MODEL` | Gemini Interactions model used for atomic screen-change analysis. |
+| `GOOGLE_API_KEY` | Backend-only Gemini credential used for Interactions, Live voice, and semantic embeddings. |
+| `GEMINI_VISION_MODEL` | Gemini Interactions model used for atomic screen-change analysis and Deep Research query rewriting, answer synthesis, and microphone transcription. |
 | `GEMINI_LIVE_MODEL` | Gemini Live model used for questions, native answers, and the existing Deep Research voice path; not automatic timeline narration. |
 | `EXA_API_KEY` | Backend-only Exa credential used by session-only Deep Research; Normal mode does not require it. |
 | `GOOGLE_CLOUD_PROJECT` | Google Cloud project that owns the Speech-to-Text V2 request. |
 | `GOOGLE_CLOUD_SPEECH_LOCATION` | Speech-to-Text recognizer location; defaults to `us`. |
 | `STREAMSENSE_EXTENSION_ID` | Exact 32-character Chrome extension ID allowed to open the production WebSocket. |
 | `STREAMSENSE_HISTORY_MODE` | Dashboard history mode: `memory` (default, empty at startup) or development-only `demo`. |
-| `MONGODB_URI` | MongoDB Atlas Drivers connection string for dashboard profiles; keep the populated URI only in `.env` or a secret manager. |
-| `MONGODB_DB_NAME` | Database containing the `dashboard_accounts` profile collection; defaults to `streamsense`. |
+| `MONGODB_URI` | MongoDB Atlas Drivers connection string for dashboard profiles and best-effort semantic event copies; keep the populated URI only in `.env` or a secret manager. |
+| `MONGODB_DB_NAME` | Database containing `dashboard_accounts` and the prototype `events` vector collection; defaults to `streamsense`. |
+| `EVENT_DB_PATH` | Optional SQLite event-evidence path; defaults to `ai-voice-realtime/data/streamsense.db`. |
 | `HOST` / `PORT` | Local backend bind address and port; defaults to `127.0.0.1:8000`. |
 
 For local operator authentication, configure ADC outside the repository (for
@@ -119,9 +122,11 @@ Profiles are stored in `dashboard_accounts` with unique account ID and
 normalized-email indexes. Atlas is the primary persistence path; the local
 container is an optional offline substitute using the same repository
 contract. The backend exposes create/read/update operations at `/api/accounts`;
-it never stores passwords or provider credentials. Without a MongoDB URI, or
-when Atlas cannot be reached, those endpoints return `503` while history and
-realtime routes remain available.
+it never stores passwords or provider credentials. Without a MongoDB URI,
+those endpoints return `503` while history and realtime routes remain
+available. If a configured URI cannot be reached while the account repository
+connects, backend startup fails; correct the URI/network access or remove the
+configuration before retrying.
 
 For an intentionally backend-only stable run:
 
@@ -137,6 +142,12 @@ npm run dev --workspace ai-voice-realtime
 
 The backend listens on `http://127.0.0.1:8000` by default. Keep this terminal
 running while using the extension.
+
+`ai-voice-realtime/static/` is a legacy diagnostic page served at `/`. It does
+not send the required protocol-v2 handshake, does not satisfy the active
+Chrome-extension-origin policy, and is not a supported StreamSense client. Use
+the Chrome side panel for Live behavior and `/dashboard/` for Memory; do not use
+the legacy page for end-to-end acceptance or as a protocol example.
 
 ### Normal and Deep Research answers
 
@@ -270,7 +281,7 @@ Then:
    side panel's Smart narration, Narrate over audio, and Narration only modes.
 5. Disable the switch to stop. The captured-tab badge returns from `ON` to
    `OFF` after Chrome reports capture has ended.
-6. Select **View History** to open the dashboard. The full `npm run dev`
+6. Select **Open Memory Dashboard** to open the dashboard. The full `npm run dev`
    profile targets port `5174`; the built demo uses the backend route on port
    `8000`.
 

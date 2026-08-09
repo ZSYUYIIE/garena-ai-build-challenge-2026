@@ -1,7 +1,7 @@
 # Semantic History Integration Handoff
 
 This document defines the narrow integration boundary inside the StreamSense
-product: the Live extension and History dashboard share one backend, while the
+product: the Live extension and Memory dashboard share one backend, while the
 durable retrieval adapter remains replaceable behind that backend. The current
 implementation owns the REST/UI contract, deterministic demo adapter,
 in-memory history repository, and context-graph read model. The durable

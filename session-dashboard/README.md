@@ -57,8 +57,11 @@ startup. Restarting the process resets the same deterministic sessions.
 Normal backend startup (`npm start`, or `STREAMSENSE_HISTORY_MODE=memory`) uses
 an empty in-memory history repository. Realtime sessions may populate it, but
 both memory and demo history disappear when the backend restarts. Durable
-session/event storage, vector embeddings/search, Redis current context, and
-retrieval ranking remain separate integration work. Dashboard profiles use a
+dashboard session/event storage, dashboard semantic search, Redis current
+context, and production retrieval ranking remain separate integration work.
+When MongoDB is configured, the realtime backend does make best-effort semantic
+event copies for current-session Live prompt retrieval; those copies are not
+the dashboard history repository or search adapter. Dashboard profiles use a
 separate MongoDB collection and survive backend restarts.
 
 ### Export the fixture without starting the server
