@@ -29,6 +29,20 @@ the session. Use **Open Memory Dashboard** in that side panel when you want the
 larger session-history workspace; the toolbar intentionally does not bypass the
 live side panel.
 
+## Microphone permission
+
+Chrome requires microphone permission to be granted from a full extension page,
+not directly from the side panel. If access is denied or the Chrome profile has
+never granted it, the side panel shows **Allow microphone access**. Press that
+button, then press **Allow microphone** on the page that opens to trigger
+Chrome's permission prompt. StreamSense automatically retries the microphone
+after permission is granted.
+
+If Chrome has remembered a previous denial, open
+`chrome://settings/content/microphone`, allow sites to request microphone access,
+remove StreamSense from the blocked list, and try again. On macOS, Chrome must
+also be enabled under **Privacy & Security → Microphone**.
+
 ## Development profiles
 
 Run integrated commands from the repository root:

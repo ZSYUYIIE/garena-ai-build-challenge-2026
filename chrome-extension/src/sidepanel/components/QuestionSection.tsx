@@ -59,7 +59,7 @@ export function QuestionSection({
   const [draft, setDraft] = useState("");
   const questionCopy = questionCopyFor(questionAvailability);
   const disabled = questionAvailability !== "ready";
-  const voiceRetryEnabled = questionAvailability === "ready" && canEnableVoice;
+  const voiceRetryEnabled = canEnableVoice;
   const voiceKeyHeldRef = useRef(false);
   const researchRunning = researchProgress.some((item) => item.status === "active");
 
@@ -140,6 +140,8 @@ export function QuestionSection({
         microphoneState={microphoneState}
         questionAvailability={questionAvailability}
         tabContextStatus={tabContextStatus}
+        canEnableVoice={canEnableVoice}
+        onEnableVoice={onEnableVoice}
       />
 
       <ChatHistory
@@ -195,7 +197,9 @@ function VoiceStatusLine({
   microphoneState,
   questionAvailability,
   tabContextStatus,
-}: Pick<QuestionSectionProps, "voiceStatus" | "microphoneState" | "questionAvailability" | "tabContextStatus">) {
+  canEnableVoice,
+  onEnableVoice,
+}: Pick<QuestionSectionProps, "voiceStatus" | "microphoneState" | "questionAvailability" | "tabContextStatus" | "canEnableVoice" | "onEnableVoice">) {
   const voiceText = voiceQuestionStatusFor(
     voiceStatus ?? "off",
     questionAvailability,
@@ -205,8 +209,21 @@ function VoiceStatusLine({
     ? "Tab speech context unavailable — automatic narration paused"
     : null;
   return (
-    <div aria-live="polite" className="min-h-5 text-xs text-muted-foreground">
-      {voiceText ? <p>{voiceText}</p> : null}
+    <div className="min-h-5 text-xs text-muted-foreground">
+      <div aria-live="polite">
+        {voiceText ? <p>{voiceText}</p> : null}
+      </div>
+      {canEnableVoice ? (
+        <button
+          type="button"
+          onClick={onEnableVoice}
+          className="mt-2 inline-flex min-h-9 items-center justify-center rounded-md bg-question px-3 py-2 font-medium text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2"
+        >
+          {microphoneState === "denied"
+            ? "Allow microphone access"
+            : "Retry microphone"}
+        </button>
+      ) : null}
       {tabText ? <p>{tabText}</p> : null}
     </div>
   );
