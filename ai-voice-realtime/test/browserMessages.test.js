@@ -26,7 +26,21 @@ test("accepts each supported extension command", () => {
     parseBrowserMessage(
       '{"type":"session_config","narrationLevel":"question_only"}'
     ),
-    { type: "session_config", narrationLevel: "question_only" }
+    {
+      type: "session_config",
+      narrationLevel: "question_only",
+      researchMode: "normal",
+      voiceNarrationMode: "smart",
+    }
+  );
+  assert.deepEqual(
+    parseBrowserMessage('{"type":"session_config","narrationLevel":"standard","researchMode":"deep_research","voiceNarrationMode":"over_audio"}'),
+    {
+      type: "session_config",
+      narrationLevel: "standard",
+      researchMode: "deep_research",
+      voiceNarrationMode: "over_audio",
+    }
   );
   assert.deepEqual(
     parseBrowserMessage(
@@ -36,6 +50,16 @@ test("accepts each supported extension command", () => {
       type: "typed_question",
       text: "What is visible?",
       turnId: "123e4567-e89b-42d3-a456-426614174000",
+    }
+  );
+  assert.deepEqual(
+    parseBrowserMessage(
+      '{"type":"play_research_voice","sourceTurnId":"123e4567-e89b-42d3-a456-426614174000","turnId":"223e4567-e89b-42d3-a456-426614174000"}'
+    ),
+    {
+      type: "play_research_voice",
+      sourceTurnId: "123e4567-e89b-42d3-a456-426614174000",
+      turnId: "223e4567-e89b-42d3-a456-426614174000",
     }
   );
 });
@@ -108,6 +132,13 @@ test("rejects invalid questions and narration configuration", () => {
     () =>
       parseBrowserMessage(
         '{"type":"session_config","narrationLevel":"automatic"}'
+      ),
+    /invalid browser message/i
+  );
+  assert.throws(
+    () =>
+      parseBrowserMessage(
+        '{"type":"session_config","narrationLevel":"standard","voiceNarrationMode":"always"}'
       ),
     /invalid browser message/i
   );

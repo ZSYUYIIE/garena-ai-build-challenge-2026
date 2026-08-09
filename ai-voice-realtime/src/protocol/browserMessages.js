@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  VOICE_NARRATION_MODES,
+  VoiceNarrationMode,
+} from "./voiceNarrationMode.js";
+
 export const MAX_WEBSOCKET_PAYLOAD_BYTES = 2 * 1024 * 1024;
 export const PROTOCOL_VERSION = 2;
 const base64Pattern =
@@ -15,6 +20,7 @@ export const SERVER_MESSAGE_TYPES = Object.freeze([
   "model_audio",
   "playback_clear",
   "provider_health",
+  "research_progress",
   "status",
   "status_text",
   "telemetry",
@@ -58,6 +64,12 @@ const serverOutputSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({ type: z.literal("error"), text: z.string().optional() }).strict(),
   z.object({ type: z.literal("event"), event: serverEvent.optional() }).strict(),
+  z.object({
+    type: z.literal("research_progress"), turnId,
+    stage: z.enum(["understand", "search", "review", "synthesize"]),
+    status: z.enum(["active", "completed", "failed"]),
+    detail: z.string().max(600).optional(),
+  }).strict(),
   z.object({
     type: z.literal("narration_update"), turnId, mode: z.literal("narration"),
     text: z.string(), finished: z.boolean(), languageCode: z.string().optional(),
@@ -122,12 +134,23 @@ const browserMessageSchema = z.discriminatedUnion("type", [
         "detailed",
         "question_only",
       ]),
+      researchMode: z.enum(["normal", "deep_research"]).default("normal"),
+      voiceNarrationMode: z
+        .enum(VOICE_NARRATION_MODES)
+        .default(VoiceNarrationMode.SMART),
     })
     .strict(),
   z
     .object({
       type: z.literal("typed_question"),
       text: z.string().trim().min(1).max(500),
+      turnId: z.string().uuid(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("play_research_voice"),
+      sourceTurnId: z.string().uuid(),
       turnId: z.string().uuid(),
     })
     .strict(),

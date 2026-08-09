@@ -4,6 +4,11 @@ import { config as loadEnvironment } from "dotenv";
 
 import { UnavailableAccountRepository } from "./src/accounts/accountRepository.js";
 import { MongoAccountRepository } from "./src/accounts/mongoAccountRepository.js";
+import {
+  closeContextDataStore,
+  getContextData,
+  saveContextData,
+} from "./src/context-builder/contextstore.js";
 import { createStreamSenseServer } from "./src/server/createStreamSenseServer.js";
 import {
   createDemoSemanticResults,
@@ -53,6 +58,7 @@ const runtime = createStreamSenseServer({
   apiKey: process.env.GOOGLE_API_KEY || "",
   model: process.env.GEMINI_VISION_MODEL || "gemini-3.6-flash",
   liveModel: process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview",
+  exaApiKey: process.env.EXA_API_KEY || "",
   speechProjectId: process.env.GOOGLE_CLOUD_PROJECT || "",
   speechLocation: process.env.GOOGLE_CLOUD_SPEECH_LOCATION || "us",
   extensionId: process.env.STREAMSENSE_EXTENSION_ID || "",
@@ -60,6 +66,11 @@ const runtime = createStreamSenseServer({
   databasePath:
     process.env.EVENT_DB_PATH ||
     path.join(moduleDirectory, "data", "streamsense.db"),
+  saveContextData: process.env.MONGODB_URI ? saveContextData : undefined,
+  getPromptContext: process.env.MONGODB_URI ? getContextData : undefined,
+  closeContextStore: process.env.MONGODB_URI
+    ? closeContextDataStore
+    : undefined,
   accountRepository,
   historyRepository,
   semanticHistoryService,

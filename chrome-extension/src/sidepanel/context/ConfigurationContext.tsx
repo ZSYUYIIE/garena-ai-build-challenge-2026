@@ -1,4 +1,5 @@
 import {
+  useCallback,
   createContext,
   useContext,
   useState,
@@ -6,6 +7,12 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
+
+import {
+  readVoiceNarrationMode,
+  writeVoiceNarrationMode,
+  type VoiceNarrationMode,
+} from "../voiceNarration";
 
 export enum NarrationMode {
   Minimal = "minimal",
@@ -16,11 +23,13 @@ export enum NarrationMode {
 
 export type ConfigurationOptions = {
   narrationLevel: NarrationMode;
+  voiceNarrationMode: VoiceNarrationMode;
 };
 
 type ConfigurationContextValue = {
   options: ConfigurationOptions;
   setOptions: Dispatch<SetStateAction<ConfigurationOptions>>;
+  setVoiceNarrationMode: (mode: VoiceNarrationMode) => void;
 };
 
 const ConfigurationOptionsContext = createContext<
@@ -32,12 +41,19 @@ export function ConfigurationOptionsProvider({
 }: {
   children: ReactNode;
 }) {
-  const [options, setOptions] = useState<ConfigurationOptions>({
+  const [options, setOptions] = useState<ConfigurationOptions>(() => ({
     narrationLevel: NarrationMode.Standard,
-  });
+    voiceNarrationMode: readVoiceNarrationMode(),
+  }));
+  const setVoiceNarrationMode = useCallback((mode: VoiceNarrationMode) => {
+    setOptions((current) => ({ ...current, voiceNarrationMode: mode }));
+    writeVoiceNarrationMode(mode);
+  }, []);
 
   return (
-    <ConfigurationOptionsContext.Provider value={{ options, setOptions }}>
+    <ConfigurationOptionsContext.Provider
+      value={{ options, setOptions, setVoiceNarrationMode }}
+    >
       {children}
     </ConfigurationOptionsContext.Provider>
   );

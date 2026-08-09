@@ -26,18 +26,22 @@ export function createStreamSenseServer({
   apiKey = "",
   model = "gemini-3.6-flash",
   liveModel = "gemini-3.1-flash-live-preview",
+  exaApiKey = "",
   speechProjectId = "",
   speechLocation = "us",
   extensionId = "",
   allowAnyExtensionOrigin = false,
   databasePath = ":memory:",
-  eventStore = new EventStore({ databasePath }),
+  saveContextData,
+  eventStore = new EventStore({ databasePath, saveContextData }),
   accountRepository = new UnavailableAccountRepository(),
   historyRepository,
   historyService,
   historyArchive,
   onHistoryError = () => {},
   semanticHistoryService,
+  getPromptContext = async () => [],
+  closeContextStore = async () => {},
   sessionFactory,
   sessionOptions = {},
   staticDirectory = path.join(projectDirectory, "static"),
@@ -60,9 +64,11 @@ export function createStreamSenseServer({
         apiKey,
         model,
         liveModel,
+        exaApiKey,
         speechProjectId,
         speechLocation,
         historyArchive: activeHistoryArchive,
+        getPromptContext,
         ...sessionOptions,
       }));
 
@@ -202,6 +208,8 @@ export function createStreamSenseServer({
         await Promise.resolve(activeHistoryService.close?.()).catch(() => {});
       }
       await Promise.resolve(accountRepository.close?.()).catch(() => {});
+      await Promise.resolve(eventStore.drainContext?.()).catch(() => {});
+      await Promise.resolve(closeContextStore()).catch(() => {});
       eventStore.close();
     })();
     return closePromise;

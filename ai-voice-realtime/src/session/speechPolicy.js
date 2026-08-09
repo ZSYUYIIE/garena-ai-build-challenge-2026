@@ -1,3 +1,8 @@
+import {
+  isVoiceNarrationMode,
+  VoiceNarrationMode,
+} from "../protocol/voiceNarrationMode.js";
+
 const TAB_AUDIO_STATES = new Set(["absent", "healthy", "degraded"]);
 const LIVE_STATES = new Set(["connecting", "ready", "degraded", "closed"]);
 const DEFAULT_RECENT_SETTLEMENT_LIMIT = 256;
@@ -66,6 +71,12 @@ function validateCandidate(candidate) {
   if (!Number.isFinite(candidate.importance) || candidate.importance < 0) {
     throw new TypeError("candidate.importance must be a finite nonnegative number");
   }
+  if (
+    candidate.smartEligible !== undefined
+    && typeof candidate.smartEligible !== "boolean"
+  ) {
+    throw new TypeError("candidate.smartEligible must be a boolean when supplied");
+  }
   assertFiniteNonnegative(candidate.createdAtMs, "candidate.createdAtMs");
 }
 
@@ -91,6 +102,8 @@ export class SpeechPolicy {
   #recentSettlementLimit;
   #invalidatedReservationLimit;
   #semanticCooldownLimit;
+  #voiceNarrationMode = VoiceNarrationMode.SMART;
+  #automaticNarrationEnabled = true;
   #lastNowMs = null;
   #tabAudioState = "degraded";
   #localTabSpeech = false;
@@ -143,10 +156,60 @@ export class SpeechPolicy {
 
     this.#tabAudioState = state;
     this.#refreshSilence(nowMs);
-    if (state === "degraded") {
+    if (
+      state === "degraded"
+      && this.#voiceNarrationMode === VoiceNarrationMode.SMART
+    ) {
       return this.#cancelAndDrop("tab_audio_degraded");
     }
     return [];
+  }
+
+  setVoiceNarrationMode(mode) {
+    if (!isVoiceNarrationMode(mode)) {
+      throw new TypeError("invalid voice narration mode");
+    }
+    const nowMs = this.#readNow();
+    if (this.#voiceNarrationMode === mode) return [];
+
+    this.#voiceNarrationMode = mode;
+    this.#refreshSilence(nowMs);
+    if (mode !== VoiceNarrationMode.SMART) return [];
+
+    const actions = [];
+    if (
+      this.#activeTurn?.mode === "narration"
+      && (
+        this.#activeTurn.smartEligible === false
+        || !this.#canNarrate()
+      )
+    ) {
+      actions.push({
+        type: "cancel_narration",
+        turnId: this.#activeTurn.turnId,
+      });
+      this.#activeTurn = null;
+    }
+    if (this.#pendingCandidate?.smartEligible === false) {
+      this.#pendingCandidate = null;
+      actions.push({ type: "drop_narration", reason: "mode_changed" });
+    }
+    this.#invalidateReservation(actions, "mode_changed");
+    return actions;
+  }
+
+  setAutomaticNarrationEnabled(enabled) {
+    if (typeof enabled !== "boolean") {
+      throw new TypeError("automatic narration enabled must be a boolean");
+    }
+    const nowMs = this.#readNow();
+    if (this.#automaticNarrationEnabled === enabled) return [];
+
+    this.#automaticNarrationEnabled = enabled;
+    this.#refreshSilence(nowMs);
+    return enabled
+      ? []
+      : this.#cancelAndDrop("automatic_narration_disabled");
   }
 
   setLocalTabSpeech(active) {
@@ -178,6 +241,7 @@ export class SpeechPolicy {
     this.#pruneCooldowns(nowMs);
     const actions = this.#discardExpired(nowMs);
 
+    if (!this.#automaticNarrationEnabled) return actions;
     if (this.#isExpired(candidate, nowMs) || this.#isCoolingDown(candidate.semanticKey, nowMs)) {
       return actions;
     }
@@ -188,9 +252,14 @@ export class SpeechPolicy {
       return actions;
     }
     if (this.#pendingCandidate.semanticKey === candidate.semanticKey) return actions;
+    const preservesImportance =
+      this.#voiceNarrationMode === VoiceNarrationMode.SMART;
     if (
       candidate.createdAtMs <= this.#pendingCandidate.createdAtMs
-      || candidate.importance < this.#pendingCandidate.importance
+      || (
+        preservesImportance
+        && candidate.importance < this.#pendingCandidate.importance
+      )
     ) {
       return actions;
     }
@@ -234,7 +303,11 @@ export class SpeechPolicy {
         this.#invalidatedReservationIds.delete(reservationId);
         this.#recordSettlement(reservationId, turnId);
         this.#recordCooldown(candidate.semanticKey, nowMs);
-        this.#activeTurn = { mode: "narration", turnId };
+        this.#activeTurn = {
+          mode: "narration",
+          turnId,
+          smartEligible: candidate.smartEligible !== false,
+        };
         return actions;
       }
 
@@ -257,7 +330,7 @@ export class SpeechPolicy {
       }
       return actions;
     }
-    this.#activeTurn = { mode: "narration", turnId };
+    this.#activeTurn = { mode: "narration", turnId, smartEligible: true };
     return actions;
   }
 
@@ -274,7 +347,13 @@ export class SpeechPolicy {
     const actions = this.#discardExpired(nowMs);
     if (actions.length > 0) return actions;
     if (!this.#pendingCandidate || this.#startReservation || this.#activeTurn) return [];
-    if (!this.#canNarrate() || nowMs < this.#silenceDeadlineMs()) return [];
+    if (
+      !this.#canNarrate()
+      || (
+        this.#voiceNarrationMode === VoiceNarrationMode.SMART
+        && nowMs < this.#silenceDeadlineMs()
+      )
+    ) return [];
 
     this.#startReservation = {
       candidate: this.#pendingCandidate,
@@ -298,6 +377,7 @@ export class SpeechPolicy {
     if (expiryMs <= nowMs) return null;
     if (reservation) return expiryMs;
     if (!this.#canNarrate()) return expiryMs;
+    if (this.#voiceNarrationMode !== VoiceNarrationMode.SMART) return nowMs;
     return Math.max(nowMs, Math.min(expiryMs, this.#silenceDeadlineMs()));
   }
 
@@ -315,7 +395,9 @@ export class SpeechPolicy {
     }
 
     this.#refreshSilence(nowMs);
-    if (!active) return [];
+    if (!active || this.#voiceNarrationMode !== VoiceNarrationMode.SMART) {
+      return [];
+    }
 
     const actions = [];
     if (this.#activeTurn?.mode === "narration") {
@@ -438,12 +520,13 @@ export class SpeechPolicy {
   }
 
   #canNarrate() {
-    return (
-      this.#liveState === "ready"
-      && this.#tabAudioState !== "degraded"
+    if (!this.#automaticNarrationEnabled || this.#liveState !== "ready") {
+      return false;
+    }
+    if (this.#voiceNarrationMode !== VoiceNarrationMode.SMART) return true;
+    return this.#tabAudioState !== "degraded"
       && !this.#localTabSpeech
-      && !this.#cloudTabSpeech
-    );
+      && !this.#cloudTabSpeech;
   }
 
   #silenceDeadlineMs() {

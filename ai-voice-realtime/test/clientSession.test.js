@@ -58,6 +58,40 @@ test("routes Live telemetry diagnostics outside provider readiness health", asyn
   });
 });
 
+test("injects session-scoped semantic context into the Live prompt lookup", async (t) => {
+  const matches = [{ description: "A close-range shot was saved." }];
+  const lookups = [];
+  const observations = [];
+  const live = new FakeLiveSession();
+  const fixture = createFixture({
+    getPromptContext: async (sessionId, text, limit) => {
+      lookups.push({ sessionId, text, limit });
+      return matches;
+    },
+    onEmbeddingRetrieved: (payload) => observations.push(payload),
+    liveSessionFactory: () => live,
+  });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+
+  const result = await live.callbacks.getPromptContext({
+    text: "What happened earlier?",
+  });
+
+  assert.deepEqual(result, matches);
+  assert.deepEqual(lookups, [
+    {
+      sessionId: fixture.session.sessionId,
+      text: "What happened earlier?",
+      limit: 5,
+    },
+  ]);
+  assert.deepEqual(observations, [
+    { text: "What happened earlier?", matches },
+  ]);
+});
+
 test("closes malformed and non-object JSON as a client policy violation", async () => {
   for (const raw of ["{", "null", "[]"]) {
     const fixture = createFixture();
@@ -110,19 +144,26 @@ test("routes admitted microphone and captured-tab PCM to their separate provider
   assert.deepEqual(transcriber.microphoneWrites, []);
 });
 
-test("runs atomic narration from an admitted browser video frame without a direct request", async (t) => {
+test("publishes a recorded automatic event without asking Gemini Live to narrate it", async (t) => {
   let analyses = 0;
+  const live = new FakeLiveSession();
   const fixture = createFixture({
     analyzeFrame: async () => {
       analyses += 1;
       return approvedAnalysis();
     },
-    liveSessionFactory: () => new FakeLiveSession(),
+    liveSessionFactory: () => live,
   });
   t.after(() => fixture.eventStore.close());
   await fixture.session.start();
   hello(fixture, "absent");
   await flushAsyncWork();
+  fixture.session.handleBrowserJson({
+    type: "session_config",
+    narrationLevel: "standard",
+    voiceNarrationMode: "over_audio",
+    researchMode: "normal",
+  });
 
   fixture.browser.emit("message", Buffer.from(JSON.stringify({
     type: "video_frame", timestampSeconds: 1, mimeType: "image/jpeg", data: Buffer.from("frame").toString("base64"),
@@ -131,6 +172,7 @@ test("runs atomic narration from an admitted browser video frame without a direc
 
   assert.equal(analyses, 1);
   assert.equal(fixture.browser.messages.some((message) => message.type === "event"), true);
+  assert.deepEqual(live.narrations, []);
 });
 
 test("coalesces sustained admitted frames behind a slow atomic analysis without aborting it", async (t) => {
@@ -172,7 +214,7 @@ test("coalesces sustained admitted frames behind a slow atomic analysis without 
   second.resolve(semanticAnalysis("latest", "The latest frame shows a changed score."));
   await flushAsyncWork();
   assert.equal(fixture.session.lastGroundedDescription, "The latest frame shows a changed score.");
-  assert.deepEqual(speechPolicy.offers.map((offer) => offer.semanticKey), ["latest"]);
+  assert.deepEqual(speechPolicy.offers, []);
 });
 
 test("keeps ready captured-tab narration eligibility through a microphone-only media update", async (t) => {
@@ -473,6 +515,98 @@ test("uses Live once for typed text and preserves attributed transcript chunks",
     type: "answer_update", turnId, mode: "answer", text: "The score changed.", finished: true, languageCode: "en-US",
   });
   assert.equal(fixture.browser.messages.some((message) => message.type === "turn_complete" && message.turnId === turnId && message.retryable === false), true);
+});
+
+test("Deep Research composes outside Live, then automatically speaks the final summary through Live", async (t) => {
+  let now = 0;
+  const live = new FakeLiveSession();
+  const researchCalls = [];
+  const deepResearch = {
+    async answer(question, { onProgress }) {
+      researchCalls.push(question);
+      onProgress({ stage: "understand", status: "completed", detail: "resolved query" });
+      onProgress({ stage: "synthesize", status: "completed", detail: "voice ready" });
+      return {
+        answer: "Final researched answer with citation [1].",
+        summary: "Final researched answer with citation [1].",
+        voiceSummary: "Final researched answer with citation.",
+      };
+    },
+  };
+  const fixture = createFixture({ liveSessionFactory: () => live, deepResearch, now: () => now });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "session_config", narrationLevel: "standard", researchMode: "deep_research",
+  })), false);
+  const deepTurnId = "30303030-3030-4030-8030-303030303030";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "typed_question", turnId: deepTurnId, text: "Research this topic",
+  })), false);
+  await flushAsyncWork();
+  await flushAsyncWork();
+
+  assert.deepEqual(researchCalls, ["Research this topic"]);
+  assert.deepEqual(live.typedQuestions, []);
+  assert.deepEqual(fixture.browser.messages.find((message) => (
+    message.type === "answer_update" && message.turnId === deepTurnId
+  )), {
+    type: "answer_update", turnId: deepTurnId, mode: "answer",
+    text: "Final researched answer with citation [1].", finished: true,
+  });
+  assert.deepEqual(live.researchVoices, [{
+    turnId: deepTurnId,
+    text: "Final researched answer with citation.",
+  }]);
+  live.callbacks.onInputTranscript({ turnId: deepTurnId, text: "APP_RESEARCH_VOICE", finished: true });
+  live.callbacks.onOutputTranscript({ turnId: deepTurnId, text: "duplicate transcript", finished: true });
+  live.callbacks.onAudio({ turnId: deepTurnId, data: "AQI=", mimeType: "audio/pcm;rate=24000" });
+  live.callbacks.onTurnComplete({ turnId: deepTurnId });
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "user_transcript" && message.turnId === deepTurnId
+    && message.text === "APP_RESEARCH_VOICE"
+  )), false);
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "answer_update" && message.turnId === deepTurnId
+    && message.text === "duplicate transcript"
+  )), false);
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "model_audio" && message.turnId === deepTurnId
+    && message.mimeType === "audio/pcm;rate=24000"
+  )), true);
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "turn_complete" && message.turnId === deepTurnId && message.retryable === false
+  )), true);
+
+  const replayTurnId = "35353535-3535-4535-8535-353535353535";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "play_research_voice", sourceTurnId: deepTurnId, turnId: replayTurnId,
+  })), false);
+  assert.deepEqual(live.researchVoices.at(-1), {
+    turnId: replayTurnId,
+    text: "Final researched answer with citation.",
+  });
+  live.callbacks.onOutputTranscript({ turnId: replayTurnId, text: "duplicate transcript", finished: true });
+  live.callbacks.onAudio({ turnId: replayTurnId, data: "AQI=", mimeType: "audio/pcm;rate=24000" });
+  live.callbacks.onTurnComplete({ turnId: replayTurnId });
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "answer_update" && message.turnId === replayTurnId
+  )), false);
+  assert.equal(fixture.browser.messages.some((message) => (
+    message.type === "model_audio" && message.turnId === replayTurnId
+  )), true);
+
+  now = 3_000;
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "session_config", narrationLevel: "standard", researchMode: "normal",
+  })), false);
+  const normalTurnId = "40404040-4040-4040-8040-404040404040";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "typed_question", turnId: normalTurnId, text: "Continue normally",
+  })), false);
+  assert.deepEqual(live.typedQuestions, [{ turnId: normalTurnId, text: "Continue normally" }]);
 });
 
 test("rejects an answer immediately after Live GoAway without leaving an active turn or replaying it", async (t) => {
@@ -1605,12 +1739,12 @@ test("uses a session-relative acceptance clock instead of an extension frame tim
 
   assert.equal(receivedInput.recentTabTranscript.length, 2_000);
   assert.equal(receivedInput.recentTabTranscript.includes("Commentary:"), true);
-  assert.deepEqual(speechPolicy.offers, [{
-    description: "The scoreboard now shows Team A leading 2-1.",
+  assert.deepEqual(speechPolicy.offers, []);
+  assert.deepEqual(fixture.session.groundedSemanticState, {
     semanticKey: "score:team_a:2-1",
-    importance: 0.9,
-    createdAtMs: 4_125,
-  }]);
+    originAcceptedAtMs: 4_125,
+    observedFrameSequence: 1,
+  });
   const [event] = fixture.eventStore.listBySession(fixture.session.sessionId);
   assert.equal(event.timestampSeconds, 12_345.678);
   assert.equal(
@@ -1638,7 +1772,7 @@ test("advances visual state for a valid suppressed analysis without queueing spe
   fixture.session.close();
 });
 
-test("offers only fresh uncovered important semantic narration candidates", async (t) => {
+test("records grounded events without offering automatic backend speech candidates", async (t) => {
   const speechPolicy = new FakeSpeechPolicy();
   const analyses = [
     approvedAnalysis({ shouldNarrate: false, description: "", semanticKey: null, event: null }),
@@ -1665,12 +1799,140 @@ test("offers only fresh uncovered important semantic narration candidates", asyn
     await flushAsyncWork();
   }
 
-  assert.equal(speechPolicy.offers.length, 1);
-  assert.equal(speechPolicy.offers[0].semanticKey, "score:team_a:2-1");
+  assert.deepEqual(speechPolicy.offers, []);
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 4);
+  assert.equal(
+    fixture.browser.messages.filter((message) => message.type === "event").length,
+    4,
+  );
   fixture.session.close();
 });
 
-test("does not refresh a repeated sports candidate TTL during commentary", async (t) => {
+test("session configuration applies voice narration mode and polls the policy", (t) => {
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({ speechPolicy });
+  t.after(() => fixture.eventStore.close());
+
+  fixture.session.handleBrowserJson({
+    type: "session_config",
+    narrationLevel: "standard",
+    researchMode: "normal",
+    voiceNarrationMode: "over_audio",
+  });
+
+  assert.deepEqual(speechPolicy.voiceModes, ["over_audio"]);
+  assert.deepEqual(speechPolicy.automaticNarrationStates, [true]);
+  assert.deepEqual(speechPolicy.transitions, [
+    "automatic:true",
+    "mode:over_audio",
+    "poll",
+  ]);
+  assert.equal(speechPolicy.pollCalls, 1);
+});
+
+test("always-narrate mode still publishes the exact recorded timeline event", async (t) => {
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({
+    speechPolicy,
+    async analyzeFrame() {
+      return visualEventAnalysis({
+        eventType: "score_visible",
+        currentState: scoreState("3-1"),
+      });
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.handleBrowserJson({
+    type: "session_config",
+    narrationLevel: "standard",
+    researchMode: "normal",
+    voiceNarrationMode: "over_audio",
+  });
+  fixture.session.sendVideo(Buffer.from("scoreboard 3-1"), "image/jpeg", 10);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  const published = fixture.browser.messages.filter((message) => message.type === "event");
+  assert.equal(published.length, 1);
+  assert.equal(published[0].event.description, "The score is 3-1.");
+  assert.deepEqual(speechPolicy.offers, []);
+  fixture.session.close();
+});
+
+test("Question only records an event without offering it in narration-only mode", async (t) => {
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({
+    speechPolicy,
+    async analyzeFrame() {
+      return visualEventAnalysis({
+        eventType: "score_visible",
+        currentState: scoreState("4-1"),
+      });
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.handleBrowserJson({
+    type: "session_config",
+    narrationLevel: "question_only",
+    researchMode: "normal",
+    voiceNarrationMode: "narration_only",
+  });
+  fixture.session.sendVideo(Buffer.from("scoreboard 4-1"), "image/jpeg", 11);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 1);
+  assert.equal(
+    fixture.browser.messages.filter((message) => message.type === "event").length,
+    1,
+  );
+  assert.deepEqual(speechPolicy.offers, []);
+  assert.deepEqual(speechPolicy.automaticNarrationStates, [false]);
+  fixture.session.close();
+});
+
+test("always-narrate configuration preserves recorded frame timestamps without backend speech", async (t) => {
+  let now = 0;
+  const speechPolicy = new FakeSpeechPolicy();
+  const results = [
+    semanticAnalysis("score:B", "Score B"),
+    semanticAnalysis("score:B", "Score B changes"),
+  ];
+  const fixture = createFixture({
+    now: () => now,
+    speechPolicy,
+    async analyzeFrame() {
+      return results.shift();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.handleBrowserJson({
+    type: "session_config",
+    narrationLevel: "standard",
+    researchMode: "normal",
+    voiceNarrationMode: "over_audio",
+  });
+
+  fixture.session.sendVideo(Buffer.from("score B one"), "image/jpeg", 1);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  now = 6_001;
+  fixture.session.sendVideo(Buffer.from("score B two"), "image/jpeg", 2);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.deepEqual(
+    fixture.eventStore
+      .listBySession(fixture.session.sessionId)
+      .map((recorded) => recorded.timestampSeconds)
+      .sort((left, right) => left - right),
+    [1, 2],
+  );
+  assert.deepEqual(speechPolicy.offers, []);
+  fixture.session.close();
+});
+
+test("automatic events do not create backend speech-policy TTL work", async (t) => {
   let now = 0;
   const speechPolicy = new SpeechPolicy({ nowBackendSessionMs: () => now });
   speechPolicy.setTabAudioState("healthy");
@@ -1688,7 +1950,7 @@ test("does not refresh a repeated sports candidate TTL during commentary", async
   fixture.session.sendVideo(Buffer.from("scoreboard one"), "image/jpeg", 3);
   fixture.session.requestNarration(false);
   await flushAsyncWork();
-  assert.equal(speechPolicy.nextWakeAtMs(), 5_000);
+  assert.equal(speechPolicy.nextWakeAtMs(), null);
   now = 6_001;
   fixture.session.sendVideo(Buffer.from("scoreboard two"), "image/jpeg", 99);
   fixture.session.requestNarration(false);
@@ -1697,10 +1959,12 @@ test("does not refresh a repeated sports candidate TTL during commentary", async
   now = 6_751;
 
   assert.deepEqual(speechPolicy.poll(), []);
+  assert.equal(speechPolicy.nextWakeAtMs(), null);
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 2);
   fixture.session.close();
 });
 
-test("a stale older semantic result cannot refresh a newer score TTL", async (t) => {
+test("a stale older semantic result cannot replace newer grounded state", async (t) => {
   let now = 0;
   const staleA = deferred();
   const results = [
@@ -1727,7 +1991,7 @@ test("a stale older semantic result cannot refresh a newer score TTL", async (t)
   fixture.session.sendVideo(Buffer.from("newer B"), "image/jpeg", 2);
   fixture.session.requestNarration(false);
   await flushAsyncWork();
-  assert.equal(speechPolicy.nextWakeAtMs(), 5_010);
+  assert.equal(speechPolicy.nextWakeAtMs(), null);
 
   staleA.resolve(semanticAnalysis("screen:A", "Older A"));
   await flushAsyncWork();
@@ -1739,6 +2003,8 @@ test("a stale older semantic result cannot refresh a newer score TTL", async (t)
   now = 6_751;
 
   assert.deepEqual(speechPolicy.poll(), []);
+  assert.equal(fixture.session.groundedSemanticState.semanticKey, "score:B");
+  assert.equal(fixture.session.groundedSemanticState.originAcceptedAtMs, 10);
   fixture.session.close();
 });
 
@@ -1767,15 +2033,14 @@ test("a chronological transition away and back resets the semantic origin", asyn
   }
 
   assert.deepEqual(
-    speechPolicy.offers.map(({ semanticKey, createdAtMs }) => ({
-      semanticKey,
-      createdAtMs,
-    })),
-    [
-      { semanticKey: "score:B", createdAtMs: 10 },
-      { semanticKey: "score:B", createdAtMs: 200 },
-    ],
+    fixture.session.groundedSemanticState,
+    {
+      semanticKey: "score:B",
+      originAcceptedAtMs: 200,
+      observedFrameSequence: 3,
+    },
   );
+  assert.deepEqual(speechPolicy.offers, []);
   fixture.session.close();
 });
 
@@ -1817,14 +2082,16 @@ test("a newer null state cannot be resurrected by an older late key", async (t) 
   fixture.session.requestNarration(false);
   await flushAsyncWork();
 
-  assert.deepEqual(
-    speechPolicy.offers.map(({ createdAtMs }) => createdAtMs),
-    [10, 1_000],
-  );
+  assert.deepEqual(fixture.session.groundedSemanticState, {
+    semanticKey: "screen:A",
+    originAcceptedAtMs: 1_000,
+    observedFrameSequence: 4,
+  });
+  assert.deepEqual(speechPolicy.offers, []);
   fixture.session.close();
 });
 
-test("records and publishes a fallback event before speech policy starts", async (t) => {
+test("records and publishes a fallback event without backend speech policy", async (t) => {
   const speechPolicy = new FakeSpeechPolicy();
   const fixture = createFixture({
     speechPolicy,
@@ -1837,7 +2104,7 @@ test("records and publishes a fallback event before speech policy starts", async
   fixture.session.requestNarration(true);
   await flushAsyncWork();
 
-  assert.equal(speechPolicy.offers.length, 1);
+  assert.deepEqual(speechPolicy.offers, []);
   const events = fixture.eventStore.listBySession(fixture.session.sessionId);
   assert.equal(events.length, 1);
   assert.equal(events[0].eventType, "scene_observed");
@@ -1999,6 +2266,9 @@ function createFixture({
   transcriberFactory,
   timers,
   historyArchive,
+  deepResearch,
+  getPromptContext,
+  onEmbeddingRetrieved,
 } = {}) {
   const browser = new FakeBrowser();
   const eventStore = new EventStore();
@@ -2027,6 +2297,9 @@ function createFixture({
     }),
     timers,
     historyArchive,
+    deepResearch,
+    getPromptContext,
+    onEmbeddingRetrieved,
   });
   return { browser, eventStore, session };
 }
@@ -2037,6 +2310,7 @@ class FakeLiveSession {
     this.microphoneWrites = [];
     this.tabWrites = [];
     this.typedQuestions = [];
+    this.researchVoices = [];
     this.narrations = [];
     this.discarded = [];
     this.videoWrites = [];
@@ -2047,6 +2321,7 @@ class FakeLiveSession {
   endUserActivity() {}
   sendMicrophonePcm(pcm) { this.microphoneWrites.push(Buffer.from(pcm)); }
   askTyped(turnId, text) { this.typedQuestions.push({ turnId, text }); }
+  speakResearchVoice(turnId, text) { this.researchVoices.push({ turnId, text }); }
   speakNarration(turnId, text) { this.narrations.push({ turnId, text }); }
   discardOutput(turnId) {
     this.discarded.push(turnId);
@@ -2287,10 +2562,32 @@ function visualEventAnalysis({
 class FakeSpeechPolicy {
   constructor() {
     this.offers = [];
+    this.voiceModes = [];
+    this.automaticNarrationStates = [];
+    this.transitions = [];
+    this.pollCalls = 0;
   }
 
   offerNarration(candidate) {
     this.offers.push(candidate);
+    return [];
+  }
+
+  setVoiceNarrationMode(mode) {
+    this.voiceModes.push(mode);
+    this.transitions.push(`mode:${mode}`);
+    return [];
+  }
+
+  setAutomaticNarrationEnabled(enabled) {
+    this.automaticNarrationStates.push(enabled);
+    this.transitions.push(`automatic:${enabled}`);
+    return [];
+  }
+
+  poll() {
+    this.pollCalls += 1;
+    this.transitions.push("poll");
     return [];
   }
 }

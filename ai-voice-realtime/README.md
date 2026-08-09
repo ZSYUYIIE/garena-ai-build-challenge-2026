@@ -5,7 +5,16 @@ side panel uses `/ws`, and the History dashboard uses `/api` plus the optional
 built `/dashboard/` route. For realtime sessions it connects to Gemini
 Interactions for grounded screen-change analysis, Gemini Live for questions
 and native voice replies, and Google Cloud Speech-to-Text V2 for captured-tab
-context.
+context. When the user selects Deep Research, the backend searches Exa,
+finalizes the answer with Gemini Interactions, and immediately sends only its
+concise answer body to Gemini Live for native voice playback. Sources remain
+visible as links and are not spoken.
+
+The backend records and publishes grounded automatic timeline events but never
+asks Gemini Live to speak them. After side-panel insertion, the extension uses
+Chrome/OS TTS for that exact recorded description. Gemini Live remains the
+question/answer and existing Deep Research voice provider. The extension
+manifest must include the consumer permission `tts`, never `ttsEngine`.
 
 ```text
 screen frames + user microphone -> StreamSense backend -> Gemini
@@ -21,6 +30,7 @@ not as user speech.
 
 - A current Node.js release with npm.
 - A Gemini API key for Gemini Interactions and Gemini Live.
+- An Exa API key to enable the optional Deep Research mode.
 - A Google Cloud project with Speech-to-Text V2 enabled and Application
   Default Credentials (ADC) available to the backend process.
 - Google Chrome for the extension demo.
@@ -41,7 +51,8 @@ Configure `.env` without committing the populated file:
 | --- | --- |
 | `GOOGLE_API_KEY` | Backend-only Gemini credential used for vision analysis and Live voice. |
 | `GEMINI_VISION_MODEL` | Gemini Interactions model used for atomic screen-change analysis. |
-| `GEMINI_LIVE_MODEL` | Gemini Live model used for questions, native voice, and approved narration. |
+| `GEMINI_LIVE_MODEL` | Gemini Live model used for questions, native answers, and the existing Deep Research voice path; not automatic timeline narration. |
+| `EXA_API_KEY` | Backend-only Exa credential used by session-only Deep Research; Normal mode does not require it. |
 | `GOOGLE_CLOUD_PROJECT` | Google Cloud project that owns the Speech-to-Text V2 request. |
 | `GOOGLE_CLOUD_SPEECH_LOCATION` | Speech-to-Text recognizer location; defaults to `us`. |
 | `STREAMSENSE_EXTENSION_ID` | Exact 32-character Chrome extension ID allowed to open the production WebSocket. |
@@ -127,6 +138,26 @@ npm run dev --workspace ai-voice-realtime
 The backend listens on `http://127.0.0.1:8000` by default. Keep this terminal
 running while using the extension.
 
+### Normal and Deep Research answers
+
+Both answer modes share one visible chat, and the extension sends the selected
+mode as session configuration. The backend snapshots that mode when a typed or
+microphone turn is admitted. Normal mode follows the existing persistent Gemini
+Live session. Deep Research does not ask Live to generate its answer: it uses
+non-live Gemini Interactions to resolve the query, Exa to retrieve
+public sources, and Gemini Interactions to produce the final cited answer. The
+backend appends a deterministic linked source list, then immediately asks the
+existing Gemini Live session to speak only the concise answer body. Inline
+citations and linked sources are excluded from speech. Spoken deep questions
+are transcribed through the same non-live path.
+The Live connection stays open and resumes its existing Normal-mode context
+when Normal is selected again.
+For playback diagnosis, the side panel can replay the bounded, session-cached
+research summary through Gemini Live. This manual turn emits audio without
+another chat answer and the cache is cleared at close.
+Queries, progress, results, and answers are not written to MongoDB or the
+history repository by this flow.
+
 Normal package startup and the root `dev:realtime` profile create an empty
 `MemoryHistoryRepository`. The root `dev` and `dev:dashboard` profiles instead
 load the development-only deterministic seed. Realtime sessions can add records
@@ -162,10 +193,13 @@ exports the deterministic
 fixture to the Git-ignored `data/dashboard-demo.json` for inspection. It does
 not start the server, seed a running process, or make `npm start` load that file.
 
-Durable MongoDB session/event storage, vector embeddings and search, Redis
-current context, and production retrieval ranking remain separate integration
-work. MongoDB profile persistence is implemented independently and does not
-make session history durable.
+MongoDB profile persistence is implemented independently and does not make
+dashboard session history durable. When MongoDB is configured, each accepted
+event is also copied on a best-effort basis with a 768-dimensional embedding;
+Live typed prompts can retrieve up to five matches from the current session.
+That prototype path is not the dashboard's semantic-search adapter. Durable
+per-user history, Redis current context, and production retrieval ranking remain
+separate integration work.
 
 ### Serve the built one-backend demo
 
@@ -232,8 +266,8 @@ Then:
    microphone permission the first time; allow it for push-to-talk questions.
 4. Focus the side panel, hold `S`, speak, and release to submit, or hold the
    microphone button. The live user transcript and Gemini response appear in
-   the chat, and Gemini answers in its native voice. StreamSense may narrate a
-   meaningful visual change only while the tab is not speaking.
+   the chat, and Gemini answers in its native voice. Press `N` to cycle the
+   side panel's Smart narration, Narrate over audio, and Narration only modes.
 5. Disable the switch to stop. The captured-tab badge returns from `ON` to
    `OFF` after Chrome reports capture has ended.
 6. Select **View History** to open the dashboard. The full `npm run dev`
@@ -255,21 +289,18 @@ transitions such as a verified score change.
 An atomic result from a superseded frame may still be archived at its original
 timestamp, but it cannot be spoken or become grounded context for a newer
 request. Self-descriptions and inferred user interactions are rejected before
-they reach the state cache or speech policy. Captured-tab transcript overlap is
-evaluated locally after the frame result exists; it can mark narration as
-already covered but cannot justify an unseen claim.
+they reach the state cache or event publication. Captured-tab transcript
+overlap is evaluated locally after the frame result exists; it can mark
+narration as already covered but cannot justify an unseen claim.
 
-Every automatic spoken candidate must first receive `status: recorded` from the
-SQLite `EventStore` and be published as an `event` message. A duplicate or
-failed write does not start speech. Failures emit a bounded user-facing
+Every automatic event must first receive `status: recorded` from the SQLite
+`EventStore` and be published as an `event` message. A duplicate or failed write
+does not become eligible for extension TTS. Failures emit a bounded user-facing
 `analysis_error`; the separate asynchronous dashboard archive remains
-best-effort and cannot block realtime publication.
-
-The backend no longer sends the canonical vision sentence as a premature
-`narration_update`. Only turn-owned Gemini Live output transcription is sent to
-the extension for the **Now describing** text, so the displayed sentence tracks
-the audio output rather than the prompt submitted to the generative voice
-model.
+best-effort and cannot block realtime publication. The backend does not offer
+the recorded event to `GeminiLiveSession.speakNarration`; the side panel reads
+the exact published description with Chrome/OS TTS after deduplicated timeline
+insertion.
 
 ## Audio, privacy, and playback behavior
 
@@ -287,8 +318,15 @@ model.
   returns to 30 percent while Gemini answers and to full volume after Gemini's
   local PCM playback queue is idle. Typed questions use the 30-percent answer
   level directly.
-- Automatic narration does not lower tab volume and is suppressed or cancelled
-  while local tab-audio detection or Cloud Speech-to-Text reports speech.
+- Smart narration leaves tab playback at full volume and waits for 750
+  milliseconds of continuous silence from the extension's local tab-audio
+  detector. Cloud Speech-to-Text health is not a timeline-TTS gate.
+- Narrate over audio allows a newly recorded event to be spoken during tab
+  speech and lowers local tab playback to 40 percent only during that
+  narration. Narration only keeps local tab playback at 0 percent. Neither mode
+  stops captured-tab PCM from reaching the separate Speech-to-Text path.
+- Voice narration mode is independent from Narration level. Question only
+  suppresses automatic voice in every mode without stopping timeline events.
 
 ## Degraded behavior
 
@@ -297,11 +335,14 @@ model.
 - If the captured tab has no audio track, visual context and user Q&A continue,
   and meaningful-change narration may run during visual silence rules.
 - If an audio-bearing tab loses Speech-to-Text health or audio continuity, tab
-  speech context is shown as unavailable and automatic narration pauses. User
-  Q&A remains available using microphone/typed input and current frames.
+  speech context is shown as unavailable, but Chrome timeline TTS remains
+  available. Smart continues to use the extension's local activity detector;
+  Narrate over audio and Narration only speak without waiting. User Q&A remains
+  available when Gemini Live is ready.
 - If Gemini Live is connecting or degraded, microphone VAD is disarmed so audio
   is not admitted into an unsafe partial turn. The UI remains stoppable and
-  typed input remains visible; affected turns receive a retryable failure.
+  typed input remains visible; affected question turns receive a retryable
+  failure. Recorded timeline events can still use Chrome TTS.
 - Ending the video track or changing the authorized tab stops the realtime
   session. A microphone-only failure degrades voice without ending tab capture.
 

@@ -12,8 +12,13 @@ integration owns:
 - Redis current-session context;
 - retrieval filtering, ranking, thresholds, and production score calibration.
 
-Those durable integrations are not implemented or proven by the current
-in-memory composition. The
+This document covers the dashboard `SemanticHistoryService`. The realtime path
+now has a separate prototype: configured servers copy accepted event evidence
+to MongoDB with 768-dimensional embeddings and retrieve current-session matches
+for Live typed prompts. That best-effort copy is not canonical history, is not
+used by the dashboard search API, and does not implement Redis context or
+production ranking. The remaining durable dashboard integrations are not
+implemented or proven by the current in-memory composition. The
 boundary exists so they can be added without giving the React client database
 or provider knowledge.
 

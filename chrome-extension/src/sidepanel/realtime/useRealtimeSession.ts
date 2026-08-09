@@ -12,6 +12,7 @@ import {
 } from "../../services/microphonePermission";
 import { configuredBackendWebSocketUrl } from "../../services/backendUrls";
 import type { NarrationMode } from "../context/ConfigurationContext";
+import type { VoiceNarrationMode } from "../voiceNarration";
 import {
   calculateFrameDimensions,
   commitRetainedFrame,
@@ -41,6 +42,11 @@ import {
 } from "./sessionLifecycle";
 import { SpeechCoordinator } from "./speechCoordinator";
 import {
+  createChromeTimelineTtsPort,
+  TimelineNarrator,
+} from "./timelineNarrator";
+import { routeTimelineEvent } from "./timelineEventAdmission";
+import {
   canAskRealtime,
   dispatchTypedQuestion,
   questionAvailabilityFor,
@@ -63,6 +69,8 @@ import {
   updateTurnChatMessages,
   voiceStatusForState,
   type RealtimeChatMessage,
+  type ResearchMode,
+  type ResearchProgress,
   type RealtimeStatus,
   type ServerMessage,
   type StreamEvent,
@@ -80,6 +88,7 @@ const LATE_TRANSCRIPT_SETTLEMENT_MS = 15_000;
 type PendingPcm = { pcm: Int16Array; timestampMs: number };
 type VoiceTurn = {
   turnId: string;
+  deepResearch: boolean;
   pending: boolean;
   ended: boolean;
   packets: PendingPcm[];
@@ -95,7 +104,10 @@ export function delay(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-export function useRealtimeSession(narrationLevel: NarrationMode) {
+export function useRealtimeSession(
+  narrationLevel: NarrationMode,
+  voiceNarrationMode: VoiceNarrationMode,
+) {
   const captureTarget = useCaptureTarget();
   const captureTargetRef = useRef(captureTarget);
   captureTargetRef.current = captureTarget;
@@ -110,12 +122,20 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const [tabContextStatus, setTabContextStatus] = useState<"absent" | "connecting" | "ready" | "degraded">("absent");
   const [liveProviderState, setLiveProviderState] = useState<LiveProviderState>("closed");
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [researchMode, setResearchModeState] = useState<ResearchMode>("normal");
+  const [researchProgress, setResearchProgress] = useState<ResearchProgress[]>([]);
+  const eventsRef = useRef<StreamEvent[]>(events);
+  eventsRef.current = events;
 
   const statusRef = useRef(status);
   statusRef.current = status;
   const errorRef = useRef(error);
   errorRef.current = error;
   const narrationLevelRef = useRef(narrationLevel);
+  const voiceNarrationModeRef = useRef(voiceNarrationMode);
+  voiceNarrationModeRef.current = voiceNarrationMode;
+  const researchModeRef = useRef<ResearchMode>(researchMode);
+  researchModeRef.current = researchMode;
 
   const websocketRef = useRef<WebSocket | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -138,6 +158,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const mediaAudioRef = useRef<RealtimeMediaAudio | null>(null);
   const retryMicrophoneRef = useRef<(() => Promise<MicrophoneState>) | null>(null);
   const speechCoordinatorRef = useRef<SpeechCoordinator | null>(null);
+  const timelineNarratorRef = useRef<TimelineNarrator | null>(null);
   const activeTurnRef = useRef<TurnRoleState | null>(null);
   const settlingTurnRef = useRef<TurnRoleState | null>(null);
   const speakingTurnIdRef = useRef<string | null>(null);
@@ -188,6 +209,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     microphoneTurnOwnershipRef.current = null;
     retireMicrophoneTurnRef.current = null;
     setActiveSessionId(null);
+    setResearchProgress([]);
     publishLiveProviderState("closed");
     publishVoiceStatus({
       sessionActive: false,
@@ -200,6 +222,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
 
     websocketRef.current = null;
     speechCoordinatorRef.current = null;
+    timelineNarratorRef.current = null;
     mediaAudioRef.current = null;
     retryMicrophoneRef.current = null;
     mediaStreamRef.current = null;
@@ -396,6 +419,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     });
     const coordinator = new SpeechCoordinator({
       playback,
+      voiceNarrationMode: voiceNarrationModeRef.current,
       setTabGain: (gain, fadeMs) => mediaAudio.setTabGain(gain, fadeMs),
       onFailTurn: (turnId, reason) => {
         callbackGate.run(() => {
@@ -415,6 +439,24 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     });
     speechCoordinatorRef.current = coordinator;
     resourceLifecycle.register(() => coordinator.stop());
+    const timelineNarrator = new TimelineNarrator({
+      tts: createChromeTimelineTtsPort(),
+      voiceNarrationMode: voiceNarrationModeRef.current,
+      automaticNarrationEnabled: narrationLevelRef.current !== "question_only",
+      onActiveChange: (active) => {
+        callbackGate.run(() => coordinator.setTimelineNarrationActive(active));
+      },
+      onError: (message) => {
+        callbackGate.run(() => setError(`Timeline narration unavailable: ${message}`));
+      },
+    });
+    timelineNarratorRef.current = timelineNarrator;
+    resourceLifecycle.register(() => {
+      timelineNarrator.stop();
+      if (timelineNarratorRef.current === timelineNarrator) {
+        timelineNarratorRef.current = null;
+      }
+    });
 
     const runFrameCapture = async ({ force }: { force: boolean }): Promise<void> => {
       const websocket = websocketRef.current;
@@ -487,9 +529,18 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       },
       onUserActivityStart: () => {
         if (!callbackGate.allows() || !voiceStateRef.current.helloAccepted || !voiceStateRef.current.liveReady) return;
+        timelineNarrator.interruptForQuestion();
         const turnId = crypto.randomUUID();
+        setResearchProgress([]);
         nextVoiceTurnIdRef.current = turnId;
-        const turn: VoiceTurn = { turnId, pending: true, ended: false, packets: [], bytes: 0 };
+        const turn: VoiceTurn = {
+          turnId,
+          deepResearch: researchModeRef.current === "deep_research",
+          pending: true,
+          ended: false,
+          packets: [],
+          bytes: 0,
+        };
         microphoneTurns.claim(turn);
         activeTurnRef.current = createTurnRoleState(turnId);
         settlingTurnRef.current = null;
@@ -516,7 +567,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           turn.bytes = 0;
           if (turn.ended) {
             safelySend(() => protocol.endUserActivity());
-            coordinator.userEnded(turnId);
+            coordinator.userEnded(turnId, { deepResearch: turn.deepResearch });
             publishVoiceStatus({ userSpeaking: false });
           }
         })();
@@ -528,7 +579,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
           turn.ended = true;
           if (turn.pending) return;
           safelySend(() => protocol.endUserActivity());
-          coordinator.userEnded(turn.turnId);
+          coordinator.userEnded(turn.turnId, { deepResearch: turn.deepResearch });
           publishVoiceStatus({ userSpeaking: false });
         });
       },
@@ -548,6 +599,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     setStatusText("Capturing the active tab without the StreamSense panel.");
     setError(null);
     setActiveSessionId(null);
+    eventsRef.current = [];
     setEvents([]);
     setMessages([]);
     setDescription("Waiting for the first description...");
@@ -584,6 +636,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         onTabActivity: (active) => {
           callbackGate.run(() => {
             coordinator.tabActivity(active);
+            timelineNarrator.setTabActivity(active);
             safelySend(() => protocol.sendTabActivity(active));
           });
         },
@@ -626,13 +679,43 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
         if (!isCurrent()) { websocket.close(1000, "Stale extension session"); return; }
         protocol.open(mediaState);
         websocket.send(JSON.stringify({ type: "capture_source", source: "screen" }));
-        websocket.send(JSON.stringify({ type: "session_config", narrationLevel: narrationLevelRef.current }));
+        websocket.send(JSON.stringify({
+          type: "session_config",
+          narrationLevel: narrationLevelRef.current,
+          voiceNarrationMode: voiceNarrationModeRef.current,
+          researchMode: researchModeRef.current,
+        }));
         void captureFrame({ force: false });
         frameTimerRef.current = window.setInterval(() => { void captureFrame({ force: false }); }, VIDEO_FRAME_INTERVAL_MS);
       });
       void microphonePromise.then(() => {
         callbackGate.run(() => publishVoiceStatus({ microphoneState: mediaState.microphoneState }));
       });
+      let modelAudioDelivery = Promise.resolve();
+      const deliverModelAudio = async (message: Extract<ServerMessage, { type: "model_audio" }>) => {
+        const sampleRate = parsePcmRate(message.mimeType);
+        if (!sampleRate) throw new Error("Invalid audio metadata");
+        const pcm = base64ToArrayBuffer(message.data);
+        if (preparedAudio.audioContext.state !== "running") {
+          await preparedAudio.audioContext.resume();
+        }
+        if (preparedAudio.audioContext.state !== "running") {
+          throw new Error("Model audio playback unavailable.");
+        }
+        callbackGate.run(() => {
+          const accepted = coordinator.modelAudio({
+            turnId: message.turnId,
+            mode: message.mode,
+            pcm,
+            sampleRate,
+            mimeType: message.mimeType,
+          });
+          if (accepted) {
+            speakingTurnIdRef.current = message.turnId;
+            publishVoiceStatus({ geminiSpeaking: true });
+          }
+        });
+      };
       websocket.addEventListener("message", (event) => {
         if (!isCurrent()) return;
         let message: ServerMessage;
@@ -658,6 +741,13 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             } else if (mediaState.tabAudioState !== "absent") {
               setTabContextStatus(message.state === "ready" ? "ready" : message.state === "connecting" ? "connecting" : "degraded");
             }
+            break;
+          case "research_progress":
+            coordinator.answerProgress(message.turnId);
+            setResearchProgress((current) => [
+              ...current.filter((item) => item.turnId === message.turnId && item.stage !== message.stage),
+              message,
+            ]);
             break;
           case "user_transcript":
           case "answer_update": {
@@ -691,15 +781,14 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             break;
           }
           case "model_audio": {
-            const sampleRate = parsePcmRate(message.mimeType);
-            if (!sampleRate) { websocket.close(1002, "Invalid audio metadata"); return; }
-            try {
-              const accepted = coordinator.modelAudio({ turnId: message.turnId, mode: message.mode, pcm: base64ToArrayBuffer(message.data), sampleRate, mimeType: message.mimeType });
-              if (accepted) {
-                speakingTurnIdRef.current = message.turnId;
-                publishVoiceStatus({ geminiSpeaking: true });
-              }
-            } catch { websocket.close(1002, "Invalid audio payload"); }
+            modelAudioDelivery = modelAudioDelivery
+              .then(() => deliverModelAudio(message))
+              .catch((cause) => {
+                callbackGate.run(() => coordinator.failTurn(
+                  message.turnId,
+                  toErrorMessage(cause) || "Model audio playback unavailable.",
+                ));
+              });
             break;
           }
           case "playback_clear": {
@@ -719,9 +808,19 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
             }
             break;
           }
-          case "turn_complete":
-            settleTurnComplete(message);
+          case "turn_complete": {
+            modelAudioDelivery = modelAudioDelivery.then(() => {
+              callbackGate.run(() => {
+                setResearchProgress((current) => current.map((item) => (
+                  item.turnId === message.turnId && item.stage === "synthesize" && item.status === "active"
+                    ? { ...item, status: message.interrupted ? "failed" : "completed" }
+                    : item
+                )));
+                settleTurnComplete(message);
+              });
+            });
             break;
+          }
           case "status_text": if (message.text) setStatusText(message.text); break;
           case "narration_update":
             if (message.text) {
@@ -734,7 +833,19 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
               setDescription(text);
             }
             break;
-          case "event": if (message.event) setEvents((current) => current.some((item) => item.id === message.event!.id) ? current : [message.event!, ...current].slice(0, 100)); break;
+          case "event":
+            if (message.event) {
+              routeTimelineEvent(eventsRef.current, message.event, {
+                answerOwnsSpeech: coordinator.answerOwnsSpeech(),
+                commit: (nextEvents) => {
+                  eventsRef.current = nextEvents;
+                  setEvents(nextEvents);
+                  setDescription(message.event!.description);
+                },
+                offer: (inserted) => timelineNarrator.offer(inserted),
+              });
+            }
+            break;
           case "error": setError(message.text ?? "The realtime session reported an error."); setStatus("error"); break;
           case "analysis_error": setError(message.text ?? "The current frame could not be analyzed."); break;
           case "status":
@@ -773,6 +884,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       voiceStateRef.current.helloAccepted,
       liveProviderStateRef.current,
     )) return false;
+    timelineNarratorRef.current?.interruptForQuestion();
     return retireMicrophoneBeforeTypedAdmission(
       () => retireMicrophoneTurnRef.current?.(undefined, {
         notifyBackend: true,
@@ -780,13 +892,16 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       }) ?? "none",
       () => {
         const turnId = crypto.randomUUID();
+        setResearchProgress([]);
         activeTurnRef.current = createTurnRoleState(turnId, { userFinished: true });
         settlingTurnRef.current = null;
         if (settlingTurnTimerRef.current !== null) {
           window.clearTimeout(settlingTurnTimerRef.current);
           settlingTurnTimerRef.current = null;
         }
-        coordinator.typedQuestionStarted(turnId);
+        coordinator.typedQuestionStarted(turnId, {
+          deepResearch: researchModeRef.current === "deep_research",
+        });
         setError(null);
         speakingTurnIdRef.current = null;
         publishVoiceStatus({ geminiSpeaking: false });
@@ -818,6 +933,53 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
       },
     );
   }, [publishVoiceStatus, settleTurnComplete]);
+
+  const playResearchVoice = useCallback((sourceTurnId: string) => {
+    const websocket = websocketRef.current;
+    const coordinator = speechCoordinatorRef.current;
+    if (
+      !websocket
+      || websocket.readyState !== WebSocket.OPEN
+      || !coordinator
+      || !canAskRealtime(
+        statusRef.current,
+        voiceStateRef.current.helloAccepted,
+        liveProviderStateRef.current,
+      )
+    ) return false;
+    timelineNarratorRef.current?.interruptForQuestion();
+    const turnId = crypto.randomUUID();
+    activeTurnRef.current = createTurnRoleState(turnId, {
+      userFinished: true,
+      assistantFinished: true,
+    });
+    settlingTurnRef.current = null;
+    if (settlingTurnTimerRef.current !== null) {
+      window.clearTimeout(settlingTurnTimerRef.current);
+      settlingTurnTimerRef.current = null;
+    }
+    coordinator.typedQuestionStarted(turnId);
+    setError(null);
+    speakingTurnIdRef.current = null;
+    publishVoiceStatus({ geminiSpeaking: false });
+    websocket.send(JSON.stringify({ type: "play_research_voice", sourceTurnId, turnId }));
+    return true;
+  }, [publishVoiceStatus]);
+
+  const setResearchMode = useCallback((mode: ResearchMode) => {
+    researchModeRef.current = mode;
+    setResearchModeState(mode);
+    if (mode === "normal") setResearchProgress([]);
+    const websocket = websocketRef.current;
+    if (websocket?.readyState === WebSocket.OPEN) {
+      websocket.send(JSON.stringify({
+        type: "session_config",
+        narrationLevel: narrationLevelRef.current,
+        voiceNarrationMode: voiceNarrationModeRef.current,
+        researchMode: mode,
+      }));
+    }
+  }, []);
 
   const enableVoice = useCallback(() => {
     const retryMicrophone = retryMicrophoneRef.current;
@@ -885,9 +1047,30 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
 
   useEffect(() => {
     narrationLevelRef.current = narrationLevel;
+    timelineNarratorRef.current?.setAutomaticNarrationEnabled(
+      narrationLevel !== "question_only",
+    );
     const websocket = websocketRef.current;
-    if (websocket?.readyState === WebSocket.OPEN) websocket.send(JSON.stringify({ type: "session_config", narrationLevel }));
+    if (websocket?.readyState === WebSocket.OPEN) websocket.send(JSON.stringify({
+      type: "session_config",
+      narrationLevel,
+      voiceNarrationMode: voiceNarrationModeRef.current,
+      researchMode: researchModeRef.current,
+    }));
   }, [narrationLevel]);
+
+  useEffect(() => {
+    voiceNarrationModeRef.current = voiceNarrationMode;
+    speechCoordinatorRef.current?.setVoiceNarrationMode(voiceNarrationMode);
+    timelineNarratorRef.current?.setVoiceNarrationMode(voiceNarrationMode);
+    const websocket = websocketRef.current;
+    if (websocket?.readyState === WebSocket.OPEN) websocket.send(JSON.stringify({
+      type: "session_config",
+      narrationLevel: narrationLevelRef.current,
+      voiceNarrationMode,
+      researchMode: researchModeRef.current,
+    }));
+  }, [voiceNarrationMode]);
 
   useEffect(() => {
     const cleanup = () => releaseResources();
@@ -904,6 +1087,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
 
   return {
     status, statusText, error, description, events, messages, voiceStatus, tabContextStatus,
+    researchMode, researchProgress,
     microphoneState, activeSessionId,
     isRunning: status === "connecting" || status === "connected",
     isBusy: status === "requesting_capture",
@@ -912,7 +1096,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     canEnableVoice: microphoneState === "denied" || microphoneState === "degraded",
     canStartVoice: questionAvailability === "ready" && microphoneState === "ready",
     questionAvailability,
-    start, stop, ask, enableVoice, startVoiceQuestion, stopVoiceQuestion,
+    start, stop, ask, playResearchVoice, enableVoice, startVoiceQuestion, stopVoiceQuestion, setResearchMode,
   };
 }
 

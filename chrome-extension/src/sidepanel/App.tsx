@@ -21,7 +21,10 @@ export default function App() {
 
 function StreamSensePanel() {
   const { options } = useConfigurationOptions();
-  const session = useRealtimeSession(options.narrationLevel);
+  const session = useRealtimeSession(
+    options.narrationLevel,
+    options.voiceNarrationMode,
+  );
 
   const handleRunningChange = useCallback(
     (shouldRun: boolean) => {
@@ -37,6 +40,11 @@ function StreamSensePanel() {
   const handleAsk = useCallback(
     (question: string) => session.ask(question),
     [session.ask],
+  );
+
+  const handlePlayResearchVoice = useCallback(
+    (sourceTurnId: string) => session.playResearchVoice(sourceTurnId),
+    [session.playResearchVoice],
   );
 
   const handleEnableVoice = useCallback(
@@ -55,8 +63,8 @@ function StreamSensePanel() {
   );
 
   return (
-    <div className="flex h-screen flex-col divide-y divide-border overflow-hidden p-4">
-      <div className="pb-3">
+    <div className="flex h-screen flex-col divide-y divide-border overflow-hidden p-3">
+      <div className="shrink-0 pb-2">
         <Header
           status={session.status}
           isRunning={session.isRunning}
@@ -65,10 +73,10 @@ function StreamSensePanel() {
           onRunningChange={handleRunningChange}
         />
       </div>
-      <div className="py-3">
+      <div className="shrink-0 py-2">
         <HistoryNavigation activeSessionId={session.activeSessionId} />
       </div>
-      <div className="py-3">
+      <div className="shrink-0 py-2">
         <VideoDescriptionSection
           description={session.description}
           statusText={session.statusText}
@@ -77,22 +85,27 @@ function StreamSensePanel() {
           isSpeaking={session.voiceStatus === "gemini_speaking"}
         />
       </div>
-      <div className="py-3">
+      <div className="flex min-h-20 max-h-32 flex-[0.6] flex-col overflow-hidden py-2">
         <EventTimelineSection events={session.events} />
       </div>
-      <div className="flex min-h-0 flex-1 flex-col pt-3">
+      <div className="flex min-h-60 flex-[1.4] flex-col pt-2">
         <QuestionSection
           messages={session.messages}
           onAsk={handleAsk}
+          onPlayResearchVoice={handlePlayResearchVoice}
           onEnableVoice={handleEnableVoice}
           onStartVoice={handleStartVoice}
           onStopVoice={handleStopVoice}
           canEnableVoice={session.canEnableVoice}
           canStartVoice={session.canStartVoice}
           questionAvailability={session.questionAvailability}
+          canPlayResearchVoice={session.questionAvailability === "ready" && session.voiceStatus !== "gemini_speaking"}
           voiceStatus={session.voiceStatus}
           microphoneState={session.microphoneState}
           tabContextStatus={session.tabContextStatus}
+          researchMode={session.researchMode}
+          researchProgress={session.researchProgress}
+          onResearchModeChange={session.setResearchMode}
         />
       </div>
     </div>

@@ -179,6 +179,7 @@ export class RealtimeMediaAudio {
   private micNextPacketTimestampMs: number | null = null;
   private tabVideoTrack: MediaStreamTrack | null = null;
   private tabVideoEndedHandler: (() => void) | null = null;
+  private tabGain: 0 | 0.3 | 0.4 | 1 = 1;
   private readonly tabActivity = new TabActivityGate();
   private readonly userVad = new EchoAwareUserVadGate();
 
@@ -242,7 +243,7 @@ export class RealtimeMediaAudio {
     try {
       source = context.createMediaStreamSource(options.tabStream) as unknown as GraphNode;
       gain = context.createGain() as unknown as GraphNode & { gain: AudioParam };
-      gain.gain.setValueAtTime(1, context.currentTime);
+      gain.gain.setValueAtTime(this.tabGain, context.currentTime);
       source.connect(gain as unknown as AudioNode);
       gain.connect(context.destination);
       this.tabBranch = { nodes: [source, gain], captureNodes: [] };
@@ -358,7 +359,8 @@ export class RealtimeMediaAudio {
     this.userVad.pushReference(reference);
   }
 
-  setTabGain(gain: 0 | 0.3 | 1, fadeMs: number): void {
+  setTabGain(gain: 0 | 0.3 | 0.4 | 1, fadeMs: number): void {
+    this.tabGain = gain;
     const node = this.tabBranch?.nodes[1] as (GraphNode & { gain?: AudioParam }) | undefined;
     const context = this.audioContext;
     if (!node?.gain || !context) return;

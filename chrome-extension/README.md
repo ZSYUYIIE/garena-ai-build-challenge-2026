@@ -20,7 +20,11 @@ npm run build
 Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
 and select `chrome-extension/dist`. Copy the generated extension ID to
 `ai-voice-realtime/.env` as `STREAMSENSE_EXTENSION_ID`, then reload the
-extension after rebuilding.
+extension after rebuilding. The manifest requires Chrome's `tts` permission so
+the side panel can consume installed Chrome/OS voices; it does not request
+`ttsEngine` because StreamSense does not provide a speech engine. Automatic
+timeline narration prefers Alex, then Samantha, then another compatible English
+voice, and supplies `en-US`, rate `0.9`, and pitch `0.9`.
 
 On an ordinary HTTP or HTTPS page, click the StreamSense toolbar icon to
 authorize that exact tab and open the side panel. Chrome internal pages and the
@@ -84,20 +88,75 @@ connectivity.
 
 ## Realtime description and timeline ownership
 
-The side panel accepts only protocol-v2, turn-owned narration updates. It
-merges incremental Gemini Live output-transcript chunks for one narration turn
-and uses the accumulated spoken transcript as the visible description. Legacy
-unowned `answer` and `narration` messages are rejected. The label distinguishes
-active playback, the latest completed description, and the stopped state.
+The side panel accepts strict protocol-v2 `event` messages and displays the
+newest recorded event description in its collapsed-by-default description
+disclosure. Expanding it reveals the full bounded description and provider
+status. Legacy unowned `answer` and `narration` messages remain rejected. The
+current-session timeline scrolls inside a bounded region so the answer-mode
+control, chat history, and composer remain visible at ordinary side-panel
+heights.
 
 Current-session timeline events arrive independently as strict `event`
-messages. The backend publishes a recorded event before automatic narration is
-eligible, so a spoken visual moment cannot silently bypass the live timeline.
+messages. The backend grounds, validates, records, and publishes each event.
+Only after the side panel deduplicates and inserts a new event can its exact
+recorded `description` be offered to Chrome/OS TTS. Gemini Live never rephrases
+or synthesizes automatic timeline events, so a spoken visual moment cannot
+silently bypass the live timeline.
 The separate Memory dashboard reads archived session/event projections over
 REST; the extension does not rehydrate old sessions into its compact timeline.
 The dashboard's Memory-first relationship map, search, accessibility shortcuts,
 single accessible theme, and readable relationship alternatives are documented in
 [`../session-dashboard/README.md`](../session-dashboard/README.md).
+
+## Voice narration modes
+
+Voice narration is a side-panel-only preference and is separate from the
+Narration level selector:
+
+- **Smart narration** waits for 750 milliseconds of continuous silence from the
+  extension's existing local tab-activity detector.
+- **Narrate over audio** speaks the newest recorded timeline event even during
+  tab speech. Local tab playback fades to 40 percent only from the Chrome TTS
+  `start` event through `end`, `interrupted`, `cancelled`, or `error`.
+- **Narration only** speaks new timeline events while local tab playback stays
+  muted. Tab capture and the separate Speech-to-Text stream continue.
+
+Question only under Narration level suppresses automatic voice in every mode.
+Press `N` while the side panel has focus to cycle the three Voice narration
+modes. The shortcut ignores editable controls, modifier keys, and key repeat;
+the visible selector remains its accessible equivalent. The selection is saved
+locally and applied immediately to an active session.
+
+The fixed calm voice profile applies only to automatic Chrome timeline TTS.
+Voice discovery is cached for the realtime session; failure falls back to
+Chrome voice selection while retaining `en-US`, rate `0.9`, and pitch `0.9`.
+Gemini Live question and Deep Research answer voices are unchanged.
+
+Typed and microphone questions interrupt an active Chrome timeline utterance
+and clear its one pending event before admission. Events received while a user
+answer owns speech remain visible but are not spoken later. Gemini Live and
+Cloud Speech-to-Text health do not gate timeline TTS; Cloud transcription and
+captured-tab PCM continue independently.
+
+## Answer modes
+
+The chat area has a Normal / Deep Research segmented tab control. This changes
+how the next question is answered; it does not create another conversation or
+clear existing messages. The selection applies equally to typed and
+push-to-talk questions. During Deep Research, the existing chat displays an
+accessible four-step plan with the current query, source count, review state,
+and synthesis state. Its active step uses a reduced-motion-safe loading
+animation and completed steps transition to checkmarks. The concise researched
+text appears above a linked source list in the same chat. A non-live Gemini
+request generates the answer, then the persistent Gemini Live connection speaks
+only the answer body, not citations or source links. Selecting Normal resumes
+the existing Live session.
+Each completed researched answer also exposes a manual **Debug: Play with
+Gemini Live** control. Pressing it reads the session-cached concise answer over
+the existing Live connection, suppresses the duplicate transcript, and does
+not rerun or persist the research.
+Deep Research requires `EXA_API_KEY` on the backend and stores no search state
+in the extension or database.
 
 ## Checks and acceptance caveat
 
@@ -110,4 +169,6 @@ npm run check
 For focused extension iteration, `npm test --workspace chrome-extension` and
 `npm run build --workspace chrome-extension` remain available. Automated tests
 and a successful build do not prove real Chrome capture permissions, microphone
-behavior, Gemini Live audio, or Cloud Speech-to-Text in the current environment.
+behavior, Chrome/OS TTS, Gemini Live audio, or Cloud Speech-to-Text in the current
+environment. Reload the unpacked extension and perform a physical TTS smoke test
+after changing narration behavior.

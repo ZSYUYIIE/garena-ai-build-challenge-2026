@@ -43,6 +43,9 @@ test("server shutdown awaits session cleanup before closing the event store", as
   const runtime = createStreamSenseServer({
     extensionId: "abcdefghijklmnopabcdefghijklmnop",
     eventStore,
+    closeContextStore() {
+      events.push("context_store_closed");
+    },
     sessionFactory() {
       return {
         start() {},
@@ -62,7 +65,11 @@ test("server shutdown awaits session cleanup before closing the event store", as
   assert.deepEqual(events, ["session_close_started"]);
   cleanup.resolve();
   await closing;
-  assert.deepEqual(events, ["session_close_started", "event_store_closed"]);
+  assert.deepEqual(events, [
+    "session_close_started",
+    "context_store_closed",
+    "event_store_closed",
+  ]);
 });
 
 test("server retains a browser-closed session until delayed cleanup settles", async () => {

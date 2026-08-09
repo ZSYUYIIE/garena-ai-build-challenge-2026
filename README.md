@@ -27,6 +27,8 @@ Authorized browser tab
   -> backend --> Gemini visual and Live models
   -> backend --> Cloud Speech-to-Text V2 for tab commentary
   -> backend --> SQLite evidence + in-memory history projection
+  -> backend -- recorded protocol-v2 event --> side-panel timeline
+  -> side panel -- exact event description --> Chrome / OS TTS
 
 Side panel -- Open Memory Dashboard --> Memory dashboard -- REST --> backend
 Memory dashboard -- account REST --> backend --> MongoDB profiles
@@ -40,7 +42,7 @@ context and is never presented as the user's speech.
 
 | Directory | Purpose |
 | --- | --- |
-| `chrome-extension/` | Manifest V3 extension, side-panel UI, tab capture, push-to-talk, and Gemini audio playback. |
+| `chrome-extension/` | Manifest V3 extension, side-panel UI, tab capture, push-to-talk, Chrome timeline TTS, and Gemini answer playback. |
 | `ai-voice-realtime/` | Express and WebSocket backend, Gemini Interactions/Live clients, Cloud Speech-to-Text, and event storage. |
 | `session-dashboard/` | Accessible React dashboard for previous sessions, timeline search, and context exploration. |
 | `docs/` | Design notes and verification material. |
@@ -75,8 +77,8 @@ work—not as implemented features—in the architecture document.
 - A Gemini API key with access to the configured vision and Live models.
 - A Google Cloud project with billing configured for Speech-to-Text V2.
 - The [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`).
-- A MongoDB Atlas cluster for dashboard profile persistence. Docker Desktop is
-  optional when an offline local profile store is preferred.
+- A MongoDB Atlas cluster for dashboard profiles and semantic event retrieval.
+  Docker Desktop is optional when an offline local store is preferred.
 
 The Gemini and Google Cloud requirements apply to the realtime extension. The
 deterministic session-dashboard workflow below requires only Node.js and npm.
@@ -232,6 +234,7 @@ GOOGLE_API_KEY=your_real_gemini_api_key
 
 GEMINI_VISION_MODEL=gemini-3.6-flash
 GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
+EXA_API_KEY=your_exa_api_key
 
 GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
 GOOGLE_CLOUD_SPEECH_LOCATION=us
@@ -256,7 +259,8 @@ For isolated local debugging, `STREAMSENSE_ALLOW_ANY_EXTENSION_ORIGIN=true`
 temporarily relaxes the extension-origin check. Do not use that setting for a
 shared or production backend.
 
-MongoDB Atlas is the primary profile store. In Atlas, create a dedicated
+MongoDB Atlas stores prototype profiles and the session-scoped semantic event
+index used to add earlier moments to Live prompts. In Atlas, create a dedicated
 database user (separate from the MongoDB Cloud sign-in), allow only the current
 backend operator IP, and copy the Node.js SRV value from **Connect > Drivers**.
 Replace every URI placeholder, URL-encode special characters in the database
@@ -301,7 +305,8 @@ Then in Chrome:
 4. If Chrome opens the StreamSense microphone-permission page, select
    **Allow microphone**, then return to the captured tab.
 5. Let the video play. Meaningful visual changes appear in the timeline and may
-   be narrated according to the selected narration level.
+   be narrated according to the separate Narration level and Voice narration
+   settings.
 6. Select **Open Memory Dashboard** inside the side panel. The toolbar icon
    itself always opens the side panel and never bypasses it to open Memory.
    While a session is active, the extension opens
@@ -324,6 +329,9 @@ authorize it before starting again.
 - **Text:** Enter a question and select the arrow/send button.
 - **Voice:** Click inside the side panel so it has keyboard focus, hold `S`,
   speak, and release `S` to submit. Holding the microphone button works too.
+- **Narration mode:** Press `N` while the side panel has focus to cycle Smart
+  narration, Narrate over audio, and Narration only. The shortcut is ignored
+  while editing a form field, while a modifier is held, or on key repeat.
 - The user's live transcript and Gemini's response appear in the chat above the
   input, while Gemini's native audio response plays through Chrome.
 
@@ -331,6 +339,22 @@ While push-to-talk is held, captured-tab playback fades to 0% so the microphone
 hears the user rather than the computer. On release it returns to 30% while
 Gemini replies, then to 100% after playback finishes. Muting playback does not
 stop screen capture or the separate captured-tab transcription stream.
+
+Voice narration is independent from Narration level. Smart narration speaks
+only after the extension's local tab-activity detector has reported 750
+milliseconds of continuous silence. Narrate over audio speaks a newly recorded
+timeline event while the tab continues at 40 percent volume only during the
+Chrome TTS lifecycle. Narration only keeps local tab playback muted for the
+session while capture and tab transcription continue. Selecting Question only
+under Narration level disables Chrome timeline TTS in all three Voice narration
+modes without suppressing timeline events.
+
+Automatic timeline speech uses installed Chrome/OS voices with a calm English
+profile: StreamSense prefers Alex, then Samantha, then another compatible
+English voice, and supplies `en-US`, rate `0.9`, and pitch `0.9`. If voice
+discovery fails, Chrome still receives the language, rate, and pitch while
+choosing the compatible fallback. This profile does not change Gemini Live's
+voice for questions or Deep Research answers.
 
 ## Grounded narration and timeline behavior
 
@@ -342,18 +366,19 @@ Automatic narration now follows one fail-closed path:
 2. StreamSense rejects self-descriptions, inferred user actions, and results
    from a frame that has already been superseded.
 3. The accepted moment must be recorded and published to the current-session
-   timeline before it can be offered for speech. If local event persistence
-   fails, the panel shows a warning and skips that narration.
+   timeline. The side panel then deduplicates and inserts the new event before
+   offering its exact recorded description to Chrome/OS TTS. If local event
+   persistence fails, the panel shows a warning and skips that narration.
 4. Captured-tab transcript is compared only after the visual fact is grounded,
    so it may suppress a redundant description but cannot create one.
 
-The panel builds its displayed description from Gemini Live's turn-bound output
-transcript, which follows the audio actually generated, rather than displaying
-the earlier visual-analysis sentence as if it had already been spoken. The
-label reads **Now describing** only during model playback, **Latest
-description** while the session is otherwise running, and **Video description**
-when stopped. Reload the unpacked extension after rebuilding; legacy unowned
-`answer` and `narration` WebSocket messages are rejected by the current panel.
+Gemini Live does not synthesize automatic timeline events. It remains available
+for Normal questions and native answers plus the existing Deep Research voice
+path. Typed and microphone questions interrupt Chrome timeline TTS and clear
+pending work before admission; events arriving while a user answer owns speech
+remain visible but are not replayed. Reload the unpacked extension after
+rebuilding; the manifest requires the consumer permission `tts` and never
+`ttsEngine`.
 
 ## Memory dashboard development without Speech-to-Text
 
@@ -373,9 +398,11 @@ profiles. It seeds a fresh in-memory repository every time the backend starts
 and is refused when `NODE_ENV=production`. `npm run dev:realtime`, normal
 `npm start`, and production startup retain an empty in-memory history
 repository. Neither history mode is durable: dashboard sessions are lost at
-process restart. Account profiles are a separate MongoDB collection and do
-persist. Durable session/event storage, vector embeddings/search, Redis current
-context, and retrieval ranking remain separate integration work.
+process restart. Account profiles persist in MongoDB. Accepted event evidence
+still writes to SQLite and is also copied to MongoDB on a best-effort basis with
+768-dimensional embeddings for session-scoped Live prompt retrieval. Durable
+per-user dashboard history, Redis current context, and production identity and
+retention controls remain separate integration work.
 
 Memory now leads with an optional Three.js relationship map before the recent
 session list. The former `/dashboard/explore` URL is a compatibility redirect:
@@ -448,8 +475,8 @@ development-only backend with deterministic history. Open
 `http://127.0.0.1:8000/dashboard/`; load `chrome-extension/dist` for the Live
 surface. There is no separate Vite server in this profile. Dashboard-only use
 does not start provider sessions, but this workflow is not evidence that
-physical Chrome capture, Gemini, or Cloud Speech-to-Text works in the current
-environment.
+physical Chrome capture, Chrome/OS TTS, Gemini, or Cloud Speech-to-Text works in
+the current environment.
 
 ## Development
 
@@ -532,12 +559,16 @@ Speech-to-Text; the service uses ADC separately.
 Run `gcloud auth login`, select the correct account, set the project, and retry
 the enable command.
 
-### Tab speech context unavailable / automatic narration paused
+### Tab speech context unavailable
 
 Confirm that `speech.googleapis.com` is enabled, ADC has the correct quota
 project, `GOOGLE_CLOUD_PROJECT` is correct, and the active account can use the
 Speech-to-Text API. Restart the backend after fixing credentials. Typed and
-microphone questions can still work without captured-tab speech context.
+microphone questions can still work without captured-tab speech context. Chrome
+timeline TTS is independent of Cloud Speech-to-Text health: Smart uses the
+extension's local tab-activity detector, while Narrate over audio and Narration
+only do not wait for tab silence. Gemini Live health gates questions and answers,
+not automatic timeline narration.
 
 ### Microphone permission denied
 
@@ -550,6 +581,13 @@ extension and macOS/Windows privacy settings for Chrome.
 Ensure StreamSense is running and connected, microphone access is allowed, and
 the side panel has focus. The shortcut is intentionally ignored while typing in
 the question input or while a modifier key is held.
+
+### Pressing `N` does not change Voice narration
+
+Focus the side panel and make sure the cursor is not inside an input, select, or
+other editable control. `N` is intentionally ignored with modifier keys and on
+key repeat. The selected mode is also available from the visible Voice
+narration selector and persists when the side panel is reopened.
 
 ### Microphone audio backlog exceeded one second
 

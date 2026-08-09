@@ -19,8 +19,11 @@ surfaces:
 flowchart LR
     Video["Authorized video tab"] --> Extension["Chrome extension\nStreamSense Live"]
     Extension -->|"JPEG frames + separate mic/tab PCM"| Backend["Express + WebSocket backend"]
+    Backend -->|"recorded protocol-v2 events"| Extension
+    Extension --> ChromeTTS["Chrome / OS text-to-speech"]
     Backend --> Gemini["Gemini visual + Live models"]
     Backend --> STT["Google Cloud Speech-to-Text"]
+    Backend -->|"Deep Research only"| Exa["Exa public web search"]
     Backend --> Events["SQLite event store + in-memory history projection"]
     Extension -->|"Open Memory Dashboard"| Dashboard["React Memory dashboard"]
     Dashboard -->|"bounded REST /api"| Backend
@@ -47,10 +50,49 @@ Automatic narration follows a fail-closed sequence:
 2. Reject stale, unsupported, repeated, or self-referential output.
 3. Compare grounded visual facts with commentary only to suppress redundancy.
 4. Persist and publish the accepted event to the current timeline.
-5. Offer that event to speech only after persistence succeeds.
+5. Let the side panel deduplicate and insert the published event, then offer its
+   exact recorded description to Chrome/OS text-to-speech.
 
-Typed and microphone questions use Gemini Live and can interrupt narration.
+Automatic timeline speech is owned by the extension's `chrome.tts` client, not
+Gemini Live. The required Manifest V3 permission is `tts`, never `ttsEngine`;
+the extension consumes installed Chrome/OS voices rather than providing an
+engine. Timeline TTS prefers the lifecycle-capable English voices Alex, then
+Samantha, then deterministic compatible English fallbacks. Every automatic
+utterance supplies `en-US`, rate `0.9`, and pitch `0.9`; failed voice discovery
+falls back to Chrome selection with those profile values. The side panel's
+separate Voice narration preference controls only client-side timing and local
+tab gain. Smart waits for 750 milliseconds of continuous silence from the
+existing local tab-activity detector. Narrate over audio speaks immediately and
+lowers only local tab playback to 40 percent from the Chrome TTS start event to
+its terminal event. Narration only uses the same event-driven speech path while
+keeping local tab playback muted for the capture session. Captured-tab PCM still
+flows to its separate transcription path in every mode. The Narration level
+preference remains responsible for description detail, and its Question only
+value suppresses Chrome timeline TTS without suppressing timeline events.
+
+Typed and microphone questions use Gemini Live and interrupt Chrome timeline
+TTS before question admission. Gemini Live continues to own questions, answers,
+and the existing Deep Research voice path, but never synthesizes automatic
+timeline events. The fixed Chrome TTS voice profile does not change Gemini
+Live's answer voice. Gemini Live or Cloud Speech-to-Text availability is
+therefore not a gate for timeline TTS; Smart depends only on local tab activity.
 Captured-tab audio is never presented as user speech.
+
+Normal and Deep Research share one visible chat but have separate generation
+paths. The selected mode is snapshotted per admitted question. Normal uses the
+session's conversational Gemini Live path. Deep Research uses non-live
+Gemini Interactions to resolve the query, Exa retrieves public passages, a second
+Interaction produces the final cited answer, then the persistent Gemini Live
+connection immediately speaks the concise answer body without its inline
+citations or linked sources. The backend appends the readable source list
+deterministically and streams strict progress events to the side panel
+throughout. The Live connection remains open and resumes when
+Normal is selected, preserving the Live context from before the research turn.
+The search query, plan, sources, and answer remain
+session-only and do not enter dashboard history or MongoDB.
+Completed research turns retain only a bounded summary cache for the manual
+debug replay button. That explicit action creates a separate Live audio turn,
+suppresses its output transcript, and clears with the browser session.
 
 ## Memory dashboard
 
@@ -100,11 +142,13 @@ remain the keyboard and screen-reader equivalent.
 | Data | Current store | Lifetime and ownership |
 | --- | --- | --- |
 | Realtime accepted events | SQLite event store | Backend-local event evidence. |
+| Semantic event copies | MongoDB `events` vector index | Best-effort, session-scoped context for Live typed prompts; not canonical dashboard history. |
 | Dashboard session/history projection | In-memory repository | Lost on backend restart; demo mode is deterministic. |
 | Dashboard profile | MongoDB Atlas `dashboard_accounts` | Primary cloud persistence for account UUID, display name, normalized email, preferences, and timestamps; local Docker is an optional offline substitute. |
 | Browser profile state | Local storage | Opaque account UUID only. |
 | Raw mic/tab audio | Not stored | Streamed for processing and discarded. |
 | Captured-tab transcript context | Bounded memory | Cleared with the live session. |
+| Deep Research query, sources, answer, and voice summary | Bounded request/session memory | Search and composition use non-live requests; the summary is spoken by Live and discarded with the session. Never archived or stored in MongoDB. |
 
 The current account route is a prototype profile, not authentication. Signing
 out forgets the local UUID but does not delete the Atlas record. The Atlas
