@@ -10,7 +10,6 @@ import { parseAudioPacket, AudioSequenceGuard } from "../protocol/audioPackets.j
 import { parseBrowserMessage, parseServerOutput, PROTOCOL_VERSION } from "../protocol/browserMessages.js";
 import { VoiceNarrationMode } from "../protocol/voiceNarrationMode.js";
 import { SessionRateLimiter } from "../protocol/sessionRateLimiter.js";
-import { buildModeNarrationCandidate } from "./narrationCandidate.js";
 import { SpeechPolicy } from "./speechPolicy.js";
 import { GoogleSpeechTranscriber } from "../stt/googleSpeechTranscriber.js";
 import { TabTranscriptBuffer } from "../transcript/tabTranscriptBuffer.js";
@@ -1160,18 +1159,6 @@ export class ClientSession {
         };
       }
     }
-    const narrationCandidate = buildModeNarrationCandidate({
-      voiceNarrationMode: this.voiceNarrationMode,
-      narrationLevel: this.narrationLevel,
-      offerCandidate,
-      persistenceStatus: persistenceResult.status,
-      recordedEvent: persistenceResult.event,
-      analysis,
-      createdAtMs: this.voiceNarrationMode === VoiceNarrationMode.SMART
-        ? this.groundedSemanticState.originAcceptedAtMs ?? snapshot.acceptedAtMs
-        : snapshot.acceptedAtMs,
-    });
-    if (narrationCandidate) this.handleNarrationCandidate(narrationCandidate);
   }
 
   recordNarrationEvent(description, initial, timestampSeconds) {
