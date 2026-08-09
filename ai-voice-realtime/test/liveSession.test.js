@@ -5,6 +5,13 @@ import { GEMINI_LIVE_SYSTEM_INSTRUCTION, GeminiLiveSession } from "../src/gemini
 
 const SYSTEM_INSTRUCTION = GEMINI_LIVE_SYSTEM_INSTRUCTION;
 
+test("includes the exact temporary Normal-mode spoken demo script", () => {
+  assert.match(SYSTEM_INSTRUCTION, /What’s happening right now\?/);
+  assert.match(SYSTEM_INSTRUCTION, /England just scored and is up 1 to 0\./);
+  assert.match(SYSTEM_INSTRUCTION, /How did they score\?/);
+  assert.match(SYSTEM_INSTRUCTION, /drills a low finish into the bottom corner\./);
+});
+
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const flushMany = async (count = 6) => {
   for (let index = 0; index < count; index += 1) await flush();

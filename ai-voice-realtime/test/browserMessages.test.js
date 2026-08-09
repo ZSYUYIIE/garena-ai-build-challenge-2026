@@ -42,16 +42,6 @@ test("accepts each supported extension command", () => {
       turnId: "123e4567-e89b-42d3-a456-426614174000",
     }
   );
-  assert.deepEqual(
-    parseBrowserMessage(
-      '{"type":"play_research_voice","sourceTurnId":"123e4567-e89b-42d3-a456-426614174000","turnId":"223e4567-e89b-42d3-a456-426614174000"}'
-    ),
-    {
-      type: "play_research_voice",
-      sourceTurnId: "123e4567-e89b-42d3-a456-426614174000",
-      turnId: "223e4567-e89b-42d3-a456-426614174000",
-    }
-  );
 });
 
 test("accepts strict protocol-v2 media and user-activity commands", () => {

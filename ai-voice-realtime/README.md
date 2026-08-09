@@ -137,7 +137,12 @@ running while using the extension.
 Both answer modes share one visible chat, and the extension sends the selected
 mode as session configuration. The backend snapshots that mode when a typed or
 microphone turn is admitted. Normal mode follows the existing persistent Gemini
-Live session. Deep Research does not ask Live to generate its answer: it uses
+Live session. For the current temporary FIFA demo, Normal mode recognizes
+“What’s happening right now?” and “How did they score?” and returns the two
+scripted England-versus-France answers. Typed matches are emitted verbatim and
+sent to Gemini Live for exact voice rendering; spoken matches are enforced by
+the Live system instruction. Other Normal questions retain the existing Live
+behavior. Deep Research does not ask Live to generate its answer: it uses
 non-live Gemini Interactions to resolve the query, Exa to retrieve
 public sources, and Gemini Interactions to produce the final cited answer. The
 backend appends a deterministic linked source list, then immediately asks the
@@ -146,11 +151,14 @@ citations and linked sources are excluded from speech. Spoken deep questions
 are transcribed through the same non-live path.
 The Live connection stays open and resumes its existing Normal-mode context
 when Normal is selected again.
-For playback diagnosis, the side panel can replay the bounded, session-cached
-research summary through Gemini Live. This manual turn emits audio without
-another chat answer and the cache is cleared at close.
 Queries, progress, results, and answers are not written to MongoDB or the
 history repository by this flow.
+
+For the temporary FIFA judge demo, the Deep Research questions “Who is number
+4 on England?” and its World Cup 2026 variant emit the normal staged progress
+but return a deterministic Declan Rice answer and five linked sources without
+calling Exa or Gemini Interactions. Automatic Gemini Live reading still uses
+only the answer body. Other Deep Research questions retain the real pipeline.
 
 Normal package startup and the root `dev:realtime` profile create an empty
 `MemoryHistoryRepository`. The root `dev` and `dev:dashboard` profiles instead

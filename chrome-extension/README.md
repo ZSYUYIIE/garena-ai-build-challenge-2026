@@ -130,10 +130,6 @@ animation and completed steps transition to checkmarks. The concise researched t
 list in the same chat. Non-live Gemini text-to-speech speaks only the answer
 body, not citations or source links; Gemini Live does not generate the Deep
 Research answer. Selecting Normal resumes the existing Live session.
-Each completed researched answer also exposes a manual **Debug: Play with
-Gemini Live** control. Pressing it reads the session-cached concise answer over
-the existing Live connection, suppresses the duplicate transcript, and does
-not rerun or persist the research.
 Deep Research requires `EXA_API_KEY` on the backend and stores no search state
 in the extension or database.
 

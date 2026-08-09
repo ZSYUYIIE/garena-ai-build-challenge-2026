@@ -110,7 +110,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [messages, setMessages] = useState<RealtimeChatMessage[]>([]);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>("off");
-  const [tabContextStatus, setTabContextStatus] = useState<"absent" | "connecting" | "ready" | "degraded">("absent");
+  const [, setTabContextStatus] = useState<"absent" | "connecting" | "ready" | "degraded">("absent");
   const [liveProviderState, setLiveProviderState] = useState<LiveProviderState>("closed");
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [researchMode, setResearchModeState] = useState<ResearchMode>("normal");
@@ -869,37 +869,6 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     );
   }, [publishVoiceStatus, settleTurnComplete]);
 
-  const playResearchVoice = useCallback((sourceTurnId: string) => {
-    const websocket = websocketRef.current;
-    const coordinator = speechCoordinatorRef.current;
-    if (
-      !websocket
-      || websocket.readyState !== WebSocket.OPEN
-      || !coordinator
-      || !canAskRealtime(
-        statusRef.current,
-        voiceStateRef.current.helloAccepted,
-        liveProviderStateRef.current,
-      )
-    ) return false;
-    const turnId = crypto.randomUUID();
-    activeTurnRef.current = createTurnRoleState(turnId, {
-      userFinished: true,
-      assistantFinished: true,
-    });
-    settlingTurnRef.current = null;
-    if (settlingTurnTimerRef.current !== null) {
-      window.clearTimeout(settlingTurnTimerRef.current);
-      settlingTurnTimerRef.current = null;
-    }
-    coordinator.typedQuestionStarted(turnId);
-    setError(null);
-    speakingTurnIdRef.current = null;
-    publishVoiceStatus({ geminiSpeaking: false });
-    websocket.send(JSON.stringify({ type: "play_research_voice", sourceTurnId, turnId }));
-    return true;
-  }, [publishVoiceStatus]);
-
   const setResearchMode = useCallback((mode: ResearchMode) => {
     researchModeRef.current = mode;
     setResearchModeState(mode);
@@ -994,7 +963,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   const microphoneState = voiceStateRef.current.microphoneState;
 
   return {
-    status, statusText, error, description, events, messages, voiceStatus, tabContextStatus,
+    status, statusText, error, description, events, messages, voiceStatus,
     researchMode, researchProgress,
     microphoneState, activeSessionId,
     isRunning: isRealtimeSessionRunning(status),
@@ -1004,7 +973,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
     canEnableVoice: microphoneState === "denied" || microphoneState === "degraded",
     canStartVoice: questionAvailability === "ready" && microphoneState === "ready",
     questionAvailability,
-    start, stop, ask, playResearchVoice, enableVoice, startVoiceQuestion, stopVoiceQuestion, setResearchMode,
+    start, stop, ask, enableVoice, startVoiceQuestion, stopVoiceQuestion, setResearchMode,
   };
 }
 

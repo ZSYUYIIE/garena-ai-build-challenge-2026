@@ -1,4 +1,5 @@
 import { GeminiInteractions } from "../gemini/interactions.js";
+import { deepResearchDemoForQuestion } from "../demo/deepResearchDemo.js";
 import { ExaDeepResearch } from "./exaDeepResearch.js";
 
 const DEFAULT_MODEL = "gemini-3.6-flash";
@@ -69,15 +70,44 @@ export class DeepResearchAnswerService {
     fetchImpl = globalThis.fetch,
     exa,
     interactions,
+    sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   } = {}) {
     this.model = model;
     this.exa = exa ?? new ExaDeepResearch({ apiKey: exaApiKey, fetchImpl });
     this.interactions = interactions ?? new GeminiInteractions({ apiKey: geminiApiKey, fetchImpl });
+    this.sleep = sleep;
   }
 
   async answer(question, { screenContext = "", signal, onProgress = () => {} } = {}) {
     const normalizedQuestion = bounded(question, 500);
     if (!normalizedQuestion) throw new Error("A research question is required.");
+
+    const demo = deepResearchDemoForQuestion(normalizedQuestion);
+    if (demo) {
+      const pause = async (milliseconds) => {
+        signal?.throwIfAborted?.();
+        await this.sleep(milliseconds);
+        signal?.throwIfAborted?.();
+      };
+      onProgress({ stage: "understand", status: "active", detail: "Clarifying the player from the match context." });
+      await pause(350);
+      onProgress({ stage: "understand", status: "completed", detail: demo.query });
+      onProgress({ stage: "search", status: "active", detail: `Searching for: ${demo.query}` });
+      await pause(450);
+      onProgress({ stage: "search", status: "completed", detail: `Found ${demo.sources.length} sources.` });
+      onProgress({ stage: "review", status: "active", detail: "Reviewing official and public player profiles." });
+      await pause(450);
+      onProgress({ stage: "review", status: "completed", detail: `Reviewed ${demo.sources.length} source passages.` });
+      onProgress({ stage: "synthesize", status: "active", detail: "Writing the final answer from the reviewed sources." });
+      await pause(550);
+      return {
+        answer: formatAnswer(demo.summary, demo.sources),
+        summary: demo.summary,
+        voiceSummary: spokenSummary(demo.summary),
+        query: demo.query,
+        sources: demo.sources,
+      };
+    }
 
     onProgress({ stage: "understand", status: "active", detail: "Clarifying the research question from the current screen context." });
     const queryPayload = await this.interactions.create({

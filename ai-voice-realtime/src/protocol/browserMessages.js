@@ -141,13 +141,6 @@ const browserMessageSchema = z.discriminatedUnion("type", [
     .strict(),
   z
     .object({
-      type: z.literal("play_research_voice"),
-      sourceTurnId: z.string().uuid(),
-      turnId: z.string().uuid(),
-    })
-    .strict(),
-  z
-    .object({
       type: z.literal("session_hello"),
       protocolVersion: z.literal(PROTOCOL_VERSION),
       tabAudioState,

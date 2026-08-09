@@ -509,6 +509,52 @@ test("uses Live once for typed text and preserves attributed transcript chunks",
   assert.equal(fixture.browser.messages.some((message) => message.type === "turn_complete" && message.turnId === turnId && message.retryable === false), true);
 });
 
+test("delivers and voices the exact temporary Normal-mode demo answers without invoking conversational Live", async (t) => {
+  let now = 0;
+  const live = new FakeLiveSession();
+  const fixture = createFixture({ liveSessionFactory: () => live, now: () => now });
+  t.after(() => fixture.eventStore.close());
+  await fixture.session.start();
+  hello(fixture, "absent");
+  const turnId = "34343434-3434-4434-8434-343434343434";
+
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "typed_question",
+    turnId,
+    text: "What's happening right now?",
+  })), false);
+
+  assert.deepEqual(live.typedQuestions, []);
+  assert.deepEqual(live.researchVoices, [{
+    turnId,
+    text: "You're watching highlights from the FIFA World Cup between France and England. England just scored and is up 1 to 0.",
+  }]);
+  assert.equal(
+    fixture.browser.messages.find((message) => message.type === "answer_update")?.text,
+    "You're watching highlights from the FIFA World Cup between France and England. England just scored and is up 1 to 0.",
+  );
+
+  live.callbacks.onTurnComplete({ turnId, mode: "answer" });
+  now = 2_001;
+  const followUpTurnId = "45454545-4545-4545-8545-454545454545";
+  fixture.browser.emit("message", Buffer.from(JSON.stringify({
+    type: "typed_question",
+    turnId: followUpTurnId,
+    text: "How did they score?",
+  })), false);
+
+  assert.deepEqual(live.researchVoices.at(-1), {
+    turnId: followUpTurnId,
+    text: "A loose French pass in midfield is cut out by England’s number four. He carries the ball straight through the middle, reaches the edge of the box, and drills a low finish into the bottom corner.",
+  });
+  assert.equal(
+    fixture.browser.messages.find((message) => (
+      message.type === "answer_update" && message.turnId === followUpTurnId
+    ))?.text,
+    "A loose French pass in midfield is cut out by England’s number four. He carries the ball straight through the middle, reaches the edge of the box, and drills a low finish into the bottom corner.",
+  );
+});
+
 test("Deep Research composes outside Live, then automatically speaks the final summary through Live", async (t) => {
   let now = 0;
   const live = new FakeLiveSession();
@@ -535,12 +581,12 @@ test("Deep Research composes outside Live, then automatically speaks the final s
   })), false);
   const deepTurnId = "30303030-3030-4030-8030-303030303030";
   fixture.browser.emit("message", Buffer.from(JSON.stringify({
-    type: "typed_question", turnId: deepTurnId, text: "Research this topic",
+    type: "typed_question", turnId: deepTurnId, text: "Who is World Cup 2026 number 4 on England?",
   })), false);
   await flushAsyncWork();
   await flushAsyncWork();
 
-  assert.deepEqual(researchCalls, ["Research this topic"]);
+  assert.deepEqual(researchCalls, ["Who is World Cup 2026 number 4 on England?"]);
   assert.deepEqual(live.typedQuestions, []);
   assert.deepEqual(fixture.browser.messages.find((message) => (
     message.type === "answer_update" && message.turnId === deepTurnId
@@ -570,24 +616,6 @@ test("Deep Research composes outside Live, then automatically speaks the final s
   )), true);
   assert.equal(fixture.browser.messages.some((message) => (
     message.type === "turn_complete" && message.turnId === deepTurnId && message.retryable === false
-  )), true);
-
-  const replayTurnId = "35353535-3535-4535-8535-353535353535";
-  fixture.browser.emit("message", Buffer.from(JSON.stringify({
-    type: "play_research_voice", sourceTurnId: deepTurnId, turnId: replayTurnId,
-  })), false);
-  assert.deepEqual(live.researchVoices.at(-1), {
-    turnId: replayTurnId,
-    text: "Final researched answer with citation.",
-  });
-  live.callbacks.onOutputTranscript({ turnId: replayTurnId, text: "duplicate transcript", finished: true });
-  live.callbacks.onAudio({ turnId: replayTurnId, data: "AQI=", mimeType: "audio/pcm;rate=24000" });
-  live.callbacks.onTurnComplete({ turnId: replayTurnId });
-  assert.equal(fixture.browser.messages.some((message) => (
-    message.type === "answer_update" && message.turnId === replayTurnId
-  )), false);
-  assert.equal(fixture.browser.messages.some((message) => (
-    message.type === "model_audio" && message.turnId === replayTurnId
   )), true);
 
   now = 3_000;

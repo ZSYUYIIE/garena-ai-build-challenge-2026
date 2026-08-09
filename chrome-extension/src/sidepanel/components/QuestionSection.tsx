@@ -22,17 +22,14 @@ export type ChatMessage = {
 type QuestionSectionProps = {
   messages: ChatMessage[];
   onAsk: (question: string) => boolean;
-  onPlayResearchVoice: (sourceTurnId: string) => boolean;
   onEnableVoice: () => boolean;
   onStartVoice: () => boolean;
   onStopVoice: () => boolean;
   canEnableVoice: boolean;
   canStartVoice: boolean;
   questionAvailability: QuestionAvailability;
-  canPlayResearchVoice: boolean;
   voiceStatus?: VoiceStatus;
   microphoneState?: MicrophoneState;
-  tabContextStatus?: "absent" | "connecting" | "ready" | "degraded";
   researchMode: ResearchMode;
   researchProgress: ResearchProgress[];
   onResearchModeChange: (mode: ResearchMode) => void;
@@ -41,17 +38,14 @@ type QuestionSectionProps = {
 export function QuestionSection({
   messages,
   onAsk,
-  onPlayResearchVoice,
   onEnableVoice,
   onStartVoice,
   onStopVoice,
   canEnableVoice,
   canStartVoice,
   questionAvailability,
-  canPlayResearchVoice,
   voiceStatus = "off",
   microphoneState = "pending",
-  tabContextStatus = "absent",
   researchMode,
   researchProgress,
   onResearchModeChange,
@@ -139,7 +133,6 @@ export function QuestionSection({
         voiceStatus={voiceStatus}
         microphoneState={microphoneState}
         questionAvailability={questionAvailability}
-        tabContextStatus={tabContextStatus}
         canEnableVoice={canEnableVoice}
         onEnableVoice={onEnableVoice}
       />
@@ -147,8 +140,6 @@ export function QuestionSection({
       <ChatHistory
         messages={messages}
         researchProgress={researchProgress}
-        canPlayResearchVoice={canPlayResearchVoice}
-        onPlayResearchVoice={onPlayResearchVoice}
       />
 
       <div className="flex shrink-0 items-center gap-2">
@@ -196,18 +187,14 @@ function VoiceStatusLine({
   voiceStatus,
   microphoneState,
   questionAvailability,
-  tabContextStatus,
   canEnableVoice,
   onEnableVoice,
-}: Pick<QuestionSectionProps, "voiceStatus" | "microphoneState" | "questionAvailability" | "tabContextStatus" | "canEnableVoice" | "onEnableVoice">) {
+}: Pick<QuestionSectionProps, "voiceStatus" | "microphoneState" | "questionAvailability" | "canEnableVoice" | "onEnableVoice">) {
   const voiceText = voiceQuestionStatusFor(
     voiceStatus ?? "off",
     questionAvailability,
     microphoneState,
   );
-  const tabText = tabContextStatus === "connecting" || tabContextStatus === "degraded"
-    ? "Tab speech context unavailable — automatic narration paused"
-    : null;
   return (
     <div className="min-h-5 text-xs text-muted-foreground">
       <div aria-live="polite">
@@ -224,7 +211,6 @@ function VoiceStatusLine({
             : "Retry microphone"}
         </button>
       ) : null}
-      {tabText ? <p>{tabText}</p> : null}
     </div>
   );
 }
@@ -252,13 +238,9 @@ function ModeTab({ selected, disabled, onClick, children }: {
 function ChatHistory({
   messages,
   researchProgress,
-  canPlayResearchVoice,
-  onPlayResearchVoice,
 }: {
   messages: ChatMessage[];
   researchProgress: ResearchProgress[];
-  canPlayResearchVoice: boolean;
-  onPlayResearchVoice: (sourceTurnId: string) => boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -281,12 +263,7 @@ function ChatHistory({
         message.role === "user" ? (
           <ChatRequest key={message.id} text={message.text} />
         ) : (
-          <ChatResponse
-            key={message.id}
-            text={message.text}
-            canPlayResearchVoice={canPlayResearchVoice}
-            onPlayResearchVoice={() => onPlayResearchVoice(message.id.split(":", 1)[0])}
-          />
+          <ChatResponse key={message.id} text={message.text} />
         ),
       )}
       <ResearchPipeline progress={researchProgress} />
@@ -367,15 +344,7 @@ function ChatRequest({ text }: { text: string }) {
   return <p className="max-w-10/12 text-sm text-muted-foreground">{text}</p>;
 }
 
-function ChatResponse({
-  text,
-  canPlayResearchVoice,
-  onPlayResearchVoice,
-}: {
-  text: string;
-  canPlayResearchVoice: boolean;
-  onPlayResearchVoice: () => void;
-}) {
+function ChatResponse({ text }: { text: string }) {
   const answer = parseResearchAnswer(text);
   return (
     <article className="max-w-10/12 self-end rounded-lg border border-border bg-card px-3 py-2.5 text-sm">
@@ -383,7 +352,6 @@ function ChatResponse({
         {answer.paragraphs.map((paragraph, index) => <p key={`${index}-${paragraph}`}>{paragraph}</p>)}
       </div>
       {answer.sources.length > 0 ? (
-        <>
         <section aria-label="Research sources" className="mt-3 border-t border-border pt-2.5">
           <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sources</h4>
           <ol className="space-y-1.5 pl-5 text-xs text-muted-foreground">
@@ -401,27 +369,8 @@ function ChatResponse({
             ))}
           </ol>
         </section>
-        <button
-          type="button"
-          disabled={!canPlayResearchVoice}
-          onClick={onPlayResearchVoice}
-          className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <SpeakerIcon />
-          Debug: Play with Gemini Live
-        </button>
-        </>
       ) : null}
     </article>
-  );
-}
-
-function SpeakerIcon() {
-  return (
-    <svg viewBox="0 0 20 20" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-      <path d="M3 8h3l4-3v10l-4-3H3z" strokeLinejoin="round" />
-      <path d="M13 7a4 4 0 0 1 0 6M15 5a7 7 0 0 1 0 10" strokeLinecap="round" />
-    </svg>
   );
 }
 

@@ -39,11 +39,6 @@ function StreamSensePanel() {
     [session.ask],
   );
 
-  const handlePlayResearchVoice = useCallback(
-    (sourceTurnId: string) => session.playResearchVoice(sourceTurnId),
-    [session.playResearchVoice],
-  );
-
   const handleEnableVoice = useCallback(
     () => session.enableVoice(),
     [session.enableVoice],
@@ -89,17 +84,14 @@ function StreamSensePanel() {
         <QuestionSection
           messages={session.messages}
           onAsk={handleAsk}
-          onPlayResearchVoice={handlePlayResearchVoice}
           onEnableVoice={handleEnableVoice}
           onStartVoice={handleStartVoice}
           onStopVoice={handleStopVoice}
           canEnableVoice={session.canEnableVoice}
           canStartVoice={session.canStartVoice}
           questionAvailability={session.questionAvailability}
-          canPlayResearchVoice={session.questionAvailability === "ready" && session.voiceStatus !== "gemini_speaking"}
           voiceStatus={session.voiceStatus}
           microphoneState={session.microphoneState}
-          tabContextStatus={session.tabContextStatus}
           researchMode={session.researchMode}
           researchProgress={session.researchProgress}
           onResearchModeChange={session.setResearchMode}

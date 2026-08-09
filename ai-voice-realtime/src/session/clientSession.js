@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 
+import { normalDemoAnswerForQuestion } from "../demo/normalDemoScript.js";
 import { eventCandidateSchema, formatTimestamp, normalizeTimestampSeconds, summarizeValidationError } from "../events/eventSchema.js";
 import { analyzeVisionFrame } from "../gemini/vision.js";
 import { GroundedVisibleStateCache, validateEventEvidence } from "../gemini/visualState.js";
@@ -19,7 +20,6 @@ const LIVE_FRAME_INTERVAL_MS = 1_000;
 const ANALYSIS_RETRY_DELAY_MS = 1_000;
 const MAX_TAB_PACKET_GAP_MS = 500;
 const MAX_COMPLETED_TURNS = 256;
-const MAX_RESEARCH_VOICE_SUMMARIES = 8;
 const MAX_DEEP_MICROPHONE_BYTES = 16_000 * 2 * 60;
 
 const NarrationLevel = Object.freeze({
@@ -140,7 +140,6 @@ export class ClientSession {
     this.captureSource = "camera";
     this.narrationLevel = NarrationLevel.STANDARD;
     this.researchMode = "normal";
-    this.researchVoiceSummaries = new Map();
     this.latestTimestampSeconds = 0;
     this.latestFrame = null;
     this.videoFrames = 0;
@@ -232,8 +231,6 @@ export class ClientSession {
           source: "typed",
           text: message.text,
         });
-      case "play_research_voice":
-        return this.beginResearchVoiceTurn(message);
       case "user_activity_start":
         return this.beginAnswerTurn({
           turnId: message.turnId,
@@ -482,6 +479,14 @@ export class ClientSession {
       this.scheduleSpeechPolicyWake();
       return;
     }
+    const scriptedAnswer = source === "typed"
+      ? normalDemoAnswerForQuestion(text)
+      : null;
+    if (scriptedAnswer) {
+      this.deliverNormalDemoAnswer(turn, scriptedAnswer);
+      this.scheduleSpeechPolicyWake();
+      return;
+    }
     if (!this.live || this.liveHealth !== "ready") {
       return this.completeSpeechTurn(turn, {
         interrupted: true,
@@ -497,35 +502,29 @@ export class ClientSession {
     this.scheduleSpeechPolicyWake();
   }
 
-  beginResearchVoiceTurn({ turnId, sourceTurnId }) {
-    if (this.completedTurnIds.has(turnId) || this.activeSpeechTurn?.turnId === turnId) {
-      return this.protocolViolation("turnId has already been used");
-    }
-    const summary = this.researchVoiceSummaries.get(sourceTurnId);
-    this.userTurnEpoch += 1;
-    if (this.activeSpeechTurn) this.discardSpeechTurn(this.activeSpeechTurn, "barge_in");
-    this.applySpeechActions(this.speechPolicy.startUserTurn?.(turnId) ?? []);
-    const turn = {
-      turnId,
+  deliverNormalDemoAnswer(turn, answer) {
+    this.sendBrowser({
+      type: "answer_update",
+      turnId: turn.turnId,
       mode: "answer",
-      source: "research_voice",
-      researchMode: "normal",
-      suppressInputTranscript: true,
-      suppressOutputTranscript: true,
-      openActivity: false,
-      completed: false,
-    };
-    this.activeSpeechTurn = turn;
-    this.sendBrowser({ type: "turn_started", turnId, mode: "answer" });
-    if (!summary || !this.live || this.liveHealth !== "ready" || typeof this.live.speakResearchVoice !== "function") {
-      return this.completeSpeechTurn(turn, { interrupted: true, retryable: true });
+      text: answer,
+      finished: true,
+    });
+    turn.suppressInputTranscript = true;
+    turn.suppressOutputTranscript = true;
+    if (
+      !this.live
+      || this.liveHealth !== "ready"
+      || typeof this.live.speakResearchVoice !== "function"
+    ) {
+      this.completeSpeechTurn(turn, { retryable: false });
+      return;
     }
     try {
-      this.live.speakResearchVoice(turnId, summary);
+      this.live.speakResearchVoice(turn.turnId, answer);
     } catch {
-      this.completeSpeechTurn(turn, { interrupted: true, retryable: true });
+      this.completeSpeechTurn(turn, { retryable: false });
     }
-    this.scheduleSpeechPolicyWake();
   }
 
   async finishDeepMicrophoneTurn(turn) {
@@ -570,11 +569,6 @@ export class ClientSession {
       const voiceSummary = result.voiceSummary
         ?? result.summary
         ?? result.answer.split(/\n\s*##\s+Sources\b/i)[0].trim();
-      this.researchVoiceSummaries.delete(turn.turnId);
-      this.researchVoiceSummaries.set(turn.turnId, voiceSummary);
-      while (this.researchVoiceSummaries.size > MAX_RESEARCH_VOICE_SUMMARIES) {
-        this.researchVoiceSummaries.delete(this.researchVoiceSummaries.keys().next().value);
-      }
       this.sendBrowser({ type: "answer_update", turnId: turn.turnId, mode: "answer", text: result.answer, finished: true });
       turn.suppressInputTranscript = true;
       turn.suppressOutputTranscript = true;
@@ -1420,7 +1414,6 @@ export class ClientSession {
     this.activeAtomicAnalysis = null;
     this.lastTabPacketTimestampMs = null;
     this.completedTurnIds.clear();
-    this.researchVoiceSummaries.clear();
     this.visibleStateCache.clear();
     this.tabTranscriptBuffer.clear?.();
     this.audioSequenceGuard.reset?.();

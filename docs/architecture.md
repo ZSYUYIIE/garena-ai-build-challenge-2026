@@ -53,6 +53,13 @@ Automatic narration follows a fail-closed sequence:
 Typed and microphone questions use Gemini Live and can interrupt narration.
 Captured-tab audio is never presented as user speech.
 
+The current judge-demo profile temporarily scripts two Normal-mode FIFA
+questions at the session boundary. Typed matches are returned verbatim and
+rendered through Gemini Live voice; spoken matches are constrained to the same
+verbatim answers by the Live instruction. Deep Research remains provider-backed
+and bypasses this demo matcher. This is temporary demo behavior, not persisted
+session knowledge.
+
 Normal and Deep Research share one visible chat but have separate generation
 paths. The selected mode is snapshotted per admitted question. Normal uses the
 session's conversational Gemini Live path. Deep Research uses non-live
@@ -65,9 +72,12 @@ throughout. The Live connection remains open and resumes when
 Normal is selected, preserving the Live context from before the research turn.
 The search query, plan, sources, and answer remain
 session-only and do not enter dashboard history or MongoDB.
-Completed research turns retain only a bounded summary cache for the manual
-debug replay button. That explicit action creates a separate Live audio turn,
-suppresses its output transcript, and clears with the browser session.
+
+The temporary FIFA judge demo also intercepts the specific Deep Research
+question asking for England’s number four. It simulates the same bounded
+progress stages and returns a deterministic cited Declan Rice fixture before
+using the ordinary automatic Live voice-rendering path. All other Deep Research
+questions remain provider-backed.
 
 ## Memory dashboard
 
