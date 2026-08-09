@@ -144,6 +144,12 @@
     @apply font-sans;
   }
 }
+
+@media (max-height: 760px) {
+  .compact-optional {
+    display: none;
+  }
+}
 @layer base {
   h1 {
     font-size: 2rem;

@@ -72,11 +72,11 @@ test("provides reason-aware question copy", () => {
   );
   assert.equal(
     voiceQuestionStatusFor("degraded", "ready", "denied"),
-    "Microphone permission denied — allow access, then select the microphone",
+    "Microphone access is blocked. Allow access to enable voice questions.",
   );
   assert.equal(
     voiceQuestionStatusFor("degraded", "ready", "degraded"),
-    "Microphone unavailable — select the microphone to retry",
+    "Microphone unavailable. Retry after selecting a working input device.",
   );
   assert.equal(
     voiceQuestionStatusFor("degraded", "degraded"),

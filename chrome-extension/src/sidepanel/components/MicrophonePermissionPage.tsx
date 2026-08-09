@@ -56,9 +56,15 @@ export function MicrophonePermissionPage() {
         </p>
       ) : null}
       {state === "denied" ? (
-        <p className="text-sm text-destructive">
-          Chrome still blocked access. Enable Chrome in macOS Privacy &amp; Security → Microphone, then try again.
-        </p>
+        <div className="space-y-2 text-sm text-destructive">
+          <p>Chrome still blocked StreamSense from using the microphone.</p>
+          <p>
+            Open <strong>chrome://settings/content/microphone</strong>, allow sites
+            to ask for microphone access, remove StreamSense from the blocked
+            list, and then press Allow microphone again. On macOS, also enable
+            Chrome in Privacy &amp; Security → Microphone.
+          </p>
+        </div>
       ) : null}
       {state === "unavailable" ? (
         <p className="text-sm text-destructive">

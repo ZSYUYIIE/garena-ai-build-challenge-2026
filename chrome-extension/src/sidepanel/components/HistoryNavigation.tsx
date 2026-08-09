@@ -25,7 +25,7 @@ export function HistoryNavigation({ activeSessionId }: HistoryNavigationProps) {
       <Button
         type="button"
         onPress={() => { void handleOpenHistory(); }}
-        className="h-auto min-h-14 w-full justify-between gap-3 whitespace-normal px-3 py-2.5 text-left"
+        className="h-auto min-h-11 w-full justify-between gap-3 whitespace-normal px-3 py-2 text-left"
       >
         <span className="flex min-w-0 items-start gap-2.5">
           <LayoutDashboard
@@ -35,7 +35,7 @@ export function HistoryNavigation({ activeSessionId }: HistoryNavigationProps) {
           />
           <span className="min-w-0">
             <span className="block font-semibold">Open Memory Dashboard</span>
-            <span className="mt-0.5 block text-xs font-normal">
+            <span className="compact-optional mt-0.5 block text-xs font-normal">
               {activeSessionId
                 ? "Review this session’s memory in a new tab."
                 : "Review saved sessions in a new tab."}

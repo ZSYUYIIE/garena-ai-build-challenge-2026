@@ -12,12 +12,15 @@ import { SessionRateLimiter } from "../protocol/sessionRateLimiter.js";
 import { SpeechPolicy } from "./speechPolicy.js";
 import { GoogleSpeechTranscriber } from "../stt/googleSpeechTranscriber.js";
 import { TabTranscriptBuffer } from "../transcript/tabTranscriptBuffer.js";
+import { DeepResearchAnswerService } from "../research/deepResearchAnswerService.js";
 
 const OUTPUT_BUFFER_LIMIT_BYTES = 256 * 1024;
 const LIVE_FRAME_INTERVAL_MS = 1_000;
 const ANALYSIS_RETRY_DELAY_MS = 1_000;
 const MAX_TAB_PACKET_GAP_MS = 500;
 const MAX_COMPLETED_TURNS = 256;
+const MAX_RESEARCH_VOICE_SUMMARIES = 8;
+const MAX_DEEP_MICROPHONE_BYTES = 16_000 * 2 * 60;
 
 const NarrationLevel = Object.freeze({
   MINIMAL: "minimal",
@@ -78,6 +81,8 @@ export class ClientSession {
       getPromptContext = async () => [],
       onEmbeddingRetrieved,
       historyArchive,
+      exaApiKey = "",
+      deepResearch,
     } = {},
   ) {
     this.browser = browser;
@@ -112,6 +117,11 @@ export class ClientSession {
     this.transcriberFactory =
       transcriberFactory ?? ((options) => new GoogleSpeechTranscriber(options));
     this.historyArchive = historyArchive;
+    this.deepResearch = deepResearch ?? new DeepResearchAnswerService({
+      geminiApiKey: apiKey,
+      exaApiKey,
+      model,
+    });
 
     this.helloReceived = false;
     this.initialTabAudioState = null;
@@ -129,6 +139,8 @@ export class ClientSession {
     this.closePromise = null;
     this.captureSource = "camera";
     this.narrationLevel = NarrationLevel.STANDARD;
+    this.researchMode = "normal";
+    this.researchVoiceSummaries = new Map();
     this.latestTimestampSeconds = 0;
     this.latestFrame = null;
     this.videoFrames = 0;
@@ -204,6 +216,7 @@ export class ClientSession {
         return;
       case "session_config":
         this.narrationLevel = message.narrationLevel;
+        this.researchMode = message.researchMode;
         return;
       case "video_frame":
         this.sendVideo(
@@ -219,6 +232,8 @@ export class ClientSession {
           source: "typed",
           text: message.text,
         });
+      case "play_research_voice":
+        return this.beginResearchVoiceTurn(message);
       case "user_activity_start":
         return this.beginAnswerTurn({
           turnId: message.turnId,
@@ -236,7 +251,11 @@ export class ClientSession {
           );
         }
         this.activeSpeechTurn.openActivity = false;
-        this.live?.endUserActivity?.(message.turnId);
+        if (this.activeSpeechTurn.researchMode === "deep_research") {
+          void this.finishDeepMicrophoneTurn(this.activeSpeechTurn);
+        } else {
+          this.live?.endUserActivity?.(message.turnId);
+        }
         return;
       case "tab_audio_activity":
         return this.handleTabSpeech(message.active);
@@ -384,7 +403,19 @@ export class ClientSession {
       const rate = this.rateLimiter.accept("audio_microphone", this.now());
       if (!rate.allowed)
         return this.protocolViolation("microphone rate limit exceeded");
-      this.live?.sendMicrophonePcm?.(packet.pcm);
+      if (this.activeSpeechTurn.researchMode === "deep_research") {
+        const turn = this.activeSpeechTurn;
+        turn.microphoneBytes += packet.pcm.byteLength;
+        if (turn.microphoneBytes > MAX_DEEP_MICROPHONE_BYTES) {
+          this.discardSpeechTurn(turn, "microphone_failure", {
+            retryable: true,
+          });
+          return;
+        }
+        turn.microphoneChunks.push(Buffer.from(packet.pcm));
+      } else {
+        this.live?.sendMicrophonePcm?.(packet.pcm);
+      }
       return;
     }
     if (this.tabAudioState !== "captured") {
@@ -428,7 +459,12 @@ export class ClientSession {
       turnId,
       mode: "answer",
       source,
+      researchMode: this.researchMode,
       openActivity: source === "microphone",
+      microphoneChunks: [],
+      microphoneBytes: 0,
+      controller:
+        this.researchMode === "deep_research" ? new AbortController() : null,
       completed: false,
     };
     this.activeSpeechTurn = turn;
@@ -441,6 +477,11 @@ export class ClientSession {
         text,
         finished: true,
       });
+    if (turn.researchMode === "deep_research") {
+      if (source === "typed") void this.runDeepResearchTurn(turn, text);
+      this.scheduleSpeechPolicyWake();
+      return;
+    }
     if (!this.live || this.liveHealth !== "ready") {
       return this.completeSpeechTurn(turn, {
         interrupted: true,
@@ -454,6 +495,139 @@ export class ClientSession {
       this.completeSpeechTurn(turn, { interrupted: true, retryable: true });
     }
     this.scheduleSpeechPolicyWake();
+  }
+
+  beginResearchVoiceTurn({ turnId, sourceTurnId }) {
+    if (this.completedTurnIds.has(turnId) || this.activeSpeechTurn?.turnId === turnId) {
+      return this.protocolViolation("turnId has already been used");
+    }
+    const summary = this.researchVoiceSummaries.get(sourceTurnId);
+    this.userTurnEpoch += 1;
+    if (this.activeSpeechTurn) this.discardSpeechTurn(this.activeSpeechTurn, "barge_in");
+    this.applySpeechActions(this.speechPolicy.startUserTurn?.(turnId) ?? []);
+    const turn = {
+      turnId,
+      mode: "answer",
+      source: "research_voice",
+      researchMode: "normal",
+      suppressInputTranscript: true,
+      suppressOutputTranscript: true,
+      openActivity: false,
+      completed: false,
+    };
+    this.activeSpeechTurn = turn;
+    this.sendBrowser({ type: "turn_started", turnId, mode: "answer" });
+    if (!summary || !this.live || this.liveHealth !== "ready" || typeof this.live.speakResearchVoice !== "function") {
+      return this.completeSpeechTurn(turn, { interrupted: true, retryable: true });
+    }
+    try {
+      this.live.speakResearchVoice(turnId, summary);
+    } catch {
+      this.completeSpeechTurn(turn, { interrupted: true, retryable: true });
+    }
+    this.scheduleSpeechPolicyWake();
+  }
+
+  async finishDeepMicrophoneTurn(turn) {
+    if (this.activeSpeechTurn !== turn || turn.completed) return;
+    try {
+      turn.researchStage = "understand";
+      this.sendBrowser({
+        type: "research_progress",
+        turnId: turn.turnId,
+        stage: "understand",
+        status: "active",
+        detail: "Transcribing the spoken research question.",
+      });
+      const transcript = await this.deepResearch.transcribeMicrophone(
+        Buffer.concat(turn.microphoneChunks, turn.microphoneBytes),
+        { signal: turn.controller.signal },
+      );
+      if (this.activeSpeechTurn !== turn || turn.completed || turn.controller.signal.aborted) return;
+      turn.microphoneChunks = [];
+      turn.microphoneBytes = 0;
+      this.sendBrowser({ type: "user_transcript", turnId: turn.turnId, mode: "answer", text: transcript, finished: true });
+      await this.runDeepResearchTurn(turn, transcript);
+    } catch (error) {
+      this.failDeepResearchTurn(turn, error);
+    }
+  }
+
+  async runDeepResearchTurn(turn, question) {
+    if (this.activeSpeechTurn !== turn || turn.completed) return;
+    try {
+      const result = await this.deepResearch.answer(question, {
+        signal: turn.controller.signal,
+        screenContext: [this.lastGroundedDescription, this.getRecentTabTranscript()].filter(Boolean).join("\n"),
+        onProgress: (progress) => {
+          if (this.activeSpeechTurn === turn && !turn.completed) {
+            turn.researchStage = progress.stage;
+            this.sendBrowser({ type: "research_progress", turnId: turn.turnId, ...progress });
+          }
+        },
+      });
+      if (this.activeSpeechTurn !== turn || turn.completed || turn.controller.signal.aborted) return;
+      const voiceSummary = result.voiceSummary
+        ?? result.summary
+        ?? result.answer.split(/\n\s*##\s+Sources\b/i)[0].trim();
+      this.researchVoiceSummaries.delete(turn.turnId);
+      this.researchVoiceSummaries.set(turn.turnId, voiceSummary);
+      while (this.researchVoiceSummaries.size > MAX_RESEARCH_VOICE_SUMMARIES) {
+        this.researchVoiceSummaries.delete(this.researchVoiceSummaries.keys().next().value);
+      }
+      this.sendBrowser({ type: "answer_update", turnId: turn.turnId, mode: "answer", text: result.answer, finished: true });
+      turn.suppressInputTranscript = true;
+      turn.suppressOutputTranscript = true;
+      if (!this.live || this.liveHealth !== "ready" || typeof this.live.speakResearchVoice !== "function") {
+        this.sendBrowser({
+          type: "research_progress",
+          turnId: turn.turnId,
+          stage: "synthesize",
+          status: "completed",
+          detail: "Final answer delivered. Gemini Live voice is unavailable.",
+        });
+        this.completeSpeechTurn(turn, { retryable: false });
+        return;
+      }
+      turn.liveOutputActive = true;
+      try {
+        this.live.speakResearchVoice(turn.turnId, voiceSummary);
+      } catch {
+        turn.liveOutputActive = false;
+        this.sendBrowser({
+          type: "research_progress",
+          turnId: turn.turnId,
+          stage: "synthesize",
+          status: "completed",
+          detail: "Final answer delivered. Gemini Live voice could not start.",
+        });
+        this.completeSpeechTurn(turn, { retryable: false });
+        return;
+      }
+      this.sendBrowser({
+        type: "research_progress",
+        turnId: turn.turnId,
+        stage: "synthesize",
+        status: "completed",
+        detail: "Final answer delivered. Gemini Live is speaking it now.",
+      });
+    } catch (error) {
+      this.failDeepResearchTurn(turn, error);
+    }
+  }
+
+  failDeepResearchTurn(turn, error) {
+    if (this.activeSpeechTurn !== turn || turn.completed || turn.controller?.signal.aborted) return;
+    const detail = error instanceof Error ? error.message : "Deep Research failed.";
+    this.sendBrowser({
+      type: "research_progress",
+      turnId: turn.turnId,
+      stage: turn.researchStage ?? "understand",
+      status: "failed",
+      detail: detail.slice(0, 240),
+    });
+    this.sendBrowser({ type: "answer_update", turnId: turn.turnId, mode: "answer", text: "Deep Research could not complete this answer. Please try again.", finished: true });
+    this.completeSpeechTurn(turn, { interrupted: true, retryable: true });
   }
 
   handleTabSpeech(active, source = "local") {
@@ -675,6 +849,7 @@ export class ClientSession {
       return;
     }
     if (event.type === "input_transcript" && turn?.mode === "answer") {
+      if (turn.suppressInputTranscript) return;
       this.sendBrowser({
         type: "user_transcript",
         turnId: turn.turnId,
@@ -686,6 +861,7 @@ export class ClientSession {
       return;
     }
     if (event.type === "output_transcript" && turn) {
+      if (turn.suppressOutputTranscript) return;
       this.sendBrowser({
         type: turn.mode === "answer" ? "answer_update" : "narration_update",
         turnId: turn.turnId,
@@ -716,7 +892,10 @@ export class ClientSession {
     turn.completed = true;
     if (this.activeSpeechTurn === turn) this.activeSpeechTurn = null;
     this.applySpeechActions(this.speechPolicy.finishTurn?.(turn.turnId) ?? []);
-    this.live?.discardOutput?.(turn.turnId);
+    turn.controller?.abort(new DOMException(reason, "AbortError"));
+    if (turn.researchMode !== "deep_research" || turn.liveOutputActive) {
+      this.live?.discardOutput?.(turn.turnId);
+    }
     this.sendPlaybackClear(turn, reason);
     this.rememberCompletedTurn(turn.turnId);
     this.sendTurnComplete(turn, { interrupted: true, retryable });
@@ -1223,6 +1402,13 @@ export class ClientSession {
       this.activeAtomicAnalysis.controller.abort(
         new DOMException(reason, "AbortError"),
       );
+    if (
+      this.activeSpeechTurn?.controller &&
+      !this.activeSpeechTurn.controller.signal.aborted
+    )
+      this.activeSpeechTurn.controller.abort(
+        new DOMException(reason, "AbortError"),
+      );
     const live = this.live;
     const transcriber = this.transcriber;
     this.live = null;
@@ -1234,6 +1420,7 @@ export class ClientSession {
     this.activeAtomicAnalysis = null;
     this.lastTabPacketTimestampMs = null;
     this.completedTurnIds.clear();
+    this.researchVoiceSummaries.clear();
     this.visibleStateCache.clear();
     this.tabTranscriptBuffer.clear?.();
     this.audioSequenceGuard.reset?.();

@@ -68,10 +68,10 @@ export function voiceQuestionStatusFor(
   const availabilityText = questionCopyFor(availability).statusText;
   if (availabilityText) return availabilityText;
   if (microphoneState === "denied") {
-    return "Microphone permission denied — allow access, then select the microphone";
+    return "Microphone access is blocked. Allow access to enable voice questions.";
   }
   if (microphoneState === "degraded") {
-    return "Microphone unavailable — select the microphone to retry";
+    return "Microphone unavailable. Retry after selecting a working input device.";
   }
   if (microphoneState === "pending" && availability === "ready") {
     return "Requesting microphone access…";

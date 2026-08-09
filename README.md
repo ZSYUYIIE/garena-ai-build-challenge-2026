@@ -232,6 +232,7 @@ GOOGLE_API_KEY=your_real_gemini_api_key
 
 GEMINI_VISION_MODEL=gemini-3.6-flash
 GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
+EXA_API_KEY=your_exa_api_key
 
 GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
 GOOGLE_CLOUD_SPEECH_LOCATION=us

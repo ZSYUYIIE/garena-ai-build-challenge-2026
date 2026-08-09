@@ -29,6 +29,20 @@ the session. Use **Open Memory Dashboard** in that side panel when you want the
 larger session-history workspace; the toolbar intentionally does not bypass the
 live side panel.
 
+## Microphone permission
+
+Chrome requires microphone permission to be granted from a full extension page,
+not directly from the side panel. If access is denied or the Chrome profile has
+never granted it, the side panel shows **Allow microphone access**. Press that
+button, then press **Allow microphone** on the page that opens to trigger
+Chrome's permission prompt. StreamSense automatically retries the microphone
+after permission is granted.
+
+If Chrome has remembered a previous denial, open
+`chrome://settings/content/microphone`, allow sites to request microphone access,
+remove StreamSense from the blocked list, and try again. On macOS, Chrome must
+also be enabled under **Privacy & Security → Microphone**.
+
 ## Development profiles
 
 Run integrated commands from the repository root:
@@ -89,6 +103,11 @@ merges incremental Gemini Live output-transcript chunks for one narration turn
 and uses the accumulated spoken transcript as the visible description. Legacy
 unowned `answer` and `narration` messages are rejected. The label distinguishes
 active playback, the latest completed description, and the stopped state.
+The description is presented as a collapsed-by-default disclosure with its
+latest text still visible in the summary row. Expanding it reveals the full
+bounded description and provider status. The current-session timeline scrolls
+inside a bounded region so the answer-mode control, chat history, and composer
+remain visible at ordinary side-panel heights.
 
 Current-session timeline events arrive independently as strict `event`
 messages. The backend publishes a recorded event before automatic narration is
@@ -98,6 +117,25 @@ REST; the extension does not rehydrate old sessions into its compact timeline.
 The dashboard's Memory-first relationship map, search, accessibility shortcuts,
 single accessible theme, and readable relationship alternatives are documented in
 [`../session-dashboard/README.md`](../session-dashboard/README.md).
+
+## Answer modes
+
+The chat area has a Normal / Deep Research segmented tab control. This changes
+how the next question is answered; it does not create another conversation or
+clear existing messages. The selection applies equally to typed and
+push-to-talk questions. During Deep Research, the existing chat displays an
+accessible four-step plan with the current query, source count, review state,
+and synthesis state. Its active step uses a reduced-motion-safe loading
+animation and completed steps transition to checkmarks. The concise researched text appears above a linked source
+list in the same chat. Non-live Gemini text-to-speech speaks only the answer
+body, not citations or source links; Gemini Live does not generate the Deep
+Research answer. Selecting Normal resumes the existing Live session.
+Each completed researched answer also exposes a manual **Debug: Play with
+Gemini Live** control. Pressing it reads the session-cached concise answer over
+the existing Live connection, suppresses the duplicate transcript, and does
+not rerun or persist the research.
+Deep Research requires `EXA_API_KEY` on the backend and stores no search state
+in the extension or database.
 
 ## Checks and acceptance caveat
 
