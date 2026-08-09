@@ -104,6 +104,25 @@ The dashboard's Memory-first relationship map, search, accessibility shortcuts,
 single accessible theme, and readable relationship alternatives are documented in
 [`../session-dashboard/README.md`](../session-dashboard/README.md).
 
+## Voice narration modes
+
+Voice narration is a side-panel-only preference and is separate from the
+Narration level selector:
+
+- **Smart narration** preserves the commentary-aware behavior: automatic voice
+  waits until the captured tab is not speaking.
+- **Narrate over audio** speaks the newest recorded timeline event even during
+  tab speech. Local tab playback fades to 40 percent only while narration is
+  playing.
+- **Narration only** speaks new timeline events while local tab playback stays
+  muted. Tab capture and the separate Speech-to-Text stream continue.
+
+Question only under Narration level suppresses automatic voice in every mode.
+Press `N` while the side panel has focus to cycle the three Voice narration
+modes. The shortcut ignores editable controls, modifier keys, and key repeat;
+the visible selector remains its accessible equivalent. The selection is saved
+locally and applied immediately to an active session.
+
 ## Answer modes
 
 The chat area has a Normal / Deep Research segmented tab control. This changes

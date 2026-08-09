@@ -260,8 +260,8 @@ Then:
    microphone permission the first time; allow it for push-to-talk questions.
 4. Focus the side panel, hold `S`, speak, and release to submit, or hold the
    microphone button. The live user transcript and Gemini response appear in
-   the chat, and Gemini answers in its native voice. StreamSense may narrate a
-   meaningful visual change only while the tab is not speaking.
+   the chat, and Gemini answers in its native voice. Press `N` to cycle the
+   side panel's Smart narration, Narrate over audio, and Narration only modes.
 5. Disable the switch to stop. The captured-tab badge returns from `ON` to
    `OFF` after Chrome reports capture has ended.
 6. Select **View History** to open the dashboard. The full `npm run dev`
@@ -315,8 +315,15 @@ model.
   returns to 30 percent while Gemini answers and to full volume after Gemini's
   local PCM playback queue is idle. Typed questions use the 30-percent answer
   level directly.
-- Automatic narration does not lower tab volume and is suppressed or cancelled
-  while local tab-audio detection or Cloud Speech-to-Text reports speech.
+- Smart narration leaves tab playback at full volume and is suppressed or
+  cancelled while local tab-audio detection or Cloud Speech-to-Text reports
+  speech.
+- Narrate over audio allows a newly recorded event to be spoken during tab
+  speech and lowers local tab playback to 40 percent only during that
+  narration. Narration only keeps local tab playback at 0 percent. Neither mode
+  stops captured-tab PCM from reaching the separate Speech-to-Text path.
+- Voice narration mode is independent from Narration level. Question only
+  suppresses automatic voice in every mode without stopping timeline events.
 
 ## Degraded behavior
 

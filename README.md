@@ -303,7 +303,8 @@ Then in Chrome:
 4. If Chrome opens the StreamSense microphone-permission page, select
    **Allow microphone**, then return to the captured tab.
 5. Let the video play. Meaningful visual changes appear in the timeline and may
-   be narrated according to the selected narration level.
+   be narrated according to the separate Narration level and Voice narration
+   settings.
 6. Select **Open Memory Dashboard** inside the side panel. The toolbar icon
    itself always opens the side panel and never bypasses it to open Memory.
    While a session is active, the extension opens
@@ -326,6 +327,9 @@ authorize it before starting again.
 - **Text:** Enter a question and select the arrow/send button.
 - **Voice:** Click inside the side panel so it has keyboard focus, hold `S`,
   speak, and release `S` to submit. Holding the microphone button works too.
+- **Narration mode:** Press `N` while the side panel has focus to cycle Smart
+  narration, Narrate over audio, and Narration only. The shortcut is ignored
+  while editing a form field, while a modifier is held, or on key repeat.
 - The user's live transcript and Gemini's response appear in the chat above the
   input, while Gemini's native audio response plays through Chrome.
 
@@ -333,6 +337,14 @@ While push-to-talk is held, captured-tab playback fades to 0% so the microphone
 hears the user rather than the computer. On release it returns to 30% while
 Gemini replies, then to 100% after playback finishes. Muting playback does not
 stop screen capture or the separate captured-tab transcription stream.
+
+Voice narration is independent from Narration level. Smart narration speaks
+only after the tab has been quiet under the existing speech policy. Narrate
+over audio speaks a newly recorded timeline event while the tab continues at
+40 percent volume during narration. Narration only keeps local tab playback
+muted for the session while capture and tab transcription continue. Selecting
+Question only under Narration level disables automatic voice in all three
+Voice narration modes.
 
 ## Grounded narration and timeline behavior
 
@@ -554,6 +566,13 @@ extension and macOS/Windows privacy settings for Chrome.
 Ensure StreamSense is running and connected, microphone access is allowed, and
 the side panel has focus. The shortcut is intentionally ignored while typing in
 the question input or while a modifier key is held.
+
+### Pressing `N` does not change Voice narration
+
+Focus the side panel and make sure the cursor is not inside an input, select, or
+other editable control. `N` is intentionally ignored with modifier keys and on
+key repeat. The selected mode is also available from the visible Voice
+narration selector and persists when the side panel is reopened.
 
 ### Microphone audio backlog exceeded one second
 

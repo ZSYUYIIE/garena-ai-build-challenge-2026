@@ -50,6 +50,15 @@ Automatic narration follows a fail-closed sequence:
 4. Persist and publish the accepted event to the current timeline.
 5. Offer that event to speech only after persistence succeeds.
 
+The side panel has a separate Voice narration preference. Smart narration keeps
+the existing commentary-aware silence checks. Narrate over audio speaks the
+newest recorded timeline event even while the tab is speaking and lowers only
+local tab playback to 40 percent during narration. Narration only uses the same
+event-driven speech path while keeping local tab playback muted. Captured-tab
+PCM still flows to its separate transcription path in every mode. The
+Narration level preference remains responsible for description detail, and its
+Question only value suppresses automatic voice in every Voice narration mode.
+
 Typed and microphone questions use Gemini Live and can interrupt narration.
 Captured-tab audio is never presented as user speech.
 
