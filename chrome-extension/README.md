@@ -21,8 +21,10 @@ Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
 and select `chrome-extension/dist`. Copy the generated extension ID to
 `ai-voice-realtime/.env` as `STREAMSENSE_EXTENSION_ID`, then reload the
 extension after rebuilding. The manifest requires Chrome's `tts` permission so
-the side panel can consume the default Chrome/OS voice; it does not request
-`ttsEngine` because StreamSense does not provide a speech engine.
+the side panel can consume installed Chrome/OS voices; it does not request
+`ttsEngine` because StreamSense does not provide a speech engine. Automatic
+timeline narration prefers Alex, then Samantha, then another compatible English
+voice, and supplies `en-US`, rate `0.9`, and pitch `0.9`.
 
 On an ordinary HTTP or HTTPS page, click the StreamSense toolbar icon to
 authorize that exact tab and open the side panel. Chrome internal pages and the
@@ -124,6 +126,11 @@ Press `N` while the side panel has focus to cycle the three Voice narration
 modes. The shortcut ignores editable controls, modifier keys, and key repeat;
 the visible selector remains its accessible equivalent. The selection is saved
 locally and applied immediately to an active session.
+
+The fixed calm voice profile applies only to automatic Chrome timeline TTS.
+Voice discovery is cached for the realtime session; failure falls back to
+Chrome voice selection while retaining `en-US`, rate `0.9`, and pitch `0.9`.
+Gemini Live question and Deep Research answer voices are unchanged.
 
 Typed and microphone questions interrupt an active Chrome timeline utterance
 and clear its one pending event before admission. Events received while a user

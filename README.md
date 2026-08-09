@@ -349,6 +349,13 @@ session while capture and tab transcription continue. Selecting Question only
 under Narration level disables Chrome timeline TTS in all three Voice narration
 modes without suppressing timeline events.
 
+Automatic timeline speech uses installed Chrome/OS voices with a calm English
+profile: StreamSense prefers Alex, then Samantha, then another compatible
+English voice, and supplies `en-US`, rate `0.9`, and pitch `0.9`. If voice
+discovery fails, Chrome still receives the language, rate, and pitch while
+choosing the compatible fallback. This profile does not change Gemini Live's
+voice for questions or Deep Research answers.
+
 ## Grounded narration and timeline behavior
 
 Automatic narration now follows one fail-closed path:

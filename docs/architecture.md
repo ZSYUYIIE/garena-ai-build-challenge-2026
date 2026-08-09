@@ -55,7 +55,11 @@ Automatic narration follows a fail-closed sequence:
 
 Automatic timeline speech is owned by the extension's `chrome.tts` client, not
 Gemini Live. The required Manifest V3 permission is `tts`, never `ttsEngine`;
-Chrome and the operating system choose the default voice. The side panel's
+the extension consumes installed Chrome/OS voices rather than providing an
+engine. Timeline TTS prefers the lifecycle-capable English voices Alex, then
+Samantha, then deterministic compatible English fallbacks. Every automatic
+utterance supplies `en-US`, rate `0.9`, and pitch `0.9`; failed voice discovery
+falls back to Chrome selection with those profile values. The side panel's
 separate Voice narration preference controls only client-side timing and local
 tab gain. Smart waits for 750 milliseconds of continuous silence from the
 existing local tab-activity detector. Narrate over audio speaks immediately and
@@ -69,8 +73,9 @@ value suppresses Chrome timeline TTS without suppressing timeline events.
 Typed and microphone questions use Gemini Live and interrupt Chrome timeline
 TTS before question admission. Gemini Live continues to own questions, answers,
 and the existing Deep Research voice path, but never synthesizes automatic
-timeline events. Gemini Live or Cloud Speech-to-Text availability is therefore
-not a gate for timeline TTS; Smart depends only on local tab activity.
+timeline events. The fixed Chrome TTS voice profile does not change Gemini
+Live's answer voice. Gemini Live or Cloud Speech-to-Text availability is
+therefore not a gate for timeline TTS; Smart depends only on local tab activity.
 Captured-tab audio is never presented as user speech.
 
 Normal and Deep Research share one visible chat but have separate generation
