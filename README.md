@@ -548,12 +548,14 @@ Speech-to-Text; the service uses ADC separately.
 Run `gcloud auth login`, select the correct account, set the project, and retry
 the enable command.
 
-### Tab speech context unavailable / automatic narration paused
+### Tab speech context unavailable / Smart narration paused
 
 Confirm that `speech.googleapis.com` is enabled, ADC has the correct quota
 project, `GOOGLE_CLOUD_PROJECT` is correct, and the active account can use the
 Speech-to-Text API. Restart the backend after fixing credentials. Typed and
-microphone questions can still work without captured-tab speech context.
+microphone questions can still work without captured-tab speech context. Smart
+narration pauses because it cannot safely judge commentary overlap; Narrate
+over audio and Narration only can continue when Gemini Live remains ready.
 
 ### Microphone permission denied
 

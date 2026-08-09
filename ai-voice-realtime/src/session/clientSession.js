@@ -223,6 +223,11 @@ export class ClientSession {
           message.voiceNarrationMode ?? VoiceNarrationMode.SMART;
         this.researchMode = message.researchMode;
         this.applySpeechActions(
+          this.speechPolicy.setAutomaticNarrationEnabled?.(
+            this.narrationLevel !== NarrationLevel.QUESTION_ONLY,
+          ) ?? [],
+        );
+        this.applySpeechActions(
           this.speechPolicy.setVoiceNarrationMode?.(
             this.voiceNarrationMode,
           ) ?? [],
@@ -1162,8 +1167,9 @@ export class ClientSession {
       persistenceStatus: persistenceResult.status,
       recordedEvent: persistenceResult.event,
       analysis,
-      createdAtMs:
-        this.groundedSemanticState.originAcceptedAtMs ?? snapshot.acceptedAtMs,
+      createdAtMs: this.voiceNarrationMode === VoiceNarrationMode.SMART
+        ? this.groundedSemanticState.originAcceptedAtMs ?? snapshot.acceptedAtMs
+        : snapshot.acceptedAtMs,
     });
     if (narrationCandidate) this.handleNarrationCandidate(narrationCandidate);
   }

@@ -321,6 +321,54 @@ test("voice narration mode rejects unknown values", () => {
   );
 });
 
+test("disabling automatic narration clears pending work without replay", () => {
+  const fixture = createPolicy();
+  fixture.policy.setVoiceNarrationMode("over_audio");
+  fixture.policy.setLiveState("ready");
+  fixture.policy.offerNarration(candidate("event:pending"));
+
+  assert.deepEqual(fixture.policy.setAutomaticNarrationEnabled(false), [
+    { type: "drop_narration", reason: "automatic_narration_disabled" },
+  ]);
+  assert.deepEqual(fixture.policy.poll(), []);
+  assert.deepEqual(fixture.policy.setAutomaticNarrationEnabled(true), []);
+  assert.deepEqual(fixture.policy.poll(), []);
+});
+
+test("disabling automatic narration invalidates reserved and active narration but not answers", () => {
+  const reserved = createPolicy();
+  reserved.policy.setVoiceNarrationMode("over_audio");
+  reserved.policy.setLiveState("ready");
+  reserved.policy.offerNarration(candidate("event:reserved"));
+  const reservationId = assertStartAction(
+    reserved.policy.poll()[0],
+    candidate("event:reserved"),
+  );
+  assert.deepEqual(reserved.policy.setAutomaticNarrationEnabled(false), [
+    { type: "drop_narration", reason: "automatic_narration_disabled" },
+  ]);
+  assert.deepEqual(
+    reserved.policy.markNarrationStarted("late-narration", reservationId),
+    [{ type: "cancel_narration", turnId: "late-narration" }],
+  );
+
+  const active = createPolicy();
+  active.policy.setVoiceNarrationMode("narration_only");
+  active.policy.setLiveState("ready");
+  const activeEvent = candidate("event:active");
+  active.policy.offerNarration(activeEvent);
+  const activeReservation = assertStartAction(active.policy.poll()[0], activeEvent);
+  active.policy.markNarrationStarted("active-narration", activeReservation);
+  assert.deepEqual(active.policy.setAutomaticNarrationEnabled(false), [
+    { type: "cancel_narration", turnId: "active-narration" },
+  ]);
+
+  const answer = createPolicy();
+  answer.policy.startUserTurn("answer-1");
+  assert.deepEqual(answer.policy.setAutomaticNarrationEnabled(false), []);
+  assert.deepEqual(answer.policy.finishTurn("answer-1"), []);
+});
+
 test("nextWakeAtMs is exact, replaces a silence wake after renewed speech, and clears after expiry", () => {
   const fixture = createPolicy();
   makeReadyForNarration(fixture);

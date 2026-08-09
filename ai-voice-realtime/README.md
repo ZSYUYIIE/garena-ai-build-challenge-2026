@@ -332,8 +332,9 @@ model.
 - If the captured tab has no audio track, visual context and user Q&A continue,
   and meaningful-change narration may run during visual silence rules.
 - If an audio-bearing tab loses Speech-to-Text health or audio continuity, tab
-  speech context is shown as unavailable and automatic narration pauses. User
-  Q&A remains available using microphone/typed input and current frames.
+  speech context is shown as unavailable and Smart narration pauses. Narrate
+  over audio and Narration only can continue when Gemini Live remains ready.
+  User Q&A remains available using microphone/typed input and current frames.
 - If Gemini Live is connecting or degraded, microphone VAD is disarmed so audio
   is not admitted into an unsafe partial turn. The UI remains stoppable and
   typed input remains visible; affected turns receive a retryable failure.

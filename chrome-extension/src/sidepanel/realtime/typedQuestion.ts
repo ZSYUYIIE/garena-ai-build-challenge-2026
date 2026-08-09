@@ -18,14 +18,32 @@ export function isVoiceHoldShortcut(event: VoiceShortcutEvent): boolean {
 
 export function isEditableShortcutTarget(target: EventTarget | null): boolean {
   if (!target || typeof target !== "object") return false;
-  const candidate = target as { isContentEditable?: boolean; tagName?: unknown };
+  const candidate = target as {
+    isContentEditable?: boolean;
+    tagName?: unknown;
+    closest?: (selector: string) => unknown;
+  };
   const tagName = typeof candidate.tagName === "string"
     ? candidate.tagName.toUpperCase()
     : "";
+  let insideCustomSelect = false;
+  try {
+    insideCustomSelect = typeof candidate.closest === "function"
+      && Boolean(candidate.closest([
+        '[data-slot="select"]',
+        '[data-slot^="select-"]',
+        '[role="listbox"]',
+        '[role="option"]',
+        '[aria-haspopup="listbox"]',
+      ].join(", ")));
+  } catch {
+    insideCustomSelect = false;
+  }
   return candidate.isContentEditable === true
     || tagName === "INPUT"
     || tagName === "TEXTAREA"
-    || tagName === "SELECT";
+    || tagName === "SELECT"
+    || insideCustomSelect;
 }
 
 export function questionAvailabilityFor(

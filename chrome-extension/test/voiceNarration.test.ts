@@ -104,6 +104,15 @@ test("cycles N outside editable controls and leaves form editing untouched", () 
   );
   assert.equal(
     voiceNarrationModeAfterShortcut("smart", shortcut, {
+      tagName: "BUTTON",
+      closest: (selector: string) => (
+        selector.includes("data-slot") ? { dataset: { slot: "select-trigger" } } : null
+      ),
+    } as unknown as EventTarget),
+    null,
+  );
+  assert.equal(
+    voiceNarrationModeAfterShortcut("smart", shortcut, {
       tagName: "DIV",
       isContentEditable: true,
     }),

@@ -89,6 +89,22 @@ test("always-narrate mode retains Smart eligibility for later mode changes", () 
   });
 });
 
+test("always-narrate mode retains an atomic semantic key even when Smart-ineligible", () => {
+  assert.deepEqual(build({
+    voiceNarrationMode: "over_audio",
+    analysis: {
+      ...smartAnalysis,
+      coveredByTabSpeech: true,
+    },
+  }), {
+    description: "The score is now 2-1.",
+    semanticKey: "score:2-1",
+    importance: 0.8,
+    createdAtMs: 100,
+    smartEligible: false,
+  });
+});
+
 test("Question only suppresses voice without suppressing timeline recording", () => {
   assert.equal(build({
     voiceNarrationMode: "narration_only",

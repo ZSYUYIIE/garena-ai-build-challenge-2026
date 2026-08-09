@@ -1810,6 +1810,12 @@ test("session configuration applies voice narration mode and polls the policy", 
   });
 
   assert.deepEqual(speechPolicy.voiceModes, ["over_audio"]);
+  assert.deepEqual(speechPolicy.automaticNarrationStates, [true]);
+  assert.deepEqual(speechPolicy.transitions, [
+    "automatic:true",
+    "mode:over_audio",
+    "poll",
+  ]);
   assert.equal(speechPolicy.pollCalls, 1);
 });
 
@@ -1881,6 +1887,45 @@ test("Question only records an event without offering it in narration-only mode"
     1,
   );
   assert.deepEqual(speechPolicy.offers, []);
+  assert.deepEqual(speechPolicy.automaticNarrationStates, [false]);
+  fixture.session.close();
+});
+
+test("always-narrate events use their admitted frame time when the semantic key is unchanged", async (t) => {
+  let now = 0;
+  const speechPolicy = new FakeSpeechPolicy();
+  const results = [
+    semanticAnalysis("score:B", "Score B"),
+    semanticAnalysis("score:B", "Score B changes"),
+  ];
+  const fixture = createFixture({
+    now: () => now,
+    speechPolicy,
+    async analyzeFrame() {
+      return results.shift();
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.handleBrowserJson({
+    type: "session_config",
+    narrationLevel: "standard",
+    researchMode: "normal",
+    voiceNarrationMode: "over_audio",
+  });
+
+  fixture.session.sendVideo(Buffer.from("score B one"), "image/jpeg", 1);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+  now = 6_001;
+  fixture.session.sendVideo(Buffer.from("score B two"), "image/jpeg", 2);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.equal(speechPolicy.offers.length, 2);
+  assert.deepEqual(
+    speechPolicy.offers.map((candidate) => candidate.createdAtMs),
+    [0, 6_001],
+  );
   fixture.session.close();
 });
 
@@ -2510,6 +2555,8 @@ class FakeSpeechPolicy {
   constructor() {
     this.offers = [];
     this.voiceModes = [];
+    this.automaticNarrationStates = [];
+    this.transitions = [];
     this.pollCalls = 0;
   }
 
@@ -2520,11 +2567,19 @@ class FakeSpeechPolicy {
 
   setVoiceNarrationMode(mode) {
     this.voiceModes.push(mode);
+    this.transitions.push(`mode:${mode}`);
+    return [];
+  }
+
+  setAutomaticNarrationEnabled(enabled) {
+    this.automaticNarrationStates.push(enabled);
+    this.transitions.push(`automatic:${enabled}`);
     return [];
   }
 
   poll() {
     this.pollCalls += 1;
+    this.transitions.push("poll");
     return [];
   }
 }

@@ -103,6 +103,7 @@ export class SpeechPolicy {
   #invalidatedReservationLimit;
   #semanticCooldownLimit;
   #voiceNarrationMode = VoiceNarrationMode.SMART;
+  #automaticNarrationEnabled = true;
   #lastNowMs = null;
   #tabAudioState = "degraded";
   #localTabSpeech = false;
@@ -197,6 +198,20 @@ export class SpeechPolicy {
     return actions;
   }
 
+  setAutomaticNarrationEnabled(enabled) {
+    if (typeof enabled !== "boolean") {
+      throw new TypeError("automatic narration enabled must be a boolean");
+    }
+    const nowMs = this.#readNow();
+    if (this.#automaticNarrationEnabled === enabled) return [];
+
+    this.#automaticNarrationEnabled = enabled;
+    this.#refreshSilence(nowMs);
+    return enabled
+      ? []
+      : this.#cancelAndDrop("automatic_narration_disabled");
+  }
+
   setLocalTabSpeech(active) {
     return this.#setTabSpeech("local", active);
   }
@@ -226,6 +241,7 @@ export class SpeechPolicy {
     this.#pruneCooldowns(nowMs);
     const actions = this.#discardExpired(nowMs);
 
+    if (!this.#automaticNarrationEnabled) return actions;
     if (this.#isExpired(candidate, nowMs) || this.#isCoolingDown(candidate.semanticKey, nowMs)) {
       return actions;
     }
@@ -504,7 +520,9 @@ export class SpeechPolicy {
   }
 
   #canNarrate() {
-    if (this.#liveState !== "ready") return false;
+    if (!this.#automaticNarrationEnabled || this.#liveState !== "ready") {
+      return false;
+    }
     if (this.#voiceNarrationMode !== VoiceNarrationMode.SMART) return true;
     return this.#tabAudioState !== "degraded"
       && !this.#localTabSpeech

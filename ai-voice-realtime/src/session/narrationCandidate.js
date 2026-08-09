@@ -42,13 +42,21 @@ export function buildModeNarrationCandidate({
 
   return {
     description: recordedEvent.description.trim(),
-    semanticKey: smartEligible
-      ? analysis.semanticKey.trim()
-      : eventSemanticKey(recordedEvent),
+    semanticKey: atomicSemanticKey(analysis) ?? eventSemanticKey(recordedEvent),
     importance: recordedEvent.importance,
     createdAtMs,
     smartEligible,
   };
+}
+
+function atomicSemanticKey(analysis) {
+  if (
+    typeof analysis?.semanticKey !== "string"
+    || !analysis.semanticKey.trim()
+  ) {
+    return null;
+  }
+  return analysis.semanticKey.trim().slice(0, MAX_SEMANTIC_KEY_LENGTH);
 }
 
 function isSmartEligible(analysis) {
