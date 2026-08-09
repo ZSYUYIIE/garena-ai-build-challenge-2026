@@ -8,7 +8,9 @@ import { GeminiLiveSession } from "../gemini/liveSession.js";
 import { buildNarrationEventCandidate, shouldSuppressVisualDescription } from "../gemini/transcript.js";
 import { parseAudioPacket, AudioSequenceGuard } from "../protocol/audioPackets.js";
 import { parseBrowserMessage, parseServerOutput, PROTOCOL_VERSION } from "../protocol/browserMessages.js";
+import { VoiceNarrationMode } from "../protocol/voiceNarrationMode.js";
 import { SessionRateLimiter } from "../protocol/sessionRateLimiter.js";
+import { buildModeNarrationCandidate } from "./narrationCandidate.js";
 import { SpeechPolicy } from "./speechPolicy.js";
 import { GoogleSpeechTranscriber } from "../stt/googleSpeechTranscriber.js";
 import { TabTranscriptBuffer } from "../transcript/tabTranscriptBuffer.js";
@@ -139,6 +141,7 @@ export class ClientSession {
     this.closePromise = null;
     this.captureSource = "camera";
     this.narrationLevel = NarrationLevel.STANDARD;
+    this.voiceNarrationMode = VoiceNarrationMode.SMART;
     this.researchMode = "normal";
     this.researchVoiceSummaries = new Map();
     this.latestTimestampSeconds = 0;
@@ -216,7 +219,16 @@ export class ClientSession {
         return;
       case "session_config":
         this.narrationLevel = message.narrationLevel;
+        this.voiceNarrationMode =
+          message.voiceNarrationMode ?? VoiceNarrationMode.SMART;
         this.researchMode = message.researchMode;
+        this.applySpeechActions(
+          this.speechPolicy.setVoiceNarrationMode?.(
+            this.voiceNarrationMode,
+          ) ?? [],
+        );
+        this.applySpeechActions(this.speechPolicy.poll?.() ?? []);
+        this.scheduleSpeechPolicyWake();
         return;
       case "video_frame":
         this.sendVideo(
@@ -1086,32 +1098,32 @@ export class ClientSession {
       });
       return;
     }
-    let persistenceStatus = "not_required";
+    let persistenceResult = { status: "not_required", event: null };
     if (analysis.event) {
-      persistenceStatus = this.recordVisionEvent(
+      persistenceResult = this.recordVisionEvent(
         analysis.event,
         snapshot.timestampSeconds,
       );
       if (
-        persistenceStatus === "suppressed"
+        persistenceResult.status === "suppressed"
         && analysis.shouldNarrate
         && analysis.description
       ) {
-        persistenceStatus = this.recordNarrationEvent(
+        persistenceResult = this.recordNarrationEvent(
           analysis.description,
           initial,
           snapshot.timestampSeconds,
         );
       }
     } else if (analysis.shouldNarrate && analysis.description) {
-      persistenceStatus = this.recordNarrationEvent(
+      persistenceResult = this.recordNarrationEvent(
         analysis.description,
         initial,
         snapshot.timestampSeconds,
       );
     }
     const currentFrame = this.frameMatchesSnapshot(snapshot);
-    if (currentFrame && persistenceStatus !== "failed") {
+    if (currentFrame && persistenceResult.status !== "failed") {
       const cacheMayAdvance = this.visibleStateCache.observe(
         snapshot.frameSequence,
       );
@@ -1143,23 +1155,17 @@ export class ClientSession {
         };
       }
     }
-    if (
-      !offerCandidate ||
-      persistenceStatus !== "recorded" ||
-      !analysis.shouldNarrate ||
-      !analysis.isNew ||
-      analysis.coveredByTabSpeech ||
-      analysis.importance < 0.6 ||
-      !analysis.description ||
-      !analysis.semanticKey
-    )
-      return;
-    this.handleNarrationCandidate({
-      description: analysis.description,
-      semanticKey: analysis.semanticKey,
-      importance: analysis.importance,
-      createdAtMs: this.groundedSemanticState.originAcceptedAtMs,
+    const narrationCandidate = buildModeNarrationCandidate({
+      voiceNarrationMode: this.voiceNarrationMode,
+      narrationLevel: this.narrationLevel,
+      offerCandidate,
+      persistenceStatus: persistenceResult.status,
+      recordedEvent: persistenceResult.event,
+      analysis,
+      createdAtMs:
+        this.groundedSemanticState.originAcceptedAtMs ?? snapshot.acceptedAtMs,
     });
+    if (narrationCandidate) this.handleNarrationCandidate(narrationCandidate);
   }
 
   recordNarrationEvent(description, initial, timestampSeconds) {
@@ -1170,7 +1176,7 @@ export class ClientSession {
         timestampSeconds,
       });
       if (result.status === "recorded") this.publishEvent(result.event);
-      return result.status;
+      return result;
     } catch (error) {
       this.sendBrowser({
         type: "telemetry",
@@ -1180,21 +1186,23 @@ export class ClientSession {
         type: "analysis_error",
         text: "This moment could not be added to the timeline, so narration was skipped.",
       });
-      return "failed";
+      return { status: "failed", event: null };
     }
   }
 
   recordVisionEvent(candidate, timestampSeconds) {
     try {
       const validated = eventCandidateSchema.parse(candidate);
-      if (shouldSuppressVisualDescription(validated.description)) return "suppressed";
+      if (shouldSuppressVisualDescription(validated.description)) {
+        return { status: "suppressed", event: null };
+      }
       const result = this.eventStore.record({
         ...validated,
         sessionId: this.sessionId,
         timestampSeconds,
       });
       if (result.status === "recorded") this.publishEvent(result.event);
-      return result.status;
+      return result;
     } catch (error) {
       this.sendBrowser({
         type: "telemetry",
@@ -1204,7 +1212,7 @@ export class ClientSession {
         type: "analysis_error",
         text: "This moment could not be added to the timeline, so narration was skipped.",
       });
-      return "failed";
+      return { status: "failed", event: null };
     }
   }
 

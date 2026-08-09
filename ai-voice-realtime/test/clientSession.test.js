@@ -1736,6 +1736,7 @@ test("uses a session-relative acceptance clock instead of an extension frame tim
     semanticKey: "score:team_a:2-1",
     importance: 0.9,
     createdAtMs: 4_125,
+    smartEligible: true,
   }]);
   const [event] = fixture.eventStore.listBySession(fixture.session.sessionId);
   assert.equal(event.timestampSeconds, 12_345.678);
@@ -1793,6 +1794,93 @@ test("offers only fresh uncovered important semantic narration candidates", asyn
 
   assert.equal(speechPolicy.offers.length, 1);
   assert.equal(speechPolicy.offers[0].semanticKey, "score:team_a:2-1");
+  fixture.session.close();
+});
+
+test("session configuration applies voice narration mode and polls the policy", (t) => {
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({ speechPolicy });
+  t.after(() => fixture.eventStore.close());
+
+  fixture.session.handleBrowserJson({
+    type: "session_config",
+    narrationLevel: "standard",
+    researchMode: "normal",
+    voiceNarrationMode: "over_audio",
+  });
+
+  assert.deepEqual(speechPolicy.voiceModes, ["over_audio"]);
+  assert.equal(speechPolicy.pollCalls, 1);
+});
+
+test("always-narrate mode offers the published timeline event description", async (t) => {
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({
+    speechPolicy,
+    async analyzeFrame() {
+      return visualEventAnalysis({
+        eventType: "score_visible",
+        currentState: scoreState("3-1"),
+      });
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  const order = [];
+  speechPolicy.offerNarration = (candidate) => {
+    order.push(
+      fixture.browser.messages.some((message) => message.type === "event")
+        ? "published"
+        : "offered_before_publish",
+    );
+    speechPolicy.offers.push(candidate);
+    return [];
+  };
+  fixture.session.handleBrowserJson({
+    type: "session_config",
+    narrationLevel: "standard",
+    researchMode: "normal",
+    voiceNarrationMode: "over_audio",
+  });
+  fixture.session.sendVideo(Buffer.from("scoreboard 3-1"), "image/jpeg", 10);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.deepEqual(order, ["published"]);
+  assert.equal(speechPolicy.offers.length, 1);
+  assert.equal(speechPolicy.offers[0].description, "The score is 3-1.");
+  assert.equal(speechPolicy.offers[0].smartEligible, false);
+  assert.match(speechPolicy.offers[0].semanticKey, /^score_visible:/);
+  fixture.session.close();
+});
+
+test("Question only records an event without offering it in narration-only mode", async (t) => {
+  const speechPolicy = new FakeSpeechPolicy();
+  const fixture = createFixture({
+    speechPolicy,
+    async analyzeFrame() {
+      return visualEventAnalysis({
+        eventType: "score_visible",
+        currentState: scoreState("4-1"),
+      });
+    },
+  });
+  t.after(() => fixture.eventStore.close());
+  fixture.session.handleBrowserJson({
+    type: "session_config",
+    narrationLevel: "question_only",
+    researchMode: "normal",
+    voiceNarrationMode: "narration_only",
+  });
+  fixture.session.sendVideo(Buffer.from("scoreboard 4-1"), "image/jpeg", 11);
+  fixture.session.requestNarration(false);
+  await flushAsyncWork();
+
+  assert.equal(fixture.eventStore.listBySession(fixture.session.sessionId).length, 1);
+  assert.equal(
+    fixture.browser.messages.filter((message) => message.type === "event").length,
+    1,
+  );
+  assert.deepEqual(speechPolicy.offers, []);
   fixture.session.close();
 });
 
@@ -2421,10 +2509,22 @@ function visualEventAnalysis({
 class FakeSpeechPolicy {
   constructor() {
     this.offers = [];
+    this.voiceModes = [];
+    this.pollCalls = 0;
   }
 
   offerNarration(candidate) {
     this.offers.push(candidate);
+    return [];
+  }
+
+  setVoiceNarrationMode(mode) {
+    this.voiceModes.push(mode);
+    return [];
+  }
+
+  poll() {
+    this.pollCalls += 1;
     return [];
   }
 }
