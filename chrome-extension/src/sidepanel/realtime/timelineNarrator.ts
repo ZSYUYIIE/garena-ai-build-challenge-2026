@@ -21,6 +21,29 @@ export type TimelineTtsPort = {
   stop(): void | Promise<void>;
 };
 
+export type TimelineTtsVoice = {
+  voiceName?: string;
+  lang?: string;
+  remote?: boolean;
+  eventTypes?: string[];
+};
+
+export type ChromeTimelineSpeakOptions = {
+  enqueue: boolean;
+  lang: string;
+  rate: number;
+  pitch: number;
+  voiceName?: string;
+  requiredEventTypes: string[];
+  onEvent: (event: TimelineTtsEvent) => void;
+};
+
+export type ChromeTimelineTtsApi = {
+  getVoices(): Promise<TimelineTtsVoice[]>;
+  speak(text: string, options: ChromeTimelineSpeakOptions): void | Promise<void>;
+  stop(): void | Promise<void>;
+};
+
 export type TimelineNarratorOptions = {
   tts: TimelineTtsPort;
   voiceNarrationMode?: VoiceNarrationMode;
@@ -226,15 +249,89 @@ export class TimelineNarrator {
   }
 }
 
-export function createChromeTimelineTtsPort(): TimelineTtsPort {
+export function selectTimelineVoiceName(
+  voices: readonly TimelineTtsVoice[],
+): string | undefined {
+  const eligible = voices
+    .filter((voice) => (
+      typeof voice.voiceName === "string"
+      && voice.voiceName.trim().length > 0
+      && isEnglishLanguage(voice.lang)
+      && supportsTimelineLifecycle(voice.eventTypes)
+    ))
+    .sort((left, right) => compareVoiceNames(left.voiceName!, right.voiceName!));
+  const preferred = ["alex", "samantha"];
+  for (const preferredName of preferred) {
+    const match = eligible.find((voice) => normalizeVoiceName(voice.voiceName!) === preferredName);
+    if (match) return match.voiceName;
+  }
+  const fallbacks = [
+    (voice: TimelineTtsVoice) => isUsEnglish(voice.lang) && voice.remote === false,
+    (voice: TimelineTtsVoice) => isUsEnglish(voice.lang),
+    (voice: TimelineTtsVoice) => voice.remote === false,
+    () => true,
+  ];
+  for (const accepts of fallbacks) {
+    const match = eligible.find(accepts);
+    if (match) return match.voiceName;
+  }
+  return undefined;
+}
+
+export function createChromeTimelineTtsPort(
+  ttsApi: ChromeTimelineTtsApi = chrome.tts,
+): TimelineTtsPort {
+  let generation = 0;
+  const voicesPromise = Promise.resolve()
+    .then(() => ttsApi.getVoices())
+    .catch((): TimelineTtsVoice[] => []);
   return {
-    speak: (text, onEvent) => chrome.tts.speak(text, {
-      enqueue: false,
-      requiredEventTypes: ["start", "end"],
-      onEvent,
-    }),
-    stop: () => chrome.tts.stop(),
+    speak: async (text, onEvent) => {
+      const speechGeneration = generation;
+      const voiceName = selectTimelineVoiceName(await voicesPromise);
+      if (speechGeneration !== generation) return;
+      await ttsApi.speak(text, {
+        enqueue: false,
+        lang: "en-US",
+        rate: 0.9,
+        pitch: 0.9,
+        ...(voiceName ? { voiceName } : {}),
+        requiredEventTypes: ["start", "end"],
+        onEvent,
+      });
+    },
+    stop: () => {
+      generation += 1;
+      return ttsApi.stop();
+    },
   };
+}
+
+function isEnglishLanguage(lang: string | undefined): boolean {
+  const normalized = lang?.trim().toLowerCase();
+  return normalized === "en" || normalized?.startsWith("en-") === true;
+}
+
+function isUsEnglish(lang: string | undefined): boolean {
+  return lang?.trim().toLowerCase() === "en-us";
+}
+
+function supportsTimelineLifecycle(eventTypes: string[] | undefined): boolean {
+  return Array.isArray(eventTypes)
+    && eventTypes.includes("start")
+    && eventTypes.includes("end");
+}
+
+function normalizeVoiceName(voiceName: string): string {
+  return voiceName.trim().toLowerCase();
+}
+
+function compareVoiceNames(left: string, right: string): number {
+  const normalizedLeft = normalizeVoiceName(left);
+  const normalizedRight = normalizeVoiceName(right);
+  if (normalizedLeft < normalizedRight) return -1;
+  if (normalizedLeft > normalizedRight) return 1;
+  return 0;
 }
 
 function boundedError(cause: unknown): string {

@@ -2,9 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  type ChromeTimelineSpeakOptions,
+  type ChromeTimelineTtsApi,
+  createChromeTimelineTtsPort,
+  selectTimelineVoiceName,
   TimelineNarrator,
   type TimelineTtsEvent,
   type TimelineTtsPort,
+  type TimelineTtsVoice,
 } from "../src/sidepanel/realtime/timelineNarrator.ts";
 import type { VoiceNarrationMode } from "../src/sidepanel/voiceNarration.ts";
 
@@ -84,6 +89,133 @@ function fixture(options: {
 }
 
 const event = (id: string, description = `Description ${id}.`) => ({ id, description });
+
+const lifecycle = ["start", "end"];
+const voice = (
+  voiceName: string,
+  lang: string,
+  remote: boolean,
+  eventTypes = lifecycle,
+): TimelineTtsVoice => ({ voiceName, lang, remote, eventTypes });
+
+const createPortWithApi = (api: ChromeTimelineTtsApi): TimelineTtsPort => (
+  createChromeTimelineTtsPort(api)
+);
+
+test("selects preferred and deterministic English timeline voices", () => {
+  const cases: Array<{ voices: TimelineTtsVoice[]; expected: string | undefined }> = [
+    {
+      voices: [
+        voice("Zulu US", "en-US", false),
+        voice("Samantha", "en-US", false),
+        voice("Alex", "en-US", false),
+      ],
+      expected: "Alex",
+    },
+    {
+      voices: [voice("Zulu US", "en-US", false), voice("Samantha", "en-GB", true)],
+      expected: "Samantha",
+    },
+    {
+      voices: [voice("Remote US", "en-US", true), voice("Alpha US", "en-US", false)],
+      expected: "Alpha US",
+    },
+    {
+      voices: [voice("Local British", "en-GB", false), voice("Remote US", "en-US", true)],
+      expected: "Remote US",
+    },
+    {
+      voices: [voice("Zulu British", "en-GB", false), voice("Alpha Australian", "en-AU", false)],
+      expected: "Alpha Australian",
+    },
+    {
+      voices: [
+        voice("Alex", "en-US", false, ["start"]),
+        voice("French", "fr-FR", false),
+        voice("Generic US", "en-US", true),
+      ],
+      expected: "Generic US",
+    },
+    {
+      voices: [voice("Alex", "en-US", false, ["start"]), voice("French", "fr-FR", false)],
+      expected: undefined,
+    },
+  ];
+
+  for (const testCase of cases) {
+    assert.equal(selectTimelineVoiceName(testCase.voices), testCase.expected);
+  }
+});
+
+test("applies the calm profile to the selected installed voice", async () => {
+  const calls: Array<{ text: string; options: ChromeTimelineSpeakOptions }> = [];
+  let getVoicesCalls = 0;
+  const onEvent = () => {};
+  const port = createPortWithApi({
+    getVoices: async () => {
+      getVoicesCalls += 1;
+      return [voice("Samantha", "en-US", false), voice("Alex", "en-US", false)];
+    },
+    speak: (text, options) => { calls.push({ text, options }); },
+    stop: () => {},
+  });
+
+  await port.speak("Goal by Rivera.", onEvent);
+  await port.speak("Final whistle.", onEvent);
+
+  assert.equal(getVoicesCalls, 1);
+  assert.deepEqual(calls.map((call) => call.text), ["Goal by Rivera.", "Final whistle."]);
+  for (const call of calls) {
+    assert.equal(call.options.enqueue, false);
+    assert.equal(call.options.lang, "en-US");
+    assert.equal(call.options.rate, 0.9);
+    assert.equal(call.options.pitch, 0.9);
+    assert.equal(call.options.voiceName, "Alex");
+    assert.deepEqual(call.options.requiredEventTypes, ["start", "end"]);
+    assert.equal(call.options.onEvent, onEvent);
+  }
+});
+
+test("falls back to the calm profile when Chrome voice discovery fails", async () => {
+  const calls: ChromeTimelineSpeakOptions[] = [];
+  const port = createPortWithApi({
+    getVoices: () => Promise.reject(new Error("voice list unavailable")),
+    speak: (_text, options) => { calls.push(options); },
+    stop: () => {},
+  });
+
+  await port.speak("Fallback narration.", () => {});
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.lang, "en-US");
+  assert.equal(calls[0]?.rate, 0.9);
+  assert.equal(calls[0]?.pitch, 0.9);
+  assert.equal(calls[0]?.voiceName, undefined);
+});
+
+test("stop prevents delayed voice discovery from starting stale speech", async () => {
+  let resolveVoices: ((voices: TimelineTtsVoice[]) => void) | undefined;
+  const voices = new Promise<TimelineTtsVoice[]>((resolve) => { resolveVoices = resolve; });
+  const spoken: string[] = [];
+  let stopCalls = 0;
+  const port = createPortWithApi({
+    getVoices: () => voices,
+    speak: (text) => { spoken.push(text); },
+    stop: () => { stopCalls += 1; },
+  });
+
+  const staleSpeech = port.speak("Stale event.", () => {});
+  await Promise.resolve();
+  await port.stop();
+  resolveVoices?.([voice("Alex", "en-US", false)]);
+  await staleSpeech;
+
+  assert.equal(stopCalls, 1);
+  assert.deepEqual(spoken, []);
+
+  await port.speak("Fresh event.", () => {});
+  assert.deepEqual(spoken, ["Fresh event."]);
+});
 
 test("Chrome timeline narration speaks exact trimmed text once per event ID", () => {
   const f = fixture({ mode: "over_audio" });
