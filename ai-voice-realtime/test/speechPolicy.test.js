@@ -249,6 +249,78 @@ test("replaces a pending candidate only when it is fresher and at least as impor
   ]);
 });
 
+test("always-narrate modes start during tab speech and degraded tab context", () => {
+  for (const mode of ["over_audio", "narration_only"]) {
+    const fixture = createPolicy();
+    fixture.policy.setVoiceNarrationMode(mode);
+    fixture.policy.setLiveState("ready");
+    fixture.policy.setLocalTabSpeech(true);
+    fixture.policy.setCloudTabSpeech(true);
+    const event = candidate(`${mode}:event`, { smartEligible: false });
+
+    assert.deepEqual(fixture.policy.offerNarration(event), []);
+    const actions = fixture.policy.poll();
+    assert.equal(actions.length, 1);
+    assertStartAction(actions[0], event);
+  }
+});
+
+test("always-narrate modes retain only the newest pending event", () => {
+  const fixture = createPolicy();
+  fixture.policy.setVoiceNarrationMode("over_audio");
+  fixture.policy.setLiveState("ready");
+  const olderImportant = candidate("event:older", {
+    createdAtMs: 10,
+    importance: 1,
+    smartEligible: false,
+  });
+  const newerRoutine = candidate("event:newer", {
+    createdAtMs: 11,
+    importance: 0.2,
+    smartEligible: false,
+  });
+
+  fixture.policy.offerNarration(olderImportant);
+  assert.deepEqual(fixture.policy.offerNarration(newerRoutine), [
+    { type: "drop_narration", reason: "replaced" },
+  ]);
+  assertStartAction(fixture.policy.poll()[0], newerRoutine);
+});
+
+test("switching modes re-evaluates pending and active narration", () => {
+  const pending = createPolicy();
+  makeReadyForNarration(pending);
+  pending.policy.setLocalTabSpeech(true);
+  const event = candidate("event:pending");
+  pending.policy.offerNarration(event);
+
+  assert.deepEqual(pending.policy.poll(), []);
+  assert.deepEqual(pending.policy.setVoiceNarrationMode("over_audio"), []);
+  assertStartAction(pending.policy.poll()[0], event);
+
+  const active = createPolicy();
+  active.policy.setVoiceNarrationMode("over_audio");
+  active.policy.setLiveState("ready");
+  active.policy.setLocalTabSpeech(true);
+  const activeEvent = candidate("event:active", { smartEligible: false });
+  active.policy.offerNarration(activeEvent);
+  const reservationId = assertStartAction(active.policy.poll()[0], activeEvent);
+  active.policy.markNarrationStarted("narration-active", reservationId);
+
+  assert.deepEqual(active.policy.setVoiceNarrationMode("smart"), [
+    { type: "cancel_narration", turnId: "narration-active" },
+  ]);
+});
+
+test("voice narration mode rejects unknown values", () => {
+  const fixture = createPolicy();
+
+  assert.throws(
+    () => fixture.policy.setVoiceNarrationMode("always"),
+    /voice narration mode/i,
+  );
+});
+
 test("nextWakeAtMs is exact, replaces a silence wake after renewed speech, and clears after expiry", () => {
   const fixture = createPolicy();
   makeReadyForNarration(fixture);

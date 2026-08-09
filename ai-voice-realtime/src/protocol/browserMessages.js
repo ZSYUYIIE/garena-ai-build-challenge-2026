@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  VOICE_NARRATION_MODES,
+  VoiceNarrationMode,
+} from "./voiceNarrationMode.js";
+
 export const MAX_WEBSOCKET_PAYLOAD_BYTES = 2 * 1024 * 1024;
 export const PROTOCOL_VERSION = 2;
 const base64Pattern =
@@ -130,6 +135,9 @@ const browserMessageSchema = z.discriminatedUnion("type", [
         "question_only",
       ]),
       researchMode: z.enum(["normal", "deep_research"]).default("normal"),
+      voiceNarrationMode: z
+        .enum(VOICE_NARRATION_MODES)
+        .default(VoiceNarrationMode.SMART),
     })
     .strict(),
   z

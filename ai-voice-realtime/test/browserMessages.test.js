@@ -26,11 +26,21 @@ test("accepts each supported extension command", () => {
     parseBrowserMessage(
       '{"type":"session_config","narrationLevel":"question_only"}'
     ),
-    { type: "session_config", narrationLevel: "question_only", researchMode: "normal" }
+    {
+      type: "session_config",
+      narrationLevel: "question_only",
+      researchMode: "normal",
+      voiceNarrationMode: "smart",
+    }
   );
   assert.deepEqual(
-    parseBrowserMessage('{"type":"session_config","narrationLevel":"standard","researchMode":"deep_research"}'),
-    { type: "session_config", narrationLevel: "standard", researchMode: "deep_research" }
+    parseBrowserMessage('{"type":"session_config","narrationLevel":"standard","researchMode":"deep_research","voiceNarrationMode":"over_audio"}'),
+    {
+      type: "session_config",
+      narrationLevel: "standard",
+      researchMode: "deep_research",
+      voiceNarrationMode: "over_audio",
+    }
   );
   assert.deepEqual(
     parseBrowserMessage(
@@ -122,6 +132,13 @@ test("rejects invalid questions and narration configuration", () => {
     () =>
       parseBrowserMessage(
         '{"type":"session_config","narrationLevel":"automatic"}'
+      ),
+    /invalid browser message/i
+  );
+  assert.throws(
+    () =>
+      parseBrowserMessage(
+        '{"type":"session_config","narrationLevel":"standard","voiceNarrationMode":"always"}'
       ),
     /invalid browser message/i
   );
