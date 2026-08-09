@@ -7,6 +7,12 @@ export type RealtimeStatus =
   | "connected"
   | "error";
 
+export function isRealtimeSessionRunning(status: RealtimeStatus): boolean {
+  return status === "requesting_capture"
+    || status === "connecting"
+    || status === "connected";
+}
+
 export type StreamEvent = {
   id: string;
   timestampSeconds: number;

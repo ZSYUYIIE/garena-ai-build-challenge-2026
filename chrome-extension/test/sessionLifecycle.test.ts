@@ -15,10 +15,19 @@ import {
   descriptionAfterTurnComplete,
   descriptionTurnOwnsCompletion,
   finishTurnRole,
+  isRealtimeSessionRunning,
   mergeNarrationTranscript,
   settlingTurnAfterComplete,
   speakingTurnAfterPlaybackIdle,
 } from "../src/sidepanel/realtime/types.ts";
+
+test("keeps the running switch on throughout capture startup", () => {
+  assert.equal(isRealtimeSessionRunning("idle"), false);
+  assert.equal(isRealtimeSessionRunning("requesting_capture"), true);
+  assert.equal(isRealtimeSessionRunning("connecting"), true);
+  assert.equal(isRealtimeSessionRunning("connected"), true);
+  assert.equal(isRealtimeSessionRunning("error"), false);
+});
 
 test("invalidates an older startup when a replacement session begins", () => {
   const sessions = createSessionGenerationGuard();

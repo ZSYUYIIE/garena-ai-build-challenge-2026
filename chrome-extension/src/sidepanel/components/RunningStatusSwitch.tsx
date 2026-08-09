@@ -22,7 +22,7 @@ export function RunningStatusSwitch({
         id="is-extension-running"
         aria-label="Turn StreamSense on or off"
         isSelected={isRunning}
-        isDisabled={isBusy || startUnavailable}
+        isDisabled={startUnavailable}
         onChange={onChange}
       />
       <Label htmlFor="is-extension-running">

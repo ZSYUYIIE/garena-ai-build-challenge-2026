@@ -64,6 +64,7 @@ import {
   voiceStatusForState,
   type RealtimeChatMessage,
   type RealtimeStatus,
+  isRealtimeSessionRunning,
   type ServerMessage,
   type StreamEvent,
   type LiveProviderState,
@@ -905,7 +906,7 @@ export function useRealtimeSession(narrationLevel: NarrationMode) {
   return {
     status, statusText, error, description, events, messages, voiceStatus, tabContextStatus,
     microphoneState, activeSessionId,
-    isRunning: status === "connecting" || status === "connected",
+    isRunning: isRealtimeSessionRunning(status),
     isBusy: status === "requesting_capture",
     canStart: captureTarget.canStart,
     canAsk: questionAvailability === "ready",
