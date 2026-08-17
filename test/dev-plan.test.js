@@ -19,7 +19,7 @@ const ROOT_PACKAGE = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 );
 
-test("root build and demo scripts stay workspace-based and single-backend", () => {
+test("root build and finals demo scripts stay workspace-based and single-backend", () => {
   assert.equal(ROOT_PACKAGE.dependencies["better-sqlite3"], "13.0.2");
   assert.equal(
     ROOT_PACKAGE.scripts.build,
@@ -28,13 +28,13 @@ test("root build and demo scripts stay workspace-based and single-backend", () =
   assert.equal(ROOT_PACKAGE.scripts.predemo, "npm run build");
   assert.equal(
     ROOT_PACKAGE.scripts.demo,
-    "npm run start:dashboard-demo --workspace ai-voice-realtime",
+    "npm run start --workspace ai-voice-realtime",
   );
   assert.equal(ROOT_PACKAGE.scripts.check, "node scripts/check-runner.js");
   assert.match(ROOT_PACKAGE.scripts["check:orchestration"], /^node --test /);
 });
 
-test("all profile starts one demo-history backend plus extension and dashboard", () => {
+test("all profile starts one real backend plus extension and dashboard", () => {
   const plan = validateProcessPlan(
     buildProcessPlan("all", { viteCliPath: FAKE_VITE_CLI }),
   );
@@ -51,17 +51,14 @@ test("all profile starts one demo-history backend plus extension and dashboard",
     plan.processes.filter(({ role }) => role === "backend").length,
     1,
   );
-  assert.deepEqual(plan.processes[0].args, [
-    "--watch",
-    "scripts/startDashboardDemo.js",
-  ]);
+  assert.deepEqual(plan.processes[0].args, ["--watch", "server.js"]);
   assert.equal(
     plan.processes[1].env.VITE_STREAMSENSE_DASHBOARD_URL,
     "http://127.0.0.1:5174/dashboard/",
   );
 });
 
-test("dashboard profile runs the demo-history backend watcher and dashboard only", () => {
+test("dashboard profile runs the real backend watcher and dashboard only", () => {
   const plan = validateProcessPlan(
     buildProcessPlan("dashboard", { viteCliPath: FAKE_VITE_CLI }),
   );
@@ -73,10 +70,7 @@ test("dashboard profile runs the demo-history backend watcher and dashboard only
       ["dashboard", 5174],
     ],
   );
-  assert.deepEqual(plan.processes[0].args, [
-    "--watch",
-    "scripts/startDashboardDemo.js",
-  ]);
+  assert.deepEqual(plan.processes[0].args, ["--watch", "server.js"]);
 });
 
 test("realtime profile pins an empty dashboard override and runs no dashboard", () => {
