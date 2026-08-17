@@ -151,6 +151,12 @@ starts the backend as a normal supervised child so a startup crash terminates
 both Vite siblings and returns a non-zero exit instead of waiting for file
 changes with only the frontends alive.
 
+Wait for the extension Vite process to report ready before loading or reloading
+`chrome-extension/dist`. If the side panel was open while Vite rewrote that
+directory, reload the unpacked extension once in `chrome://extensions` and
+reopen it. The development manifest permits CRXJS only on loopback port `5173`;
+the production build removes those development-only host and CSP sources.
+
 Dashboard-only development:
 
 ```bash

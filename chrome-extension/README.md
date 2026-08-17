@@ -29,7 +29,10 @@ voice, and supplies `en-US`, rate `0.9`, and pitch `0.9`.
 The complete runtime permission set is `activeTab`, `sidePanel`, `storage`,
 `tabCapture`, and `tts`. Host permissions and extension-page connections are
 limited to the loopback backend on port `8000`; there is no content script or
-broad page-injection permission.
+broad page-injection permission. The unpacked Vite manifest additionally
+allows only loopback port `5173` so CRXJS can load and hot-reload the extension
+during development. Production builds omit every `5173` permission and CSP
+source.
 
 On an ordinary HTTP or HTTPS page, click the StreamSense toolbar icon to
 authorize that exact tab and open the side panel. Chrome internal pages and the
@@ -47,6 +50,13 @@ Run integrated commands from the repository root:
 | `npm run dev` | Shared backend `8000`, extension dev process `5173`, Memory dashboard `5174`. |
 | `npm run dev:realtime` | Shared backend `8000` and extension dev process `5173`; no dashboard Vite process. |
 | `npm run demo` | Builds both frontends and starts the normal one-backend presentation profile on `8000`. |
+
+Start `npm run dev` before loading or reloading `chrome-extension/dist`.
+Chrome can retain an invalid side-panel document if Vite rewrites `dist` while
+the panel is already open; after the extension dev server reports ready, use
+the unpacked extension's **Reload** action once and reopen the toolbar panel.
+The generated development manifest then connects only to loopback Vite on
+`5173`; it does not broaden production permissions.
 
 The extension always connects to `ws://127.0.0.1:8000/ws` unless a validated
 build-time `VITE_STREAMSENSE_WS_URL` overrides it. The URL must use `ws` or
