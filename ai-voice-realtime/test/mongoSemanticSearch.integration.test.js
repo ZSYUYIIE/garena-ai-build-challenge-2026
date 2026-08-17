@@ -65,10 +65,32 @@ test(
       const semantic = new MongoSemanticHistoryService({
         repository: reopenedRepository,
       });
-      const response = await waitForSemanticResult(semantic, eventId);
+      const reopenedHistory = new HistoryService({
+        repository: reopenedRepository,
+        semanticHistoryService: semantic,
+      });
+      const response = await waitForSemanticResult(reopenedHistory, eventId);
       assert.equal(response.retrievalMode, "semantic");
       assert.equal(response.results[0]?.eventId, eventId);
       assert.equal(response.results[0]?.sessionId, sessionId);
+
+      const sessionPage = await reopenedHistory.listSessions({ limit: 12 });
+      assert.equal(sessionPage.sessions[0]?.sessionId, sessionId);
+      const eventPage = await reopenedHistory.listSessionEvents(sessionId);
+      assert.equal(eventPage.events[0]?.id, eventId);
+      const graph = await reopenedHistory.getContextGraph({
+        sessionId,
+        limit: 80,
+      });
+      assert.equal(
+        graph.nodes.some((node) => node.id === `session:${sessionId}`),
+        true,
+      );
+      assert.equal(
+        graph.nodes.some((node) => node.id === `event:${eventId}`),
+        true,
+      );
+      assert.ok(graph.edges.length > 0);
 
       const sharedDocument = await database.collection("events").findOne({
         id: eventId,
@@ -88,13 +110,13 @@ test(
   },
 );
 
-async function waitForSemanticResult(semantic, eventId) {
+async function waitForSemanticResult(history, eventId) {
   const deadline = Date.now() + 120_000;
   let lastErrorCode = "not_ready";
 
   while (Date.now() < deadline) {
     try {
-      const response = await semantic.searchSimilarEvents({
+      const response = await history.searchSimilarEvents({
         query: "Which close-range attempt did the goalkeeper save?",
         limit: 5,
       });
