@@ -138,8 +138,18 @@ export function SearchPage() {
             transcript content is searched.
           </p>
         ) : response.results.length === 0 ? (
-          <EmptyState title="No matching moments">
-            <p>Try a broader description, a person or team name, or remove the domain filter.</p>
+          <EmptyState
+            title={
+              response.meta.dataOrigin === "empty"
+                ? "No saved moments yet"
+                : "No matching moments"
+            }
+          >
+            <p>
+              {response.meta.dataOrigin === "empty"
+                ? "Start StreamSense Live from the Chrome extension and let it save a significant moment. It will become searchable here after the backend archives and indexes it."
+                : "Try a broader description, a person or team name, or remove the domain filter."}
+            </p>
           </EmptyState>
         ) : (
           <>

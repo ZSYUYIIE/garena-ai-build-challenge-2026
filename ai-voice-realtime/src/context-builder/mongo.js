@@ -1,3 +1,6 @@
+import { setServers as setDnsServers } from "node:dns";
+import { isIP } from "node:net";
+
 import { Collection, MongoClient } from "mongodb";
 
 import { upsertMongoEventFields } from "../events/mongoEventUpsert.js";
@@ -45,6 +48,11 @@ export async function closeMongoClient() {
 }
 
 async function connectMongoClient() {
+  const dnsServers = parseMongoDnsServers(process.env.MONGODB_DNS_SERVERS);
+  if (dnsServers.length > 0) {
+    setDnsServers(dnsServers);
+  }
+
   const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017";
   const connectionOptions = /(?:\?|&)serverSelectionTimeoutMS=/iu.test(mongoUri)
     ? {}
@@ -59,6 +67,28 @@ async function connectMongoClient() {
     await candidate.close().catch(() => {});
     throw error;
   }
+}
+
+/**
+ * Parse an optional backend-only resolver list used for MongoDB Atlas SRV
+ * lookups when the host's default Node.js DNS resolver is unavailable.
+ *
+ * @param {string | undefined} value
+ * @returns {string[]}
+ */
+export function parseMongoDnsServers(value) {
+  const servers = String(value ?? "")
+    .split(",")
+    .map((server) => server.trim())
+    .filter(Boolean);
+
+  if (servers.length > 3 || servers.some((server) => isIP(server) === 0)) {
+    throw new TypeError(
+      "MONGODB_DNS_SERVERS must contain at most three comma-separated IP addresses.",
+    );
+  }
+
+  return [...new Set(servers)];
 }
 
 async function initVectorIndex(db) {

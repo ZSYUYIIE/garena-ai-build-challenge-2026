@@ -92,6 +92,7 @@ The backend expects these settings in its local ignored environment:
 | `STREAMSENSE_EXTENSION_ID` | Exact unpacked extension ID allowed to connect to `/ws`. |
 | `MONGODB_URI` | Atlas Drivers SRV URI or `mongodb://localhost:27017` for the optional local store. |
 | `MONGODB_DB_NAME` | Mongo database name; defaults to `streamsense`. |
+| `MONGODB_DNS_SERVERS` | Optional comma-separated literal DNS resolver IPs for Atlas SRV lookups when Node cannot use the host resolver. |
 | `STREAMSENSE_HISTORY_MODE` | `auto` (default), `mongodb`, or `memory`. A configured Mongo URI always selects durable Memory; `mongodb` additionally fails startup when the URI is absent. |
 | `HOST` / `PORT` | Backend bind address; defaults to `127.0.0.1:8000`. |
 
@@ -273,6 +274,9 @@ The backend did not use MongoDB history. Confirm the Mongo URI is present and
 reachable. Set `STREAMSENSE_HISTORY_MODE=mongodb` for finals or persistence
 acceptance: a missing URI, DNS/SRV failure, authentication failure, timeout, or
 TLS failure then stops startup early with an actionable credential-free error.
+If Windows resolves the Atlas SRV record but Node reports `querySrv
+ECONNREFUSED`, set `MONGODB_DNS_SERVERS=1.1.1.1,8.8.8.8` in the ignored
+`ai-voice-realtime/.env.local`; this changes only the backend process resolver.
 
 ### Open Memory Dashboard shows 404
 

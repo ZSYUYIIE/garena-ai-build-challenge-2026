@@ -106,6 +106,10 @@ Normal root `npm run dev`, `npm run dev:dashboard`, and `npm run demo` start
 `server.js`. Synthetic history startup/export paths have been removed; only
 automated test fixtures remain.
 
+Atlas SRV resolution normally uses the host DNS resolver. An optional validated
+`MONGODB_DNS_SERVERS` list can override the resolver inside the backend process
+without changing system DNS or exposing the MongoDB connection string.
+
 ## Memory dashboard
 
 Memory consumes bounded REST resources for session lists, details, events,

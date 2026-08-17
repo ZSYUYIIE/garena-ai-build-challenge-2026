@@ -119,6 +119,32 @@ describe("history intelligence surfaces", () => {
     expect(screen.getByRole("link", { name: "Memory" })).toBeInTheDocument();
   });
 
+  it("points an empty durable search corpus back to StreamSense Live", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          meta: { dataOrigin: "empty" },
+          results: [],
+          retrievalMode: "semantic",
+        }),
+      ),
+    );
+
+    renderDashboard("/search");
+    await user.type(
+      screen.getByRole("searchbox", { name: "What are you looking for?" }),
+      "turning point",
+    );
+    await user.click(screen.getByRole("button", { name: "Search history" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "No saved moments yet" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Start StreamSense Live/u)).toBeInTheDocument();
+  });
+
   it("redirects a valid legacy Explore link into session relationships", async () => {
     const fetchMock = createHistorySurfaceFetch();
     vi.stubGlobal("fetch", fetchMock);
