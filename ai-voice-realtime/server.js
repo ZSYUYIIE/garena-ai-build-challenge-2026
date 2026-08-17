@@ -11,17 +11,10 @@ import {
 } from "./src/context-builder/contextstore.js";
 import { getMongodb } from "./src/context-builder/mongo.js";
 import { createStreamSenseServer } from "./src/server/createStreamSenseServer.js";
-import {
-  createDemoSemanticResults,
-  seedDemoHistory,
-} from "./src/history/demoHistory.js";
 import { MemoryHistoryRepository } from "./src/history/memoryHistoryRepository.js";
 import { MongoHistoryRepository } from "./src/history/mongoHistoryRepository.js";
 import { MongoSemanticHistoryService } from "./src/history/mongoSemanticHistoryService.js";
-import {
-  DemoSemanticHistoryService,
-  UnavailableSemanticHistoryService,
-} from "./src/history/semanticHistoryService.js";
+import { UnavailableSemanticHistoryService } from "./src/history/semanticHistoryService.js";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 loadEnvironment({
@@ -33,13 +26,10 @@ loadEnvironment({
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 8000);
 const historyMode = process.env.STREAMSENSE_HISTORY_MODE || "auto";
-if (!["auto", "mongodb", "memory", "demo"].includes(historyMode)) {
+if (!["auto", "mongodb", "memory"].includes(historyMode)) {
   throw new Error(
-    "STREAMSENSE_HISTORY_MODE must be 'auto', 'mongodb', 'memory', or 'demo'.",
+    "STREAMSENSE_HISTORY_MODE must be 'auto', 'mongodb', or 'memory'.",
   );
-}
-if (historyMode === "demo" && process.env.NODE_ENV === "production") {
-  throw new Error("Dashboard demo history cannot run in production mode.");
 }
 
 let mongoDatabase = null;
@@ -52,21 +42,16 @@ if (process.env.MONGODB_URI) {
   await accountRepository.ensureIndexes();
 }
 
-let historyRepository = new MemoryHistoryRepository();
-let semanticHistoryService = new UnavailableSemanticHistoryService();
-if (historyMode === "demo") {
-  const demo = await seedDemoHistory(historyRepository);
-  semanticHistoryService = new DemoSemanticHistoryService({
-    results: createDemoSemanticResults(demo),
-    domainsBySession: new Map(
-      demo.sessions.map((session) => [session.sessionId, session.domain]),
-    ),
-  });
-} else if (historyMode === "mongodb" && !mongoDatabase) {
+if (historyMode === "mongodb" && !mongoDatabase) {
   throw new Error(
     "STREAMSENSE_HISTORY_MODE=mongodb requires MONGODB_URI.",
   );
-} else if (mongoDatabase) {
+}
+
+let historyRepository = new MemoryHistoryRepository();
+let semanticHistoryService = new UnavailableSemanticHistoryService();
+let historyProvider = "memory (non-durable)";
+if (mongoDatabase) {
   historyRepository = new MongoHistoryRepository({
     sessionsCollection: mongoDatabase.collection("sessions"),
     eventsCollection: mongoDatabase.collection("events"),
@@ -75,7 +60,9 @@ if (historyMode === "demo") {
   semanticHistoryService = new MongoSemanticHistoryService({
     repository: historyRepository,
   });
+  historyProvider = "MongoDB (durable)";
 }
+console.log(`Memory history provider: ${historyProvider}.`);
 
 const runtime = createStreamSenseServer({
   apiKey: process.env.GOOGLE_API_KEY || "",

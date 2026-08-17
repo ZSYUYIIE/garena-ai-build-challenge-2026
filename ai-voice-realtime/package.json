@@ -6,8 +6,6 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "seed:dashboard": "node scripts/exportDashboardSeed.js",
-    "start:dashboard-demo": "node scripts/startDashboardDemo.js",
     "test": "node --test",
     "check": "node --check server.js && node --test"
   },

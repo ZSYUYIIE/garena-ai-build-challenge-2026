@@ -1,9 +1,5 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { EventStore } from "../src/events/eventStore.js";
@@ -19,7 +15,7 @@ import {
   normalizeHistoryEvent,
 } from "../src/history/historySchemas.js";
 
-test("dashboard demo history is deterministic and production-schema compatible", () => {
+test("dashboard history fixture is deterministic and production-schema compatible", () => {
   const first = createDemoHistory();
   const second = createDemoHistory();
 
@@ -78,7 +74,7 @@ test("dashboard demo history is deterministic and production-schema compatible",
   assert.deepEqual(findForbiddenKeys(first), []);
 });
 
-test("dashboard demo projects five bounded judge-friendly entertainment lanes", () => {
+test("dashboard history fixture projects five bounded entertainment lanes", () => {
   const demo = createDemoHistory();
   const graph = buildContextGraph({
     sessions: demo.sessions,
@@ -183,32 +179,6 @@ test("a realtime EventStore result normalizes without changing its public shape"
   } finally {
     store.close();
   }
-});
-
-test("demo export and startup scripts fail closed in production", () => {
-  const projectDirectory = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "..",
-  );
-  const demoPath = path.join(projectDirectory, "data", "dashboard-demo.json");
-  const before = fs.existsSync(demoPath) ? fs.readFileSync(demoPath) : null;
-
-  for (const script of [
-    "scripts/exportDashboardSeed.js",
-    "scripts/startDashboardDemo.js",
-  ]) {
-    const result = spawnSync(process.execPath, [script], {
-      cwd: projectDirectory,
-      env: { ...process.env, NODE_ENV: "production" },
-      encoding: "utf8",
-      timeout: 5_000,
-    });
-    assert.notEqual(result.status, 0, script);
-    assert.match(`${result.stdout}\n${result.stderr}`, /production/i, script);
-  }
-
-  const after = fs.existsSync(demoPath) ? fs.readFileSync(demoPath) : null;
-  assert.deepEqual(after, before);
 });
 
 function findForbiddenKeys(value, path = "history") {
