@@ -5,7 +5,7 @@ StreamSense is one accessibility product with two connected user surfaces:
 - **StreamSense Live** — a Chrome side panel that watches an explicitly
   authorized tab, narrates meaningful visual changes, maintains the current
   timeline, and accepts text or voice questions.
-- **StreamSense Memory** — a browser dashboard for reviewing the same saved
+- **StreamSense Memory** — a browser dashboard for reviewing those same saved
   sessions, searching past moments, and exploring their relationships in an
   accessible Three.js map.
 
@@ -92,7 +92,7 @@ The backend expects these settings in its local ignored environment:
 | `STREAMSENSE_EXTENSION_ID` | Exact unpacked extension ID allowed to connect to `/ws`. |
 | `MONGODB_URI` | Atlas Drivers SRV URI or `mongodb://localhost:27017` for the optional local store. |
 | `MONGODB_DB_NAME` | Mongo database name; defaults to `streamsense`. |
-| `STREAMSENSE_HISTORY_MODE` | `auto` (default), `mongodb`, `memory`, or test-only `demo`. When a Mongo URI exists, MongoDB is the Memory history source except in explicit `demo` mode. |
+| `STREAMSENSE_HISTORY_MODE` | `auto` (default), `mongodb`, or `memory`. A configured Mongo URI always selects durable Memory; `mongodb` additionally fails startup when the URI is absent. |
 | `HOST` / `PORT` | Backend bind address; defaults to `127.0.0.1:8000`. |
 
 Do not commit provider keys, a populated Mongo URI, service-account files, or
@@ -167,7 +167,7 @@ npm run demo
 
 `demo` builds both user surfaces and starts the normal backend. Open
 `http://127.0.0.1:8000/dashboard/` and load `chrome-extension/dist`. It uses real
-persisted history; it does not inject fixtures.
+persisted history and has no synthetic history runtime path.
 
 ## Live-to-Memory flow
 
@@ -181,9 +181,8 @@ persisted history; it does not inject fixtures.
 7. Stop StreamSense and restart the backend. With MongoDB configured, the same
    session and event remain available.
 
-This is the required finals acceptance path. Existing sessions shown to judges
-should be real sessions previously captured by StreamSense, not synthetic demo
-records.
+Existing sessions shown to judges should be real sessions previously captured
+by StreamSense, not invented records.
 
 ## Questions and narration
 
@@ -220,10 +219,10 @@ relationship also has a keyboard- and screen-reader-readable DOM alternative.
 ## Data guarantees and limits
 
 - A real accepted event is inserted into SQLite before it is published.
-- History archiving is asynchronous and cannot block the realtime response
-  path.
+- History archiving is asynchronous, bounded, retried for transient failures,
+  and cannot block the realtime response path.
 - Mongo history and embedding enrichment upsert the same `events` document by
-  event ID, preserving each other's fields.
+  event ID, preserving each other's fields even when their first writes race.
 - Dashboard APIs are bounded and paginated.
 - The dashboard is not a second realtime WebSocket client; it uses REST polling
   only for the active session page.
@@ -260,9 +259,9 @@ or HDMI presentation acceptance.
 
 ### Memory is empty after startup
 
-Confirm `MONGODB_URI` and `MONGODB_DB_NAME`, restart the backend, and inspect the
-backend startup error. With no Mongo URI, Memory deliberately uses an empty
-in-memory fallback.
+Confirm `MONGODB_URI` and `MONGODB_DB_NAME`, restart the backend, and read the
+`Memory history provider` startup line. With no Mongo URI, Memory deliberately
+uses an empty in-memory fallback.
 
 ### Memory disappears after restart
 

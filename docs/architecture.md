@@ -56,8 +56,6 @@ queries/sources are session-only and are not archived into Memory.
 
 ## Durable Live-to-Memory history
 
-SQLite and MongoDB have different responsibilities:
-
 ```text
 grounded event
     |
@@ -65,7 +63,7 @@ grounded event
     |      fast local evidence; required before publication
     |
     +--> HistoryArchiveQueue
-           asynchronous, bounded, best-effort
+           asynchronous, bounded, retried, off the realtime path
                 |
                 +--> MongoDB sessions
                 +--> MongoDB events
@@ -77,15 +75,16 @@ to `MongoHistoryRepository` without blocking the realtime path.
 
 The `events` collection is shared by two asynchronous writers:
 
-- chronological history writes the validated event fields and
+- chronological history writes validated event fields and
   `historyArchived: true`;
 - semantic enrichment writes the 768-dimensional embedding and semantic
   metadata.
 
-Both writers upsert by the same event `id` and use `$set`, so either may finish
-first without erasing the other's fields. Dashboard history ignores context-only
-documents until `historyArchived` is true. This removes the former split where
-Memory lived in JavaScript Maps while MongoDB held a separate semantic copy.
+Both writers upsert by the same event `id` and preserve one another's fields.
+If their first inserts race, the duplicate-key loser retries as an ordinary
+update. Memory ignores context-only documents until `historyArchived` is true.
+This removes the former split where Memory lived in JavaScript Maps while
+MongoDB held a separate semantic copy.
 
 The `sessions` collection stores durable metadata and aggregates: start/end,
 duration, title, domain, summary, entities/topics, event counts, and data origin.
@@ -97,13 +96,13 @@ duration, title, domain, summary, entities/topics, event counts, and data origin
 - `auto` — default; use MongoDB when configured, otherwise empty in-memory
   history;
 - `mongodb` — require MongoDB and fail startup when the URI is absent;
-- `memory` — retained as a no-Mongo/test fallback; a configured MongoDB still
-  remains the durable history source;
-- `demo` — explicit synthetic fixture mode for tests only, rejected in
-  production.
+- `memory` — no-Mongo/test fallback. A configured MongoDB still becomes the
+  durable history source so an old local `memory` setting cannot split Live and
+  Memory again.
 
 Normal root `npm run dev`, `npm run dev:dashboard`, and `npm run demo` start
-`server.js` and never seed synthetic sessions.
+`server.js`. Synthetic history startup/export paths have been removed; only
+automated test fixtures remain.
 
 ## Memory dashboard
 
@@ -117,7 +116,7 @@ After backend restart, the same session remains because the API reconstructs it
 from MongoDB.
 
 Semantic search uses the same durable event documents. Query embeddings are
-compared against event embeddings; results are then joined to durable session
+compared against event embeddings; results are joined to durable session
 metadata and validated through the existing public schema.
 
 ## Relationship map
@@ -158,8 +157,8 @@ single-user/shared prototype and is not yet partitioned by account identity.
 ## Failure boundaries
 
 - SQLite failure prevents publication and automatic narration of that event.
-- Mongo history failure is reported as degraded history but cannot retract a
-  published SQLite-backed timeline event.
+- Mongo history failure is retried, then reported as degraded history; it cannot
+  retract a published SQLite-backed timeline event.
 - Embedding/vector failure leaves chronological Memory history usable.
 - Cloud STT failure degrades commentary context but not stored visual events.
 - Gemini Live failure degrades questions/answers but Chrome timeline TTS remains
@@ -188,7 +187,7 @@ npm.cmd run dev
 ```
 
 Ports are fixed: backend `8000`, extension Vite `5173`, and dashboard Vite
-`5174`. The root runner starts exactly one backend and does not seed fixtures.
+`5174`. The root runner starts exactly one backend and no synthetic history.
 
 Before merge:
 
