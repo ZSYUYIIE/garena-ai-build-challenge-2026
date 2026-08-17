@@ -1,5 +1,6 @@
 import { MongoClient } from "mongodb";
 
+import { upsertMongoEventFields } from "../events/mongoEventUpsert.js";
 import { historyEventSchema, historySessionSchema } from "./historySchemas.js";
 import { HistoryRepository } from "./historyRepository.js";
 
@@ -104,16 +105,10 @@ export class MongoHistoryRepository extends HistoryRepository {
       { id: event.id },
       { projection: { historyArchived: 1 } },
     );
-    await this.eventsCollection.updateOne(
-      { id: event.id },
-      {
-        $set: {
-          ...event,
-          historyArchived: true,
-        },
-      },
-      { upsert: true },
-    );
+    await upsertMongoEventFields(this.eventsCollection, event.id, {
+      ...event,
+      historyArchived: true,
+    });
     return {
       inserted: existing?.historyArchived !== true,
       event: clone(event),
@@ -138,9 +133,7 @@ export class MongoHistoryRepository extends HistoryRepository {
       .sort({ startedAt: -1, sessionId: -1 })
       .limit(safeLimit + 1)
       .toArray();
-    const items = documents
-      .slice(0, safeLimit)
-      .map(sessionFromDocument);
+    const items = documents.slice(0, safeLimit).map(sessionFromDocument);
     return {
       items,
       nextCursor:

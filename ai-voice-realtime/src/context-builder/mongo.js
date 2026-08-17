@@ -1,5 +1,7 @@
 import { Collection, MongoClient } from "mongodb";
 
+import { upsertMongoEventFields } from "../events/mongoEventUpsert.js";
+
 /** @type {MongoClient | undefined} */
 let mongoClient;
 /** @type {Promise<void> | undefined} */
@@ -89,17 +91,11 @@ export async function saveContextDataToMongo(ctxData) {
     throw new TypeError("Semantic context storage requires an event id");
   }
   const collection = (await getMongodb()).collection("events");
-  await collection.updateOne(
-    { id: ctxData.id },
-    {
-      $set: {
-        ...ctxData,
-        semanticIndexed: true,
-        semanticUpdatedAt: new Date().toISOString(),
-      },
-    },
-    { upsert: true },
-  );
+  await upsertMongoEventFields(collection, ctxData.id, {
+    ...ctxData,
+    semanticIndexed: true,
+    semanticUpdatedAt: new Date().toISOString(),
+  });
 }
 
 /**
