@@ -15,16 +15,13 @@ const PROFILE_PORTS = Object.freeze({
   realtime: [8000, 5173],
 });
 
-function backendProcess(rootDir, demoHistory) {
+function backendProcess(rootDir) {
   return {
     id: "backend",
     role: "backend",
     cwd: path.join(rootDir, "ai-voice-realtime"),
     command: process.execPath,
-    args: [
-      "--watch",
-      demoHistory ? "scripts/startDashboardDemo.js" : "server.js",
-    ],
+    args: ["--watch", "server.js"],
     host: DEV_HOST,
     port: 8000,
     env: {
@@ -69,13 +66,7 @@ export function buildProcessPlan(
     );
   }
 
-  const processes = [];
-
-  if (profile === "all" || profile === "dashboard") {
-    processes.push(backendProcess(rootDir, true));
-  } else {
-    processes.push(backendProcess(rootDir, false));
-  }
+  const processes = [backendProcess(rootDir)];
 
   if (profile === "all" || profile === "realtime") {
     processes.push(

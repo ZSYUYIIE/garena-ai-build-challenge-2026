@@ -14,7 +14,7 @@
   "scripts": {
     "build": "npm run build --workspace chrome-extension --workspace session-dashboard",
     "predemo": "npm run build",
-    "demo": "npm run start:dashboard-demo --workspace ai-voice-realtime",
+    "demo": "npm run start --workspace ai-voice-realtime",
     "dev": "node scripts/dev-runner.js all",
     "dev:dashboard": "node scripts/dev-runner.js dashboard",
     "dev:realtime": "node scripts/dev-runner.js realtime",
