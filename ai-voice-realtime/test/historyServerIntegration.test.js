@@ -34,6 +34,13 @@ test("the main server exposes history APIs and the built dashboard SPA", async (
   const address = await runtime.listen({ host: "127.0.0.1", port: 0 });
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
+  const healthResponse = await fetch(`${baseUrl}/api/health`);
+  assert.equal(healthResponse.status, 200);
+  assert.deepEqual(await healthResponse.json(), {
+    service: "streamsense",
+    status: "ok",
+  });
+
   const sessionsResponse = await fetch(`${baseUrl}/api/sessions`);
   const sessions = await sessionsResponse.json();
   assert.equal(sessionsResponse.status, 200);
@@ -50,6 +57,57 @@ test("the main server exposes history APIs and the built dashboard SPA", async (
   const route = await fetch(`${baseUrl}/dashboard/sessions/example`);
   assert.equal(route.status, 200);
   assert.match(await route.text(), /StreamSense History/);
+});
+
+test("development backend redirects dashboard handoffs to the Vite dashboard", async (t) => {
+  const missingDashboardDirectory = path.join(
+    os.tmpdir(),
+    `streamsense-missing-dashboard-${Date.now()}`,
+  );
+  const runtime = createStreamSenseServer({
+    eventStore: { close() {} },
+    dashboardDirectory: missingDashboardDirectory,
+    dashboardDevelopmentUrl: "http://127.0.0.1:5174/dashboard/",
+    sessionFactory() {
+      throw new Error("dashboard HTTP redirects must not start realtime providers");
+    },
+  });
+  t.after(() => runtime.close());
+  const address = await runtime.listen({ host: "127.0.0.1", port: 0 });
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const root = await fetch(`${baseUrl}/dashboard`, { redirect: "manual" });
+  assert.equal(root.status, 307);
+  assert.equal(
+    root.headers.get("location"),
+    "http://127.0.0.1:5174/dashboard/",
+  );
+
+  const session = await fetch(
+    `${baseUrl}/dashboard/sessions/11111111-1111-4111-8111-111111111111?source=extension`,
+    { redirect: "manual" },
+  );
+  assert.equal(session.status, 307);
+  assert.equal(
+    session.headers.get("location"),
+    "http://127.0.0.1:5174/dashboard/sessions/11111111-1111-4111-8111-111111111111?source=extension",
+  );
+});
+
+test("development dashboard redirect rejects unsafe targets", () => {
+  for (const dashboardDevelopmentUrl of [
+    "https://example.com/dashboard/",
+    "http://127.0.0.1:5174/",
+    "javascript:alert(1)",
+  ]) {
+    assert.throws(
+      () => createStreamSenseServer({
+        eventStore: { close() {} },
+        dashboardDevelopmentUrl,
+      }),
+      /DASHBOARD_DEV_URL/i,
+    );
+  }
 });
 
 test("default server history is empty and archive failures reach sanitized telemetry", async (t) => {

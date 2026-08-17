@@ -76,6 +76,7 @@ const runtime = createStreamSenseServer({
   databasePath:
     process.env.EVENT_DB_PATH ||
     path.join(moduleDirectory, "data", "streamsense.db"),
+  dashboardDevelopmentUrl: process.env.STREAMSENSE_DASHBOARD_DEV_URL || "",
   saveContextData: process.env.MONGODB_URI ? saveContextData : undefined,
   getPromptContext: process.env.MONGODB_URI ? getContextData : undefined,
   closeContextStore: process.env.MONGODB_URI

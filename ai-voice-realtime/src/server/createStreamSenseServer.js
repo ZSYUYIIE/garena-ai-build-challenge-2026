@@ -46,6 +46,7 @@ export function createStreamSenseServer({
   sessionOptions = {},
   staticDirectory = path.join(projectDirectory, "static"),
   dashboardDirectory = path.resolve(projectDirectory, "../session-dashboard/dist"),
+  dashboardDevelopmentUrl = "",
 } = {}) {
   const activeHistoryRepository =
     historyRepository ?? historyService?.repository ?? new MemoryHistoryRepository();
@@ -82,10 +83,24 @@ export function createStreamSenseServer({
   const sessionClosures = new WeakMap();
   let closing = false;
 
+  app.get("/api/health", (_request, response) => {
+    response.json({ service: "streamsense", status: "ok" });
+  });
   app.use("/api/accounts", createAccountRouter({ accountRepository }));
   app.use("/api", createHistoryRouter({ historyService: activeHistoryService }));
+
   const dashboardIndex = path.join(dashboardDirectory, "index.html");
-  if (fs.existsSync(dashboardIndex)) {
+  const developmentDashboardUrl = parseDevelopmentDashboardUrl(
+    dashboardDevelopmentUrl,
+  );
+  if (developmentDashboardUrl) {
+    app.get(/^\/dashboard$/, (request, response) => {
+      redirectToDevelopmentDashboard(request, response, developmentDashboardUrl);
+    });
+    app.get("/dashboard/*", (request, response) => {
+      redirectToDevelopmentDashboard(request, response, developmentDashboardUrl);
+    });
+  } else if (fs.existsSync(dashboardIndex)) {
     app.get(/^\/dashboard$/, (_request, response) => {
       response.redirect(308, "/dashboard/");
     });
@@ -150,8 +165,10 @@ export function createStreamSenseServer({
     browser.once("close", () => {
       void closeSession();
     });
-    Promise.resolve(session.start()).catch((error) => {
-      if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify({ type: "error", text: "Session startup failed." }));
+    Promise.resolve(session.start()).catch(() => {
+      if (browser.readyState === WebSocket.OPEN) {
+        browser.send(JSON.stringify({ type: "error", text: "Session startup failed." }));
+      }
       void closeSession();
     });
   });
@@ -199,9 +216,14 @@ export function createStreamSenseServer({
       for (const browser of browserWss.clients) {
         if (browser.readyState !== WebSocket.CLOSED) browser.terminate();
       }
-      await Promise.allSettled([closeWebSocketServer(browserWss), closeHttpServer(httpServer)]);
+      await Promise.allSettled([
+        closeWebSocketServer(browserWss),
+        closeHttpServer(httpServer),
+      ]);
       const historyDrained = activeHistoryArchive.drain
-        ? await Promise.resolve(activeHistoryArchive.drain({ timeoutMs: 2_000 })).catch(() => false)
+        ? await Promise.resolve(
+            activeHistoryArchive.drain({ timeoutMs: 2_000 }),
+          ).catch(() => false)
         : true;
       // Do not close a repository underneath a still-running off-path archive.
       if (historyDrained) {
@@ -227,6 +249,54 @@ export function createStreamSenseServer({
     listen,
     close,
   };
+}
+
+function parseDevelopmentDashboardUrl(candidate) {
+  const normalized = candidate?.trim();
+  if (!normalized) return null;
+
+  let url;
+  try {
+    url = new URL(normalized);
+  } catch {
+    throw new TypeError("STREAMSENSE_DASHBOARD_DEV_URL must be a valid URL.");
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  const loopback =
+    hostname === "127.0.0.1" ||
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "[::1]";
+  if (
+    !loopback ||
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.pathname !== "/dashboard/" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new TypeError(
+      "STREAMSENSE_DASHBOARD_DEV_URL must be a loopback /dashboard/ URL.",
+    );
+  }
+  return url;
+}
+
+function redirectToDevelopmentDashboard(request, response, dashboardUrl) {
+  const requestedUrl = new URL(
+    request.originalUrl || "/dashboard/",
+    "http://streamsense.local",
+  );
+  if (requestedUrl.pathname === "/dashboard") {
+    requestedUrl.pathname = "/dashboard/";
+  }
+  const target = new URL(
+    `${requestedUrl.pathname}${requestedUrl.search}`,
+    dashboardUrl.origin,
+  );
+  response.redirect(307, target.toString());
 }
 
 function closeWebSocketServer(browserWss) {

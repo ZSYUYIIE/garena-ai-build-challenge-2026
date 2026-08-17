@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   buildProcessPlan,
   createChildEnvironment,
+  DEV_DASHBOARD_URL,
   validateProcessPlan,
 } from "../scripts/dev-plan.js";
 import {
@@ -53,8 +54,12 @@ test("all profile starts one real backend plus extension and dashboard", () => {
   );
   assert.deepEqual(plan.processes[0].args, ["--watch", "server.js"]);
   assert.equal(
+    plan.processes[0].env.STREAMSENSE_DASHBOARD_DEV_URL,
+    DEV_DASHBOARD_URL,
+  );
+  assert.equal(
     plan.processes[1].env.VITE_STREAMSENSE_DASHBOARD_URL,
-    "http://127.0.0.1:5174/dashboard/",
+    DEV_DASHBOARD_URL,
   );
 });
 
@@ -71,12 +76,17 @@ test("dashboard profile runs the real backend watcher and dashboard only", () =>
     ],
   );
   assert.deepEqual(plan.processes[0].args, ["--watch", "server.js"]);
+  assert.equal(
+    plan.processes[0].env.STREAMSENSE_DASHBOARD_DEV_URL,
+    DEV_DASHBOARD_URL,
+  );
 });
 
-test("realtime profile pins an empty dashboard override and runs no dashboard", () => {
+test("realtime profile disables both dashboard handoff paths and runs no dashboard", () => {
   const plan = validateProcessPlan(
     buildProcessPlan("realtime", { viteCliPath: FAKE_VITE_CLI }),
   );
+  const backend = plan.processes.find(({ id }) => id === "backend");
   const extension = plan.processes.find(({ id }) => id === "extension");
 
   assert.deepEqual(
@@ -86,6 +96,7 @@ test("realtime profile pins an empty dashboard override and runs no dashboard", 
       ["extension", 5173],
     ],
   );
+  assert.equal(backend.env.STREAMSENSE_DASHBOARD_DEV_URL, "");
   assert.equal(extension.env.VITE_STREAMSENSE_DASHBOARD_URL, "");
   assert.deepEqual(extension.unsetEnv, []);
   assert.deepEqual(plan.processes[0].args, ["--watch", "server.js"]);
@@ -95,17 +106,20 @@ test("realtime child environment overrides inherited dashboard values with empty
   const realtimePlan = buildProcessPlan("realtime", {
     viteCliPath: FAKE_VITE_CLI,
   });
+  const backend = realtimePlan.processes.find(({ id }) => id === "backend");
   const extension = realtimePlan.processes.find(({ id }) => id === "extension");
-  const environment = createChildEnvironment(
-    {
-      PATH: "C:\\tools",
-      VITE_STREAMSENSE_DASHBOARD_URL: "http://stale.example/",
-    },
-    extension,
-  );
+  const inherited = {
+    PATH: "C:\\tools",
+    STREAMSENSE_DASHBOARD_DEV_URL: "http://127.0.0.1:9999/dashboard/",
+    VITE_STREAMSENSE_DASHBOARD_URL: "http://stale.example/",
+  };
 
-  assert.equal(environment.PATH, "C:\\tools");
-  assert.equal(environment.VITE_STREAMSENSE_DASHBOARD_URL, "");
+  const backendEnvironment = createChildEnvironment(inherited, backend);
+  const extensionEnvironment = createChildEnvironment(inherited, extension);
+
+  assert.equal(backendEnvironment.PATH, "C:\\tools");
+  assert.equal(backendEnvironment.STREAMSENSE_DASHBOARD_DEV_URL, "");
+  assert.equal(extensionEnvironment.VITE_STREAMSENSE_DASHBOARD_URL, "");
 });
 
 test("plan validation rejects a second backend", () => {
@@ -191,7 +205,11 @@ test("runnable plans build isolated child environments", () => {
   assert.notEqual(runnable.processes[0].environment, runnable.processes[1].environment);
   assert.equal(runnable.processes[0].environment.PORT, "8000");
   assert.equal(
+    runnable.processes[0].environment.STREAMSENSE_DASHBOARD_DEV_URL,
+    DEV_DASHBOARD_URL,
+  );
+  assert.equal(
     runnable.processes[1].environment.VITE_STREAMSENSE_DASHBOARD_URL,
-    "http://127.0.0.1:5174/dashboard/",
+    DEV_DASHBOARD_URL,
   );
 });

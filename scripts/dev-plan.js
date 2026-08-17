@@ -8,6 +8,7 @@ export const PROJECT_ROOT = path.resolve(
 );
 
 export const DEV_HOST = "127.0.0.1";
+export const DEV_DASHBOARD_URL = "http://127.0.0.1:5174/dashboard/";
 
 const PROFILE_PORTS = Object.freeze({
   all: [8000, 5173, 5174],
@@ -15,7 +16,9 @@ const PROFILE_PORTS = Object.freeze({
   realtime: [8000, 5173],
 });
 
-function backendProcess(rootDir) {
+function backendProcess(rootDir, profile) {
+  const dashboardDevelopmentUrl =
+    profile === "all" || profile === "dashboard" ? DEV_DASHBOARD_URL : "";
   return {
     id: "backend",
     role: "backend",
@@ -27,6 +30,7 @@ function backendProcess(rootDir) {
     env: {
       HOST: DEV_HOST,
       PORT: "8000",
+      STREAMSENSE_DASHBOARD_DEV_URL: dashboardDevelopmentUrl,
     },
   };
 }
@@ -66,7 +70,7 @@ export function buildProcessPlan(
     );
   }
 
-  const processes = [backendProcess(rootDir)];
+  const processes = [backendProcess(rootDir, profile)];
 
   if (profile === "all" || profile === "realtime") {
     processes.push(
@@ -78,8 +82,7 @@ export function buildProcessPlan(
         env:
           profile === "all"
             ? {
-                VITE_STREAMSENSE_DASHBOARD_URL:
-                  "http://127.0.0.1:5174/dashboard/",
+                VITE_STREAMSENSE_DASHBOARD_URL: DEV_DASHBOARD_URL,
               }
             : { VITE_STREAMSENSE_DASHBOARD_URL: "" },
       }),
