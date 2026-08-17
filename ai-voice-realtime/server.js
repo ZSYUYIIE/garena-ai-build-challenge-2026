@@ -66,7 +66,7 @@ if (historyMode === "demo") {
   throw new Error(
     "STREAMSENSE_HISTORY_MODE=mongodb requires MONGODB_URI.",
   );
-} else if (mongoDatabase && historyMode !== "memory") {
+} else if (mongoDatabase) {
   historyRepository = new MongoHistoryRepository({
     sessionsCollection: mongoDatabase.collection("sessions"),
     eventsCollection: mongoDatabase.collection("events"),

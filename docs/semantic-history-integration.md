@@ -1,212 +1,117 @@
-# Semantic History Integration Handoff
+# Durable Memory and Semantic History Integration
 
-This document defines the narrow integration boundary inside the StreamSense
-product: the Live extension and Memory dashboard share one backend, while the
-durable retrieval adapter remains replaceable behind that backend. The current
-implementation owns the REST/UI contract, deterministic demo adapter,
-in-memory history repository, and context-graph read model. The durable
-integration owns:
+## Current status
 
-- durable MongoDB session and event storage;
-- vector embedding generation and vector search;
-- Redis current-session context;
-- retrieval filtering, ranking, thresholds, and production score calibration.
+StreamSense Live and Memory now share one durable MongoDB event history when
+`MONGODB_URI` is configured.
 
-This document covers the dashboard `SemanticHistoryService`. The realtime path
-now has a separate prototype: configured servers copy accepted event evidence
-to MongoDB with 768-dimensional embeddings and retrieve current-session matches
-for Live typed prompts. That best-effort copy is not canonical history, is not
-used by the dashboard search API, and does not implement Redis context or
-production ranking. The remaining durable dashboard integrations are not
-implemented or proven by the current in-memory composition. The
-boundary exists so they can be added without giving the React client database
-or provider knowledge.
+- `MongoHistoryRepository` owns session metadata and chronological Memory
+  queries.
+- semantic enrichment owns Gemini embeddings and vector retrieval.
+- both paths upsert the same `events` document by event `id`.
+- Memory exposes only events marked `historyArchived: true`.
+- SQLite remains the required local evidence write before a realtime event is
+  published.
 
-## Semantic search interface
+Normal root development and presentation commands do not seed synthetic
+sessions.
 
-Implement a subclass or compatible object for
-`SemanticHistoryService.searchSimilarEvents(input)`:
+## Collections
 
-```js
-class DurableSemanticHistoryService extends SemanticHistoryService {
-  async searchSimilarEvents({ query, sessionId, domain, limit }) {
-    return {
-      dataOrigin: "realtime",
-      retrievalMode: "semantic",
-      results: [],
-    };
-  }
-}
+### `sessions`
+
+Stores validated session metadata and aggregates:
+
+```text
+sessionId
+startedAt / endedAt / durationSeconds
+title / domain / sourceLabel / summary
+eventCount / importantEventCount
+entities / topics
+dataOrigin / createdAt / updatedAt
+historyArchived
 ```
 
-The input has already passed strict validation:
+### `events`
 
-| Field | Contract |
-| --- | --- |
-| `query` | Trimmed string, 2–500 characters. |
-| `sessionId` | Optional UUID. When present, include results only from that session. |
-| `domain` | Optional trimmed string, 1–80 characters. Apply as a case-insensitive logical domain filter. |
-| `limit` | Integer 1–50; default 10. Never return more than this many results. |
+Stores one document per real accepted event:
 
-The adapter must return an object with:
-
-```json
-{
-  "dataOrigin": "realtime",
-  "retrievalMode": "semantic",
-  "results": [
-    {
-      "sessionId": "10000000-0000-4000-8000-000000000001",
-      "sessionTitle": "Team A vs Team B",
-      "eventId": "20000000-0000-4000-8000-000000000001",
-      "timestampSeconds": 222,
-      "timestamp": "03:42",
-      "eventType": "shot_saved",
-      "description": "The goalkeeper saves a close-range shot.",
-      "entities": ["Team A", "Player 9"],
-      "topics": ["Close-range opportunity"],
-      "similarity": 0.88
-    }
-  ],
-  "warning": "Optional bounded warning text."
-}
+```text
+id / sessionId
+timestampSeconds / timestamp
+eventType / description
+entities / topicLabels
+importance / confidence
+createdAt
+historyArchived
+embedding / semanticIndexed / semanticUpdatedAt
 ```
 
-Each result is validated strictly. `sessionTitle` and `warning` are optional;
-`similarity` is a finite normalized score from 0 through 1 or `null` when the
-retrieval mode has no meaningful comparable score. Descriptions, labels, and
-arrays remain bounded by the schemas in
-`ai-voice-realtime/src/history/historySchemas.js`.
+The history writer sets chronological fields and `historyArchived`. The semantic
+writer sets embedding fields. `$set` upserts preserve fields owned by the other
+writer.
 
-The adapter owns the meaning and calibration of similarity. Do not expose raw
-provider distance if lower values mean “more similar”; normalize it before
-returning the contract. Apply `sessionId` and `domain` filters before the final
-limit, and use a deterministic tie-breaker so repeated calls are stable.
+### `dashboard_accounts`
 
-## Dependency injection
+Stores prototype profile/preferences. It is separate from history ownership;
+production account partitioning is future work.
 
-Construct the durable adapter in the backend process bootstrap and pass it as
-`semanticHistoryService`:
+## Write flow
 
-```js
-const semanticHistoryService = new DurableSemanticHistoryService(/* owned dependencies */);
-
-const runtime = createStreamSenseServer({
-  /* existing realtime configuration */
-  historyRepository,
-  semanticHistoryService,
-});
+```text
+ClientSession accepts grounded visual event
+    -> EventStore.record writes SQLite
+    -> protocol event is published to Live
+    -> HistoryArchiveQueue archives session/event to MongoDB
+    -> embedding job enriches the same Mongo event document
 ```
 
-`createStreamSenseServer` supplies the adapter to `HistoryService`. The REST
-router calls `HistoryService.searchSimilarEvents`; the React client remains
-unchanged and continues to call `POST /api/search`.
+The history queue is bounded and best-effort. A Mongo failure cannot undo a
+recorded/published SQLite event.
 
-Keep the storage boundary separate:
+## Read flow
 
-- a durable history implementation should satisfy `HistoryRepository`
-  (`upsertSession`, `archiveEvent`, `listSessions`, `getSession`,
-  `listSessionEvents`, and `close`);
-- the semantic adapter handles retrieval, not session CRUD;
-- Redis/current-context state must not become a required dependency for listing
-  already archived sessions;
-- the dashboard must never receive database credentials, provider keys,
-  embeddings, or Redis connection details.
+```text
+Memory REST
+    -> HistoryService
+    -> MongoHistoryRepository
+    -> sessions/events
 
-No merge of provider-specific code into the demo adapter is required. Inject a
-different implementation at composition time.
-
-## Modes and data origin
-
-Current process composition uses:
-
-| Mode | Repository | Semantic adapter | Restart behavior |
-| --- | --- | --- | --- |
-| `STREAMSENSE_HISTORY_MODE=memory` (default) | Empty in-memory repository | `UnavailableSemanticHistoryService` | All dashboard history is lost. |
-| `STREAMSENSE_HISTORY_MODE=demo` | Deterministically seeded in-memory repository | `DemoSemanticHistoryService` | Fixture resets; production mode refuses startup. |
-| Future durable composition | Durable repository implementation | Durable semantic adapter | Must be defined and tested by that integration. |
-
-`npm run dev:dashboard` starts one demo backend on port `8000` and the dashboard
-on `5174`. `npm run demo` builds both StreamSense frontends and starts one demo
-backend that serves the dashboard at `/dashboard/` on port `8000`. Neither mode
-is durable, and neither starts a second history backend.
-
-`dataOrigin` describes the records actually returned, not the environment name:
-
-- `demo` for deterministic fixture records;
-- `realtime` for records archived from realtime sessions;
-- `mixed` when an aggregate response contains both;
-- `empty` when no records/results contribute an origin.
-
-Do not label durable or provider-backed data as `demo`, and do not label fixture
-data as `realtime`.
-
-The dashboard response schema also understands `retrievalMode: "text"` for a
-future bounded lexical fallback. The current backend composition produces
-`semantic` from the deterministic adapter or `unavailable` from the default
-adapter. If a durable integration introduces `text`, update and test
-`HistoryService` mapping at the same time rather than silently relabeling it.
-
-## Failure contract
-
-Semantic retrieval is optional. If the adapter is absent, throws, times out, or
-returns invalid result records, `HistoryService` contains that failure and
-returns a successful degraded response:
-
-```json
-{
-  "meta": { "dataOrigin": "empty" },
-  "results": [],
-  "retrievalMode": "unavailable",
-  "warning": "Similar moments are temporarily unavailable. Session history is still available."
-}
+Memory semantic search
+    -> query embedding
+    -> MongoDB vector search over events
+    -> durable session join
+    -> validated public result
 ```
 
-This failure must not break `GET /api/sessions`, session detail, chronological
-events, or the context graph. Operational reporting should be sanitized: do not
-log API keys, connection strings, embeddings, private queries, transcript text,
-or full provider payloads.
+The context graph reads durable sessions and chronological events through the
+same `HistoryService`; it does not query MongoDB directly from the browser.
 
-Set explicit provider timeouts and cancellation at the durable adapter boundary.
-`HistoryService` contains rejected promises, but it does not define the adapter's
-network timeout or retry budget.
+## Development modes
 
-## Optional semantic graph edges
+- `auto` — Mongo history when a URI is configured, otherwise empty memory;
+- `mongodb` — require MongoDB;
+- `memory` — no-Mongo fallback; a configured URI still selects durable Mongo
+  history;
+- `demo` — explicit fixture mode retained only for tests.
 
-The context-graph schema reserves `semantic_similarity`, but the current graph
-builder deliberately emits none. A durable integration may add such edges
-only from bounded, verified event-pair scores normalized to `[0, 1]`. If no
-score is available, omit the edge rather than fabricate a relationship. See
-[`context-graph-api.md`](context-graph-api.md) for exact structural edge
-weights and graph limits.
+`npm run dev`, `npm run dev:dashboard`, and `npm run demo` use the real backend
+and never select `demo` mode.
 
-The optional Three.js explorer is only a renderer of the returned graph. It
-shows a supplied semantic edge as a distinct dashed bridge but never calculates
-similarity, invents an edge, or promotes geometric proximity into meaning. The
-readable DOM relationship lists remain authoritative and available when WebGL
-is missing or motion is reduced.
+## Required acceptance
 
-## Integration verification checklist
+Before finals submission, verify against the actual configured MongoDB:
 
-Before enabling durable composition, verify with test doubles and the chosen
-services that:
+1. start with no active Live session;
+2. start Live and note its session UUID;
+3. record at least one real grounded event;
+4. open Memory from the side panel;
+5. confirm the exact session and event appear;
+6. stop and restart the backend;
+7. confirm the session and event remain;
+8. confirm semantic search and the relationship graph use that data;
+9. confirm a Mongo outage degrades Memory without retracting a SQLite-backed
+   event already shown in Live.
 
-1. session and domain filters are applied before limiting;
-2. result order is stable and scores are normalized;
-3. malformed/stale vector records are rejected without breaking history CRUD;
-4. empty, timeout, and provider-error paths return `retrievalMode: unavailable`;
-5. pagination remains bounded and chronological for repository events;
-6. repository writes are idempotent under archive retries;
-7. restarts retain only data intended to be durable;
-8. logs and browser responses contain no credentials, embeddings, raw provider
-   payloads, or private transcript text;
-9. context-graph semantic edges are bounded, normalized, and omitted when not
-   supported.
-10. the dashboard renderer disposes animation, observers, listeners, labels,
-    controls, geometry, material, and WebGL resources when data changes or the
-    route unmounts.
-
-The history adapter boundary does not own Cloud Speech-to-Text lifecycle, audio
-routing, or provider credentials. The dashboard's no-STT demo is not evidence
-of physical Chrome, Gemini, Cloud Speech-to-Text, or real-browser WebGL
-acceptance.
+Synthetic fixture tests do not satisfy this acceptance. Any preloaded finals
+sessions should be generated by the real StreamSense pipeline.
