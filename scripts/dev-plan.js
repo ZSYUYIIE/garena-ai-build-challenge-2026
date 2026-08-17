@@ -24,7 +24,9 @@ function backendProcess(rootDir, profile) {
     role: "backend",
     cwd: path.join(rootDir, "ai-voice-realtime"),
     command: process.execPath,
-    args: ["--watch", "server.js"],
+    // The root supervisor must observe a real backend exit. Node's watch mode
+    // stays alive after startup failures and would leave Vite siblings running.
+    args: ["server.js"],
     host: DEV_HOST,
     port: 8000,
     env: {

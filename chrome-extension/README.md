@@ -46,7 +46,7 @@ Run integrated commands from the repository root:
 | --- | --- |
 | `npm run dev` | Shared backend `8000`, extension dev process `5173`, Memory dashboard `5174`. |
 | `npm run dev:realtime` | Shared backend `8000` and extension dev process `5173`; no dashboard Vite process. |
-| `npm run demo` | Builds both frontends and starts one demo-history backend on `8000`. |
+| `npm run demo` | Builds both frontends and starts the normal one-backend presentation profile on `8000`. |
 
 The extension always connects to `ws://127.0.0.1:8000/ws` unless a validated
 build-time `VITE_STREAMSENSE_WS_URL` overrides it. The URL must use `ws` or
@@ -61,7 +61,9 @@ requires a previously built `session-dashboard/dist`. The built `demo` serves
 that route directly from its single backend.
 
 The root dev runner checks required ports before starting and supervises all
-children. Do not run another backend on port `8000` beside a root profile.
+children. Its backend is deliberately not wrapped in Node watch mode, so a
+startup failure exits the runner and terminates the Vite siblings. Do not run
+another backend on port `8000` beside a root profile.
 
 ## Live-to-Memory connectivity
 
@@ -89,12 +91,13 @@ relationship graph over REST every two seconds while the page remains open.
 That refresh is polling, not a WebSocket or live subscription. Capture,
 narration, questions, and interruption controls remain in the side panel.
 
-The default Memory projection is in memory. It can show new extension events
-during the lifetime of the shared backend process, but it is not reconstructed
-from the SQLite event store after restart. Stopping or restarting the backend
-therefore clears Memory history. The dashboard's explicit demo profile instead
-starts a fresh deterministic in-memory projection and does not prove extension
-connectivity.
+When MongoDB is configured and reachable, the shared backend asynchronously
+archives real Live sessions and accepted events and reconstructs Memory from
+that durable store after restart. The SQLite event store remains the immediate
+realtime evidence path. In default `auto` mode, an unavailable MongoDB produces
+a sanitized warning and an empty non-durable Memory fallback; explicit
+`STREAMSENSE_HISTORY_MODE=mongodb` fails backend startup instead. Normal dev and
+demo commands never inject deterministic presentation sessions.
 
 ## Realtime description and timeline ownership
 

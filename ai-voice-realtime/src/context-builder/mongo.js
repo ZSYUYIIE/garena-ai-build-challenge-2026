@@ -4,6 +4,8 @@ import { upsertMongoEventFields } from "../events/mongoEventUpsert.js";
 
 /** @type {MongoClient | undefined} */
 let mongoClient;
+/** @type {Promise<MongoClient> | undefined} */
+let mongoClientInitPromise;
 /** @type {Promise<void> | undefined} */
 let vectorIndexInitPromise;
 
@@ -11,11 +13,12 @@ const SIMILARITY_SCORE_THRESHOLD = 0.0;
 
 export async function getMongoClient() {
   if (!mongoClient) {
-    const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017";
-    mongoClient = new MongoClient(mongoUri);
-
-    await mongoClient.connect();
-    console.log("Connected to MongoDB context storage.");
+    mongoClientInitPromise ??= connectMongoClient();
+    try {
+      mongoClient = await mongoClientInitPromise;
+    } finally {
+      mongoClientInitPromise = undefined;
+    }
   }
 
   if (!vectorIndexInitPromise) {
@@ -36,8 +39,26 @@ export async function getMongodb() {
 export async function closeMongoClient() {
   const client = mongoClient;
   mongoClient = undefined;
+  mongoClientInitPromise = undefined;
   vectorIndexInitPromise = undefined;
   await client?.close();
+}
+
+async function connectMongoClient() {
+  const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017";
+  const connectionOptions = /(?:\?|&)serverSelectionTimeoutMS=/iu.test(mongoUri)
+    ? {}
+    : { serverSelectionTimeoutMS: 5_000 };
+  const candidate = new MongoClient(mongoUri, connectionOptions);
+
+  try {
+    await candidate.connect();
+    console.log("Connected to MongoDB context storage.");
+    return candidate;
+  } catch (error) {
+    await candidate.close().catch(() => {});
+    throw error;
+  }
 }
 
 async function initVectorIndex(db) {

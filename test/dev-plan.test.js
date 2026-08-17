@@ -52,7 +52,7 @@ test("all profile starts one real backend plus extension and dashboard", () => {
     plan.processes.filter(({ role }) => role === "backend").length,
     1,
   );
-  assert.deepEqual(plan.processes[0].args, ["--watch", "server.js"]);
+  assert.deepEqual(plan.processes[0].args, ["server.js"]);
   assert.equal(
     plan.processes[0].env.STREAMSENSE_DASHBOARD_DEV_URL,
     DEV_DASHBOARD_URL,
@@ -63,7 +63,7 @@ test("all profile starts one real backend plus extension and dashboard", () => {
   );
 });
 
-test("dashboard profile runs the real backend watcher and dashboard only", () => {
+test("dashboard profile runs one fail-fast backend and dashboard only", () => {
   const plan = validateProcessPlan(
     buildProcessPlan("dashboard", { viteCliPath: FAKE_VITE_CLI }),
   );
@@ -75,7 +75,7 @@ test("dashboard profile runs the real backend watcher and dashboard only", () =>
       ["dashboard", 5174],
     ],
   );
-  assert.deepEqual(plan.processes[0].args, ["--watch", "server.js"]);
+  assert.deepEqual(plan.processes[0].args, ["server.js"]);
   assert.equal(
     plan.processes[0].env.STREAMSENSE_DASHBOARD_DEV_URL,
     DEV_DASHBOARD_URL,
@@ -99,7 +99,7 @@ test("realtime profile disables both dashboard handoff paths and runs no dashboa
   assert.equal(backend.env.STREAMSENSE_DASHBOARD_DEV_URL, "");
   assert.equal(extension.env.VITE_STREAMSENSE_DASHBOARD_URL, "");
   assert.deepEqual(extension.unsetEnv, []);
-  assert.deepEqual(plan.processes[0].args, ["--watch", "server.js"]);
+  assert.deepEqual(plan.processes[0].args, ["server.js"]);
 });
 
 test("realtime child environment overrides inherited dashboard values with empty", () => {
@@ -188,7 +188,7 @@ test("real port probe reports an occupied loopback endpoint clearly", async () =
     await assert.rejects(
       probePort({ host: "127.0.0.1", port: address.port }),
       new RegExp(
-        `127\\.0\\.0\\.1:${address.port} is unavailable \\(EADDRINUSE\\).*Stop the process`,
+        `127\\.0\\.0\\.1:${address.port} is unavailable \\(EADDRINUSE\\).*Stop the process.*Get-NetTCPConnection -LocalPort ${address.port} -State Listen`,
       ),
     );
   } finally {

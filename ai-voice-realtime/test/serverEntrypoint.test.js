@@ -13,27 +13,51 @@ const projectDirectory = path.resolve(
 );
 
 test("server entrypoint reports its actual ephemeral port", async (t) => {
-  const child = spawn(process.execPath, ["server.js"], {
-    cwd: projectDirectory,
-    env: {
-      ...process.env,
-      GOOGLE_API_KEY: "test-key",
-      GEMINI_VISION_MODEL: "test-model",
-      EVENT_DB_PATH: ":memory:",
-      MONGODB_URI: "",
-      MONGODB_DB_NAME: "",
-      HOST: "127.0.0.1",
-      PORT: "0",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
+  const child = spawnServer();
+  t.after(() => child.kill("SIGTERM"));
+
+  const startup = await readStartup(child);
+  const match = /Server running on http:\/\/127\.0\.0\.1:(\d+)/.exec(
+    startup.stdout,
+  );
+
+  assert.ok(match, startup.stdout);
+  assert.ok(Number(match[1]) > 0, startup.stdout);
+});
+
+test("auto Mongo mode starts with sanitized non-durable Memory after connection failure", async (t) => {
+  const child = spawnServer({
+    MONGODB_URI:
+      "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+    STREAMSENSE_HISTORY_MODE: "auto",
   });
   t.after(() => child.kill("SIGTERM"));
 
-  const line = await readStartupLine(child);
-  const match = /Server running on http:\/\/127\.0\.0\.1:(\d+)/.exec(line);
+  const startup = await readStartup(child);
+  assert.match(startup.stdout, /Memory history provider: memory \(non-durable\)/i);
+  assert.match(startup.stderr, /MongoDB connection unavailable/i);
+  assert.match(startup.stderr, /Network Access\/IP allowlisting|timed out or was refused/i);
+  assert.doesNotMatch(
+    `${startup.stdout}\n${startup.stderr}`,
+    /mongodb:\/\//i,
+  );
+});
 
-  assert.ok(match, line);
-  assert.ok(Number(match[1]) > 0, line);
+test("explicit Mongo mode exits early with an actionable sanitized error", async () => {
+  const child = spawnServer({
+    MONGODB_URI:
+      "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+    STREAMSENSE_HISTORY_MODE: "mongodb",
+  });
+  const result = await readExit(child);
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /MongoDB connection failed/i);
+  assert.match(result.stderr, /Network Access\/IP allowlisting|timed out or was refused/i);
+  assert.doesNotMatch(
+    `${result.stdout}\n${result.stderr}`,
+    /mongodb:\/\/|MongoServerSelectionError|\bat .+\(.+\.js:/i,
+  );
 });
 
 test("server shutdown awaits session cleanup before closing the event store", async (t) => {
@@ -113,7 +137,25 @@ test("server retains a browser-closed session until delayed cleanup settles", as
   assert.deepEqual(events, ["session_close_started", "session_close_finished", "event_store_closed"]);
 });
 
-function readStartupLine(child) {
+function spawnServer(environment = {}) {
+  return spawn(process.execPath, ["server.js"], {
+    cwd: projectDirectory,
+    env: {
+      ...process.env,
+      GOOGLE_API_KEY: "test-key",
+      GEMINI_VISION_MODEL: "test-model",
+      EVENT_DB_PATH: ":memory:",
+      MONGODB_URI: "",
+      MONGODB_DB_NAME: "",
+      HOST: "127.0.0.1",
+      PORT: "0",
+      ...environment,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function readStartup(child) {
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
@@ -128,7 +170,7 @@ function readStartupLine(child) {
       const line = stdout.split("\n").find((entry) => entry.includes("Server running"));
       if (line) {
         clearTimeout(timeout);
-        resolve(line);
+        resolve({ stdout, stderr });
       }
     });
     child.stderr.on("data", (chunk) => {
@@ -141,6 +183,26 @@ function readStartupLine(child) {
           `Server exited before startup (code ${code}, signal ${signal}). ${stderr}`
         )
       );
+    });
+  });
+}
+
+function readExit(child) {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`Server exit timed out. stdout: ${stdout}; stderr: ${stderr}`));
+    }, 5_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal, stdout, stderr });
     });
   });
 }

@@ -145,7 +145,10 @@ npm run dev
 This starts exactly one backend on `8000`, the extension Vite process on `5173`,
 and the Memory dashboard on `5174`. It does **not** seed synthetic sessions.
 Memory loads persisted MongoDB history when configured, otherwise it starts
-empty and uses the in-memory fallback for that process only.
+empty and uses the in-memory fallback for that process only. The root runner
+starts the backend as a normal supervised child so a startup crash terminates
+both Vite siblings and returns a non-zero exit instead of waiting for file
+changes with only the frontends alive.
 
 Dashboard-only development:
 
@@ -260,14 +263,16 @@ or HDMI presentation acceptance.
 ### Memory is empty after startup
 
 Confirm `MONGODB_URI` and `MONGODB_DB_NAME`, restart the backend, and read the
-`Memory history provider` startup line. With no Mongo URI, Memory deliberately
-uses an empty in-memory fallback.
+`Memory history provider` startup line. In default `auto` mode, an absent URI
+selects empty non-durable Memory directly; a configured but unreachable URI
+also emits a sanitized warning before using that fallback.
 
 ### Memory disappears after restart
 
 The backend did not use MongoDB history. Confirm the Mongo URI is present and
-reachable. `STREAMSENSE_HISTORY_MODE=mongodb` can be used to fail startup
-explicitly when MongoDB is absent.
+reachable. Set `STREAMSENSE_HISTORY_MODE=mongodb` for finals or persistence
+acceptance: a missing URI, DNS/SRV failure, authentication failure, timeout, or
+TLS failure then stops startup early with an actionable credential-free error.
 
 ### Open Memory Dashboard shows 404
 
@@ -284,7 +289,9 @@ degraded behavior.
 ### Ports are occupied
 
 The supervised runner uses strict ports `8000`, `5173`, and `5174` and exits
-instead of silently choosing another. Stop the existing process and retry.
+instead of silently choosing another. It never kills the owner automatically.
+On Windows, identify it with `Get-NetTCPConnection -LocalPort <port> -State
+Listen`, stop only the known disposable process, and retry.
 
 ## Security and privacy
 

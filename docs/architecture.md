@@ -93,9 +93,11 @@ duration, title, domain, summary, entities/topics, event counts, and data origin
 
 `STREAMSENSE_HISTORY_MODE` accepts:
 
-- `auto` — default; use MongoDB when configured, otherwise empty in-memory
-  history;
-- `mongodb` — require MongoDB and fail startup when the URI is absent;
+- `auto` — default; use MongoDB when configured and reachable; an absent URI
+  selects empty in-memory history, while a configured connection failure also
+  emits a sanitized diagnostic before selecting that fallback;
+- `mongodb` — require MongoDB and fail startup early for a missing URI or
+  connection/DNS/authentication/TLS failure without exposing credentials;
 - `memory` — no-Mongo/test fallback. A configured MongoDB still becomes the
   durable history source so an old local `memory` setting cannot split Live and
   Memory again.
@@ -188,6 +190,9 @@ npm.cmd run dev
 
 Ports are fixed: backend `8000`, extension Vite `5173`, and dashboard Vite
 `5174`. The root runner starts exactly one backend and no synthetic history.
+It runs that backend as a normal supervised process rather than Node watch
+mode; any backend exit is observable, terminates the sibling Vite processes,
+and makes the root command fail non-zero.
 
 Before merge:
 
