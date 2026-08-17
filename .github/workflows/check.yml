@@ -43,3 +43,6 @@ jobs:
 
       - name: Run full repository checks
         run: npm run check
+
+      - name: Run MongoDB persistence integration
+        run: npm run test:mongo --workspace ai-voice-realtime
