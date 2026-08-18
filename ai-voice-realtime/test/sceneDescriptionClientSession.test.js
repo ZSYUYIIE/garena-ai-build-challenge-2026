@@ -19,6 +19,7 @@ test("ClientSession drops wrapper-only visual analysis before timeline persisten
     fixture.session.recordGroundedAnalysis(
       narrationAnalysis(WRAPPER_DESCRIPTION, "wrapper:youtube"),
       snapshot,
+      { initial: true },
     );
 
     assert.equal(
@@ -47,6 +48,7 @@ test("ClientSession records and publishes a scene-first narration event", () => 
     fixture.session.recordGroundedAnalysis(
       narrationAnalysis(SCENE_DESCRIPTION, "wildlife:owls-feeding"),
       snapshot,
+      { initial: true },
     );
 
     const eventMessage = fixture.browser.messages.find(
