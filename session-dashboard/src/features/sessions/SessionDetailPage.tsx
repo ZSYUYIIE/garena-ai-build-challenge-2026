@@ -15,7 +15,12 @@ import { PaginationControls } from "../../components/PaginationControls";
 import { buttonVariants } from "../../components/StreamSenseUi";
 import { TagList } from "../../components/TagList";
 import { ContextGraphPanel } from "../context/ContextGraphPanel";
-import { formatDateTime, formatDuration } from "../../lib/format";
+import {
+  formatDateTime,
+  formatDomain,
+  formatDuration,
+  isDisplayableDomain,
+} from "../../lib/format";
 import { EventTimeline } from "./EventTimeline";
 
 export function SessionDetailPage() {
@@ -57,7 +62,7 @@ export function SessionDetailPage() {
           eventId: targetEventId ?? undefined,
         },
         signal,
-    ),
+      ),
     enabled: Boolean(sessionId),
     refetchInterval: openedFromExtension ? 2_000 : false,
   });
@@ -114,6 +119,9 @@ export function SessionDetailPage() {
   }
 
   const session = sessionQuery.data.session;
+  const domain = isDisplayableDomain(session.domain)
+    ? formatDomain(session.domain)
+    : null;
   const dataOrigin =
     sessionQuery.data.meta.dataOrigin ?? eventsQuery.data?.meta.dataOrigin ?? null;
 
@@ -150,7 +158,7 @@ export function SessionDetailPage() {
 
       <header className="detail-hero">
         <div>
-          <p className="eyebrow">{session.domain}</p>
+          {domain ? <p className="eyebrow">{domain}</p> : null}
           <h1 data-route-heading tabIndex={-1}>
             {session.title}
           </h1>
