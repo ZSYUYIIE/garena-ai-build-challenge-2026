@@ -7,7 +7,7 @@ let mongoClient;
 /** @type {Promise<void> | undefined} */
 let vectorIndexInitPromise;
 
-const SIMILARITY_SCORE_THRESHOLD = 0.0;
+const SIMILARITY_SCORE_THRESHOLD = 0.8;
 
 export async function getMongoClient() {
   if (!mongoClient) {
