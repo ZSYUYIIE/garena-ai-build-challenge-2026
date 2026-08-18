@@ -1,9 +1,14 @@
+import { setServers as setDnsServers } from "node:dns";
+import { isIP } from "node:net";
+
 import { Collection, MongoClient } from "mongodb";
 
 import { upsertMongoEventFields } from "../events/mongoEventUpsert.js";
 
 /** @type {MongoClient | undefined} */
 let mongoClient;
+/** @type {Promise<MongoClient> | undefined} */
+let mongoClientInitPromise;
 /** @type {Promise<void> | undefined} */
 let vectorIndexInitPromise;
 
@@ -11,11 +16,12 @@ const SIMILARITY_SCORE_THRESHOLD = 0.8;
 
 export async function getMongoClient() {
   if (!mongoClient) {
-    const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017";
-    mongoClient = new MongoClient(mongoUri);
-
-    await mongoClient.connect();
-    console.log("Connected to MongoDB context storage.");
+    mongoClientInitPromise ??= connectMongoClient();
+    try {
+      mongoClient = await mongoClientInitPromise;
+    } finally {
+      mongoClientInitPromise = undefined;
+    }
   }
 
   if (!vectorIndexInitPromise) {
@@ -36,8 +42,53 @@ export async function getMongodb() {
 export async function closeMongoClient() {
   const client = mongoClient;
   mongoClient = undefined;
+  mongoClientInitPromise = undefined;
   vectorIndexInitPromise = undefined;
   await client?.close();
+}
+
+async function connectMongoClient() {
+  const dnsServers = parseMongoDnsServers(process.env.MONGODB_DNS_SERVERS);
+  if (dnsServers.length > 0) {
+    setDnsServers(dnsServers);
+  }
+
+  const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017";
+  const connectionOptions = /(?:\?|&)serverSelectionTimeoutMS=/iu.test(mongoUri)
+    ? {}
+    : { serverSelectionTimeoutMS: 5_000 };
+  const candidate = new MongoClient(mongoUri, connectionOptions);
+
+  try {
+    await candidate.connect();
+    console.log("Connected to MongoDB context storage.");
+    return candidate;
+  } catch (error) {
+    await candidate.close().catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * Parse an optional backend-only resolver list used for MongoDB Atlas SRV
+ * lookups when the host's default Node.js DNS resolver is unavailable.
+ *
+ * @param {string | undefined} value
+ * @returns {string[]}
+ */
+export function parseMongoDnsServers(value) {
+  const servers = String(value ?? "")
+    .split(",")
+    .map((server) => server.trim())
+    .filter(Boolean);
+
+  if (servers.length > 3 || servers.some((server) => isIP(server) === 0)) {
+    throw new TypeError(
+      "MONGODB_DNS_SERVERS must contain at most three comma-separated IP addresses.",
+    );
+  }
+
+  return [...new Set(servers)];
 }
 
 async function initVectorIndex(db) {

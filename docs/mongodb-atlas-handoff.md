@@ -38,6 +38,13 @@ and [Atlas invitation lifecycle](https://www.mongodb.com/docs/atlas/invitations/
    MONGODB_DB_NAME=streamsense
    ```
 
+   If Node reports `querySrv ECONNREFUSED` while the operating system can
+   resolve the cluster hostname, also add the backend-only resolver override:
+
+   ```dotenv
+   MONGODB_DNS_SERVERS=1.1.1.1,8.8.8.8
+   ```
+
    Keep any other backend settings in the separately ignored `.env`. Do not put
    a second populated MongoDB URI there; `.env.local` intentionally has priority.
 6. From the repository root, run:
@@ -49,6 +56,16 @@ and [Atlas invitation lifecycle](https://www.mongodb.com/docs/atlas/invitations/
 
 7. Open `http://127.0.0.1:5174/dashboard/account` and create or update a test
    profile. Atlas should show it in `streamsense.dashboard_accounts`.
+
+For a maintainer acceptance run with both Atlas and Gemini credentials present,
+use the isolated-record semantic test. It archives uniquely identified records,
+verifies Atlas Vector Search, and deletes only those exact records afterward:
+
+```powershell
+$env:STREAMSENSE_RUN_ATLAS_SEARCH_TEST='true'
+node --env-file=ai-voice-realtime/.env --env-file=ai-voice-realtime/.env.local --test ai-voice-realtime/test/mongoSemanticSearch.integration.test.js
+Remove-Item Env:STREAMSENSE_RUN_ATLAS_SEARCH_TEST
+```
 
 If the Node driver times out even though Atlas marks the exact current IP as
 active, check whether the current school, office, VPN, or firewall blocks
@@ -71,11 +88,12 @@ MongoDB stores two separate prototype boundaries:
 - `dashboard_accounts` contains account UUID, display name, normalized email,
   entertainment preference, narration-detail preference, and timestamps. It
   has unique indexes for account ID and normalized email.
-- `events` contains best-effort accepted-event copies plus 768-dimensional
-  embeddings for current-session Live prompt retrieval. It is not canonical
-  dashboard history, does not make Memory durable, and is not used by the
-  dashboard search adapter.
+- `sessions` contains durable Live-session metadata and aggregates used by the
+  Memory overview and detail routes.
+- `events` contains accepted chronological events and 768-dimensional semantic
+  embeddings in the same document. Memory timelines, relationship graphs, and
+  semantic search read this shared durable collection.
 
 MongoDB does not store passwords, Gemini credentials, raw media, or captured-tab
-transcripts. The in-memory dashboard session/event projection still disappears
-when the backend restarts.
+transcripts. When MongoDB is selected at startup, dashboard sessions, events,
+graphs, and semantic search survive backend restarts.

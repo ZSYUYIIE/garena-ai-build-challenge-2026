@@ -29,3 +29,39 @@ test("ships only the permissions and entry points used by the side-panel demo", 
   ]);
   assert.equal(manifest.permissions?.includes("ttsEngine"), false);
 });
+
+test("allows the loopback Vite loader only in the unpacked development manifest", () => {
+  const productionManifest = createExtensionManifest({
+    name: "StreamSense test",
+    version: "1.2.3",
+  });
+  const developmentManifest = createExtensionManifest(
+    {
+      name: "StreamSense test",
+      version: "1.2.3",
+    },
+    { development: true },
+  );
+
+  const productionPolicy =
+    productionManifest.content_security_policy?.extension_pages ?? "";
+  const developmentPolicy =
+    developmentManifest.content_security_policy?.extension_pages ?? "";
+
+  assert.equal(
+    productionManifest.host_permissions?.some((permission) =>
+      permission.includes(":5173"),
+    ),
+    false,
+  );
+  assert.equal(productionPolicy.includes(":5173"), false);
+
+  assert.equal(
+    developmentManifest.host_permissions?.includes(
+      "http://localhost:5173/*",
+    ),
+    true,
+  );
+  assert.match(developmentPolicy, /script-src[^;]*http:\/\/localhost:5173/);
+  assert.match(developmentPolicy, /connect-src[^;]*ws:\/\/localhost:5173/);
+});

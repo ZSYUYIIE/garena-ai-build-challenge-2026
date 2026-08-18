@@ -84,13 +84,13 @@ test("development backend redirects dashboard handoffs to the Vite dashboard", a
   );
 
   const session = await fetch(
-    `${baseUrl}/dashboard/sessions/11111111-1111-4111-8111-111111111111?source=extension`,
+    `${baseUrl}/dashboard/sessions/11111111-1111-4111-8111-111111111111?source=extension&eventId=22222222-2222-4222-8222-222222222222&view=relationships`,
     { redirect: "manual" },
   );
   assert.equal(session.status, 307);
   assert.equal(
     session.headers.get("location"),
-    "http://127.0.0.1:5174/dashboard/sessions/11111111-1111-4111-8111-111111111111?source=extension",
+    "http://127.0.0.1:5174/dashboard/sessions/11111111-1111-4111-8111-111111111111?source=extension&eventId=22222222-2222-4222-8222-222222222222&view=relationships",
   );
 });
 

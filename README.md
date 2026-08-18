@@ -92,6 +92,7 @@ The backend expects these settings in its local ignored environment:
 | `STREAMSENSE_EXTENSION_ID` | Exact unpacked extension ID allowed to connect to `/ws`. |
 | `MONGODB_URI` | Atlas Drivers SRV URI or `mongodb://localhost:27017` for the optional local store. |
 | `MONGODB_DB_NAME` | Mongo database name; defaults to `streamsense`. |
+| `MONGODB_DNS_SERVERS` | Optional comma-separated literal DNS resolver IPs for Atlas SRV lookups when Node cannot use the host resolver. |
 | `STREAMSENSE_HISTORY_MODE` | `auto` (default), `mongodb`, or `memory`. A configured Mongo URI always selects durable Memory; `mongodb` additionally fails startup when the URI is absent. |
 | `HOST` / `PORT` | Backend bind address; defaults to `127.0.0.1:8000`. |
 
@@ -145,7 +146,16 @@ npm run dev
 This starts exactly one backend on `8000`, the extension Vite process on `5173`,
 and the Memory dashboard on `5174`. It does **not** seed synthetic sessions.
 Memory loads persisted MongoDB history when configured, otherwise it starts
-empty and uses the in-memory fallback for that process only.
+empty and uses the in-memory fallback for that process only. The root runner
+starts the backend as a normal supervised child so a startup crash terminates
+both Vite siblings and returns a non-zero exit instead of waiting for file
+changes with only the frontends alive.
+
+Wait for the extension Vite process to report ready before loading or reloading
+`chrome-extension/dist`. If the side panel was open while Vite rewrote that
+directory, reload the unpacked extension once in `chrome://extensions` and
+reopen it. The development manifest permits CRXJS only on loopback port `5173`;
+the production build removes those development-only host and CSP sources.
 
 Dashboard-only development:
 
@@ -260,14 +270,19 @@ or HDMI presentation acceptance.
 ### Memory is empty after startup
 
 Confirm `MONGODB_URI` and `MONGODB_DB_NAME`, restart the backend, and read the
-`Memory history provider` startup line. With no Mongo URI, Memory deliberately
-uses an empty in-memory fallback.
+`Memory history provider` startup line. In default `auto` mode, an absent URI
+selects empty non-durable Memory directly; a configured but unreachable URI
+also emits a sanitized warning before using that fallback.
 
 ### Memory disappears after restart
 
 The backend did not use MongoDB history. Confirm the Mongo URI is present and
-reachable. `STREAMSENSE_HISTORY_MODE=mongodb` can be used to fail startup
-explicitly when MongoDB is absent.
+reachable. Set `STREAMSENSE_HISTORY_MODE=mongodb` for finals or persistence
+acceptance: a missing URI, DNS/SRV failure, authentication failure, timeout, or
+TLS failure then stops startup early with an actionable credential-free error.
+If Windows resolves the Atlas SRV record but Node reports `querySrv
+ECONNREFUSED`, set `MONGODB_DNS_SERVERS=1.1.1.1,8.8.8.8` in the ignored
+`ai-voice-realtime/.env.local`; this changes only the backend process resolver.
 
 ### Open Memory Dashboard shows 404
 
@@ -284,7 +299,9 @@ degraded behavior.
 ### Ports are occupied
 
 The supervised runner uses strict ports `8000`, `5173`, and `5174` and exits
-instead of silently choosing another. Stop the existing process and retry.
+instead of silently choosing another. It never kills the owner automatically.
+On Windows, identify it with `Get-NetTCPConnection -LocalPort <port> -State
+Listen`, stop only the known disposable process, and retry.
 
 ## Security and privacy
 

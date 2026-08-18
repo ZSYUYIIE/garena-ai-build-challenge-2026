@@ -18,7 +18,7 @@ export function probePort({ host, port }) {
     server.once("error", (error) => {
       reject(
         new Error(
-          `${host}:${port} is unavailable (${error.code ?? error.message}). Stop the process using that port and try again.`,
+          `${host}:${port} is unavailable (${error.code ?? error.message}). Stop the process using that port and try again. On Windows, run: Get-NetTCPConnection -LocalPort ${port} -State Listen`,
         ),
       );
     });

@@ -42,14 +42,22 @@ plus extension or `npm run dev:dashboard` for backend plus Memory.
 | `STREAMSENSE_EXTENSION_ID` | Exact Chrome extension origin allowed on `/ws`. |
 | `MONGODB_URI` | Atlas or loopback Mongo connection. |
 | `MONGODB_DB_NAME` | Database name, default `streamsense`. |
+| `MONGODB_DNS_SERVERS` | Optional comma-separated literal resolver IPs for Atlas SRV lookups. |
 | `STREAMSENSE_HISTORY_MODE` | `auto`, `mongodb`, or `memory`. |
 | `EVENT_DB_PATH` | SQLite path; defaults to `data/streamsense.db`. |
 | `HOST` / `PORT` | Defaults to `127.0.0.1:8000`. |
 
-When MongoDB is configured, it is the durable Memory history source. `mongodb`
-mode additionally makes a missing URI a startup error. With no Mongo URI,
-history is an empty process-local fallback. Startup prints the selected Memory
-history provider.
+When MongoDB is configured and reachable, it is the durable Memory history
+source. In default `auto` mode, an absent URI selects an empty process-local
+fallback; a configured URI that cannot connect adds a sanitized warning before
+selecting that fallback. Explicit `mongodb` mode makes a missing URI, DNS/SRV
+failure, authentication failure, timeout, or TLS failure an early non-zero
+startup error without printing the connection string. Startup always prints
+the selected Memory history provider.
+
+`MONGODB_DNS_SERVERS` is a backend-only troubleshooting setting. Use it only
+when the operating system resolves the Atlas hostname but Node's SRV lookup is
+refused; it never belongs in the extension or dashboard bundle.
 
 ## Realtime event and history flow
 
@@ -117,6 +125,8 @@ those sessions into MongoDB.
 - Gemini Live failure degrades questions/answers, not Chrome timeline TTS.
 - Mongo history failure leaves SQLite-backed current Live events usable but
   Memory archival/search degraded.
+- Mongo startup failure in `auto` mode selects empty non-durable Memory;
+  explicit `mongodb` mode fails before binding the HTTP port.
 - Web dashboard requests never start realtime provider sessions.
 
 ## Build and checks
