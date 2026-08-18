@@ -58,6 +58,7 @@ export function HistoryOverviewPage() {
       .map((session) => session.domain)
       .filter(isDisplayableDomain),
   )].sort((left, right) => left.localeCompare(right));
+  const activeGraphDomain = domains.includes(graphDomain) ? graphDomain : "";
 
   const goForward = () => {
     const nextCursor = sessionsQuery.data?.nextCursor;
@@ -116,7 +117,7 @@ export function HistoryOverviewPage() {
             {domains.length > 0 ? (
               <Select
                 className="field memory-domain-filter"
-                selectedKey={graphDomain || "all"}
+                selectedKey={activeGraphDomain || "all"}
                 onSelectionChange={(key) =>
                   setGraphDomain(key === null || key === "all" ? "" : String(key))
                 }
@@ -138,10 +139,10 @@ export function HistoryOverviewPage() {
           </div>
           <ContextGraphPanel
             options={{
-              domain: graphDomain || undefined,
+              domain: activeGraphDomain || undefined,
               limit: 80,
             }}
-            scope={graphDomain ? "filtered" : "all-domains-overview"}
+            scope={activeGraphDomain ? "filtered" : "all-domains-overview"}
           />
         </div>
 
