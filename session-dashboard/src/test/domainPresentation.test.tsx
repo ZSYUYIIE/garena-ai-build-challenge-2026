@@ -80,7 +80,7 @@ describe("optional domain presentation", () => {
       await screen.findByLabelText("Entertainment domain"),
     ).toBeInTheDocument();
     expect(screen.getAllByText("Football").length).toBeGreaterThan(0);
-    expect(screen.getByText("Domains")).toBeInTheDocument();
+    expect(screen.getByText("Domains", { selector: "dt" })).toBeInTheDocument();
   });
 
   it("keeps Memory search query-led without a separate domain field", () => {
