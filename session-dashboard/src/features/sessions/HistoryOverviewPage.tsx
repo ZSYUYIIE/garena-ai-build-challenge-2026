@@ -23,7 +23,11 @@ import {
 import { MetricCard } from "../../components/MetricCard";
 import { PaginationControls } from "../../components/PaginationControls";
 import { ContextGraphPanel } from "../context/ContextGraphPanel";
-import { formatDuration } from "../../lib/format";
+import {
+  formatDomain,
+  formatDuration,
+  isDisplayableDomain,
+} from "../../lib/format";
 import { SessionCard } from "./SessionCard";
 
 export function HistoryOverviewPage() {
@@ -41,13 +45,19 @@ export function HistoryOverviewPage() {
 
   const sessions = sessionsQuery.data?.sessions ?? [];
   const totalEvents = sessions.reduce((total, session) => total + session.eventCount, 0);
+  const totalImportantEvents = sessions.reduce(
+    (total, session) => total + session.importantEventCount,
+    0,
+  );
   const totalDuration = sessions.reduce(
     (total, session) => total + session.durationSeconds,
     0,
   );
-  const domains = [...new Set(sessions.map((session) => session.domain))].sort(
-    (left, right) => left.localeCompare(right),
-  );
+  const domains = [...new Set(
+    sessions
+      .map((session) => session.domain)
+      .filter(isDisplayableDomain),
+  )].sort((left, right) => left.localeCompare(right));
 
   const goForward = () => {
     const nextCursor = sessionsQuery.data?.nextCursor;
@@ -103,26 +113,28 @@ export function HistoryOverviewPage() {
               <p className="eyebrow">Memory constellation</p>
               <h2>See how moments connect</h2>
             </div>
-            <Select
-              className="field memory-domain-filter"
-              selectedKey={graphDomain || "all"}
-              onSelectionChange={(key) =>
-                setGraphDomain(key === null || key === "all" ? "" : String(key))
-              }
-            >
-              <Label>Entertainment domain</Label>
-              <SelectTrigger id="memory-domain">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem id="all">All domains</SelectItem>
-                {domains.map((domain) => (
-                  <SelectItem key={domain} id={domain}>
-                    {domain}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {domains.length > 0 ? (
+              <Select
+                className="field memory-domain-filter"
+                selectedKey={graphDomain || "all"}
+                onSelectionChange={(key) =>
+                  setGraphDomain(key === null || key === "all" ? "" : String(key))
+                }
+              >
+                <Label>Entertainment domain</Label>
+                <SelectTrigger id="memory-domain">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem id="all">All domains</SelectItem>
+                  {domains.map((domain) => (
+                    <SelectItem key={domain} id={domain}>
+                      {formatDomain(domain)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
           </div>
           <ContextGraphPanel
             options={{
@@ -146,7 +158,14 @@ export function HistoryOverviewPage() {
                 label="Viewing time"
                 value={formatDuration(totalDuration)}
               />
-              <MetricCard label="Domains" value={String(domains.length)} />
+              {domains.length > 0 ? (
+                <MetricCard label="Domains" value={String(domains.length)} />
+              ) : (
+                <MetricCard
+                  label="Significant moments"
+                  value={String(totalImportantEvents)}
+                />
+              )}
             </dl>
           </section>
         ) : null}
@@ -167,9 +186,8 @@ export function HistoryOverviewPage() {
       ) : sessions.length === 0 ? (
         <EmptyState title="No session history yet">
           <p>
-            Significant moments will appear here after StreamSense completes a
-            viewing session. Demo history is loaded only through the explicit
-            dashboard seed workflow.
+            Significant moments will appear here after StreamSense captures a
+            real viewing session.
           </p>
         </EmptyState>
       ) : (
