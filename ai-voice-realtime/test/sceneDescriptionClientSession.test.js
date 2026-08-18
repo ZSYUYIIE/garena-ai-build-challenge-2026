@@ -63,6 +63,41 @@ test("ClientSession records and publishes a scene-first narration event", () => 
   }
 });
 
+test("ClientSession drops a wrapper-only structured event and persists the scene-first fallback", () => {
+  const fixture = createFixture();
+  try {
+    const snapshot = admitFrame(fixture.session);
+    const analysis = narrationAnalysis(
+      SCENE_DESCRIPTION,
+      "wildlife:owls-feeding",
+    );
+    analysis.event = {
+      eventType: "scene_observed",
+      entities: ["owls"],
+      description: WRAPPER_DESCRIPTION,
+      importance: 0.8,
+      confidence: 0.9,
+    };
+    analysis.eventEvidence = {
+      basis: "current_frame",
+      previousState: null,
+    };
+
+    fixture.session.recordGroundedAnalysis(analysis, snapshot, { initial: true });
+
+    const eventMessages = fixture.browser.messages.filter(
+      (message) => message.type === "event",
+    );
+    assert.equal(eventMessages.length, 1);
+    assert.equal(eventMessages[0].event.description, SCENE_DESCRIPTION);
+    assert.notEqual(eventMessages[0].event.description, WRAPPER_DESCRIPTION);
+    assert.equal(eventMessages[0].event.eventType, "scene_observed");
+    assert.equal(fixture.session.lastGroundedDescription, SCENE_DESCRIPTION);
+  } finally {
+    fixture.eventStore.close();
+  }
+});
+
 function createFixture() {
   const browser = new FakeBrowser();
   const eventStore = new EventStore();
