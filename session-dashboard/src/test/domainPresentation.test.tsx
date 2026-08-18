@@ -9,13 +9,26 @@ const unknownSession = {
   domain: "unknown",
 };
 
-function createUnknownDomainFetch() {
+function createDomainFetch(session = unknownSession) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith("/api/sessions?")) {
       return jsonResponse({
         meta: { dataOrigin: "realtime" },
-        sessions: [unknownSession],
+        sessions: [session],
+        nextCursor: null,
+      });
+    }
+    if (url === `/api/sessions/${session.sessionId}`) {
+      return jsonResponse({
+        meta: { dataOrigin: "realtime" },
+        session,
+      });
+    }
+    if (url.startsWith(`/api/sessions/${session.sessionId}/events?`)) {
+      return jsonResponse({
+        meta: { dataOrigin: "realtime" },
+        events: [],
         nextCursor: null,
       });
     }
@@ -31,8 +44,8 @@ function createUnknownDomainFetch() {
 }
 
 describe("optional domain presentation", () => {
-  it("does not expose unknown as a user-facing category", async () => {
-    vi.stubGlobal("fetch", createUnknownDomainFetch());
+  it("does not expose unknown as a user-facing category on Memory home", async () => {
+    vi.stubGlobal("fetch", createDomainFetch());
 
     renderDashboard();
 
@@ -42,6 +55,32 @@ describe("optional domain presentation", () => {
     expect(screen.queryByText(/^unknown$/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Entertainment domain")).not.toBeInTheDocument();
     expect(screen.getByText("Significant moments")).toBeInTheDocument();
+  });
+
+  it("does not expose unknown on an individual session page", async () => {
+    vi.stubGlobal("fetch", createDomainFetch());
+
+    renderDashboard(`/sessions/${unknownSession.sessionId}`);
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: unknownSession.title,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^unknown$/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps a trustworthy known domain visible and filterable", async () => {
+    vi.stubGlobal("fetch", createDomainFetch(demoSession));
+
+    renderDashboard();
+
+    expect(
+      await screen.findByLabelText("Entertainment domain"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Football").length).toBeGreaterThan(0);
+    expect(screen.getByText("Domains")).toBeInTheDocument();
   });
 
   it("keeps Memory search query-led without a separate domain field", () => {
