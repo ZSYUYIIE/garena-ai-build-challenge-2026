@@ -2,14 +2,23 @@ import { Link } from "react-router-dom";
 
 import type { Session } from "../../api/contracts";
 import { TagList } from "../../components/TagList";
-import { formatDateTime, formatDuration } from "../../lib/format";
+import {
+  formatDateTime,
+  formatDomain,
+  formatDuration,
+  isDisplayableDomain,
+} from "../../lib/format";
 
 export function SessionCard({ session }: { session: Session }) {
+  const domain = isDisplayableDomain(session.domain)
+    ? formatDomain(session.domain)
+    : null;
+
   return (
     <article className="session-card">
       <div className="session-card-heading">
         <div>
-          <p className="domain-label">{session.domain}</p>
+          {domain ? <p className="domain-label">{domain}</p> : null}
           <h3>
             <Link to={`/sessions/${session.sessionId}`}>{session.title}</Link>
           </h3>
