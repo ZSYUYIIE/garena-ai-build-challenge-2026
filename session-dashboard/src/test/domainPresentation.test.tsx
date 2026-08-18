@@ -1,4 +1,5 @@
-import { screen } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { renderDashboard } from "./renderDashboard";
@@ -81,6 +82,71 @@ describe("optional domain presentation", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("Football").length).toBeGreaterThan(0);
     expect(screen.getByText("Domains", { selector: "dt" })).toBeInTheDocument();
+  });
+
+  it("drops a stale domain filter when refreshed sessions no longer expose that domain", async () => {
+    const user = userEvent.setup();
+    let activeSession = demoSession;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/sessions?")) {
+        return jsonResponse({
+          meta: { dataOrigin: "realtime" },
+          sessions: [activeSession],
+          nextCursor: null,
+        });
+      }
+      if (url.startsWith("/api/context-graph?")) {
+        return jsonResponse({
+          meta: { dataOrigin: "realtime" },
+          nodes: [],
+          edges: [],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { queryClient } = renderDashboard();
+    const domainSelector = await screen.findByLabelText("Entertainment domain");
+    await user.click(domainSelector);
+    const domainList = await screen.findByRole("listbox");
+    await user.click(within(domainList).getByRole("option", { name: "Football" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/context-graph?") &&
+          String(input).includes("domain=Football"),
+        ),
+      ).toBe(true);
+    });
+
+    activeSession = unknownSession;
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["history", "sessions"] });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Entertainment domain")).not.toBeInTheDocument();
+    });
+
+    const callsBeforeGraphRefetch = fetchMock.mock.calls.length;
+    await act(async () => {
+      await queryClient.refetchQueries({
+        queryKey: ["history", "context-graph"],
+        type: "active",
+      });
+    });
+
+    const graphCallsAfterRefresh = fetchMock.mock.calls
+      .slice(callsBeforeGraphRefetch)
+      .map(([input]) => String(input))
+      .filter((url) => url.startsWith("/api/context-graph?"));
+    expect(graphCallsAfterRefresh.length).toBeGreaterThan(0);
+    expect(
+      graphCallsAfterRefresh.every((url) => !url.includes("domain=Football")),
+    ).toBe(true);
   });
 
   it("keeps Memory search query-led without a separate domain field", () => {
