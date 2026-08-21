@@ -38,8 +38,12 @@ export function shouldSuppressVisualDescription(description) {
     /\b(?:the\s+)?(?:user|someone|they)\s+(?:has\s+)?(?:opened|clicked|selected|scrolled|typed|navigated|switched|pressed)\b/i.test(
       text
     );
+  const describesOnlyMediaWrapper =
+    /\b(?:youtube|twitch|vimeo)\s+(?:video\s+)?page\b/i.test(text) ||
+    /\b(?:browser|web\s?page|video\s?page|media\s?player)\b.{0,100}\b(?:displayed|shown|open|title|titled|called)\b/i.test(text) ||
+    /\b(?:video|livestream|stream)\s+(?:page\s+)?(?:is\s+)?(?:displayed|shown|titled|called)\b/i.test(text);
 
-  return describesOwnInterface || infersUserInteraction;
+  return describesOwnInterface || infersUserInteraction || describesOnlyMediaWrapper;
 }
 
 export function isDescriptionCoveredByTranscript(description, transcript) {

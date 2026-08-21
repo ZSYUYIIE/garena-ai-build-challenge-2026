@@ -9,6 +9,7 @@ import { createServer } from "vite";
 import {
   DEFAULT_BACKEND_WEBSOCKET_URL,
   configuredBackendWebSocketUrl,
+  configuredHistoryDashboardUrl,
   deriveDashboardUrlFromWebSocket,
   resolveBackendWebSocketUrl,
   resolveDashboardUrl,
@@ -38,6 +39,10 @@ test("uses the default WebSocket URL when configuration is missing or unsafe", (
   assert.equal(resolveBackendWebSocketUrl("ws://127.0.0.1:8000/ws?token=secret"), DEFAULT_BACKEND_WEBSOCKET_URL);
   assert.equal(resolveBackendWebSocketUrl("not a URL"), DEFAULT_BACKEND_WEBSOCKET_URL);
   assert.equal(configuredBackendWebSocketUrl(), DEFAULT_BACKEND_WEBSOCKET_URL);
+  assert.equal(
+    configuredHistoryDashboardUrl(),
+    "http://127.0.0.1:8000/dashboard/?source=extension",
+  );
 });
 
 test("accepts only an exact loopback HTTP dashboard override", () => {

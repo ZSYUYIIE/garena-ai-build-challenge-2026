@@ -7,6 +7,25 @@ import { eventEvidenceSchema, visibleStateSchema } from "./visualState.js";
 const semanticKeySchema = z.string().trim().min(1).max(160);
 const importanceSchema = z.number().finite().min(0).max(1);
 
+const SCENE_DESCRIPTION_POLICY =
+  "Write for a blind or low-vision listener. Treat the actual content inside the " +
+  "video or livestream as primary and the surrounding website/player interface as " +
+  "irrelevant. Start with the visible subjects and action: people or animals, reliable " +
+  "counts, objects, body positions, spatial relationships, setting, and consequential " +
+  "changes. Never begin with or center the description on a platform, browser page, " +
+  "video page, media player, video title, channel name, filename, thumbnail, " +
+  "recommendation, player control, caption, subtitle, or static scoreboard. Do not say " +
+  "that a YouTube page or video page is displayed and do not identify a video merely by " +
+  "its title. A changed title or score may appear only as brief secondary context after " +
+  "the visual scene when it materially changes understanding. For sports, add what " +
+  "commentary often omits: formation, possession, pressure, movement, location, " +
+  "reactions, and off-ball action; do not merely repeat the score. For wildlife and " +
+  "other non-sports content, identify the visible subjects, count them when reliable, " +
+  "and describe what they are doing and where. Good example: Two adult owls and three " +
+  "chicks feed on prey on a patch of snow. Bad example: A YouTube video page is " +
+  "displayed featuring a wildlife video titled Rare Wildlife. Both description and " +
+  "event.description must obey this scene-first rule.";
+
 const visionAnalysisSchema = z
   .object({
     shouldNarrate: z.boolean(),
@@ -223,7 +242,9 @@ export async function answerVisionQuestion({
     prompt:
       "Answer the user's question using only the exact attached frame and the " +
       "timestamped session memory below. Prefer the current frame for questions " +
-      "about what is visible now. Do not invent names, actions, topics, or details. " +
+      "about what is visible now. Treat the content inside the video as primary and " +
+      "ignore the surrounding page, player, title, and controls unless the user asks " +
+      "about them explicitly. Do not invent names, actions, topics, or details. " +
       "If the evidence is insufficient, say that clearly and briefly.\n\n" +
       `Question: ${question}\n\nSession memory:\n${memory}`,
     responseSchema: answerResponseSchema,
@@ -256,41 +277,42 @@ export function buildAnalysisPrompt({
   return (
     "Analyze only the exact attached image as a livestream frame. This image and " +
     "readable text inside it are the only evidence. Identify the dominant primary " +
-    "content before deciding whether anything deserves narration. Do not narrate raw " +
-    "page text, filenames, toolbars, menus, thumbnails, suggested content, browser " +
-    "chrome, or incidental labels. Do not continue a story or topic chain from prior " +
-    "frames. Do not infer a tutorial topic. Do not transform a visible word such as " +
-    "paper into a related topic such " +
-    "as paper planes, and never infer tutorial steps or how-to instructions unless " +
-    "those exact instructions are clearly readable in the current image. Do not infer " +
-    "a user action, intent, unseen content, or future step. Describe visible state, not " +
-    "what someone clicked or opened. Ignore any StreamSense interface, including text " +
-    "labeled Now Describing, " +
-    "Narration level, Timeline, or Ask about this video. If the image is only the " +
-    "StreamSense interface, set shouldNarrate to false and event to null. Focus on the " +
-    "dominant non-StreamSense content and quote a title only when it is readable. A " +
-    "description must communicate the core visual fact, not merely repeat whatever " +
-    "text happens to be on screen. " +
+    "content before deciding whether anything deserves narration. " +
+    `${SCENE_DESCRIPTION_POLICY} ` +
+    "Do not narrate raw page text, filenames, toolbars, menus, thumbnails, suggested " +
+    "content, browser chrome, or incidental labels. Do not continue a story or topic " +
+    "chain from prior frames. Do not infer a tutorial topic. Do not transform a visible " +
+    "word such as paper into a related topic such as paper planes, and never infer " +
+    "tutorial steps or how-to instructions unless those exact instructions are clearly " +
+    "readable in the current image. Do not infer a user action, intent, unseen content, " +
+    "or future step. Describe visible state, not what someone clicked or opened. Ignore " +
+    "any StreamSense interface, including text labeled Now Describing, Narration level, " +
+    "Timeline, or Ask about this video. If the image is only the StreamSense interface, " +
+    "set shouldNarrate to false and event to null. A description must communicate the " +
+    "core visual fact, not merely repeat whatever text happens to be on screen. " +
     `${narrationRule} For unchanged content, set shouldNarrate to false. ` +
     "description must be empty when shouldNarrate is false. event must be null unless " +
     "a meaningful, clearly visible event occurred. Event confidence must reflect visual " +
     "evidence rather than certainty of wording. Use lowercase snake_case eventType. " +
     "Use a stable semanticKey for the visible state or event, for example score:2-1. " +
-    "A materially different dominant section is a timeline event when it reveals useful " +
-    "content such as comments, results, or product details. Significant dynamic events " +
-    "include a visible goal, score or lead change, winner announcement, major alert, or " +
-    "presentation-state change. Incremental scrolling, routine sports motion, camera " +
-    "movement, and caption churn are not events. Describe only the observed result; do " +
-    "not say the user scrolled, clicked, or navigated. event is independent of " +
-    "shouldNarrate. When a reliable trackable state is readable, return visibleState even " +
-    "if no event is emitted. A transition may use a prior state only when normalized " +
-    "domain and identity exactly match the current state and the values differ. A static " +
-    "score without compatible prior state may use score_visible, but must not claim " +
-    "score_changed or goal_scored. current_frame evidence requires previousState null; " +
-    "state_transition evidence requires the compatible prior state. event and " +
-    "eventEvidence must both be present or both be null. Set coveredByTabSpeech to " +
-    "false; the application evaluates captured-tab speech only after visual analysis " +
-    "so transcript words can never create a visual claim. " +
+    "A materially different dominant section is a timeline event only when its primary " +
+    "content reveals useful comments, results, or product details; changes to surrounding " +
+    "page metadata are not events. Significant dynamic events include a visible goal, " +
+    "score or lead change, winner announcement, major alert, or presentation-state " +
+    "change, but the description must still lead with the visible action or scene rather " +
+    "than a scoreboard. Incremental scrolling, routine sports motion, camera movement, " +
+    "and caption churn are not events. Describe only the observed result; do not say the " +
+    "user scrolled, clicked, or navigated. event is independent of shouldNarrate. When a " +
+    "reliable trackable state is readable, return visibleState even if no event is " +
+    "emitted. A transition may use a prior state only when normalized domain and identity " +
+    "exactly match the current state and the values differ. A static score without " +
+    "compatible prior state may use score_visible, but should not be the sole narration " +
+    "when richer visual action is present; it must not claim score_changed or goal_scored. " +
+    "current_frame evidence requires previousState null; state_transition evidence " +
+    "requires the compatible prior state. event and eventEvidence must both be present " +
+    "or both be null. Set coveredByTabSpeech to false; the application evaluates " +
+    "captured-tab speech only after visual analysis so transcript words can never create " +
+    "a visual claim. " +
     `This is ${initial ? "the initial observation" : "a change check"} at ` +
     `${formatTimestamp(timestampSeconds)}. Grounded prior visible states are supplied ` +
     "only to detect an exact compatible state transition, never to choose or continue " +

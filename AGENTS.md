@@ -25,8 +25,17 @@ Read this file before changing the repository. Then read
   self-referential, or unsupported.
 - Do not change Gemini prompts, VAD, speech policy, media capture, transcript
   handling, or audio playback as a side effect of dashboard/account work.
-- Session history is currently in memory. MongoDB persists dashboard profiles,
-  not sessions or raw media.
+- SQLite remains the fast local evidence store for accepted realtime events.
+  When `MONGODB_URI` is configured, the same real sessions and events are also
+  archived asynchronously into MongoDB and become the durable source for the
+  Memory dashboard, semantic search, and relationship graph.
+- The MongoDB `events` document is shared by chronological history and semantic
+  enrichment. History and embedding writers must upsert by the same event ID
+  and preserve one another's fields; they must never create two competing
+  versions of an event.
+- Normal `npm run dev` never injects synthetic dashboard sessions. Memory starts
+  from persisted MongoDB history or from an empty in-memory fallback when no
+  MongoDB URI is configured. Deterministic fixtures remain test-only.
 - Browser account storage contains only an opaque account UUID. Never store
   passwords, API keys, Google credentials, or the full profile there.
 - The relationship map hierarchy is Memory → domain → session → event →
@@ -70,9 +79,11 @@ root:
 npm.cmd run check
 ```
 
-For MongoDB-backed profile work, verify against the configured development
-Atlas database. When intentionally testing the optional offline substitute,
-also run:
+For MongoDB-backed history/profile work, verify against the configured
+development Atlas database. The required end-to-end acceptance is: create a
+real Live session, record an event, open that exact session in Memory, restart
+the backend, and confirm the same session/event/search/graph data remains.
+When intentionally testing the optional offline substitute, also run:
 
 ```powershell
 docker compose up -d mongodb

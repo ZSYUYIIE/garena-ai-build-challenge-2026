@@ -21,7 +21,6 @@ import { formatPercent, humanizeEventType } from "../../lib/format";
 
 export function SearchPage() {
   const [query, setQuery] = useState("");
-  const [domain, setDomain] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
   const searchMutation = useMutation({
     mutationFn: (request: SearchRequest) => historyClient.search(request),
@@ -35,7 +34,6 @@ export function SearchPage() {
     setSubmittedQuery(trimmedQuery);
     searchMutation.mutate({
       query: trimmedQuery,
-      domain: domain.trim() || undefined,
       limit: 20,
     });
   };
@@ -53,8 +51,10 @@ export function SearchPage() {
           Search meaningful moments
         </h1>
         <p className="lede">
-          Ask for an event, entity, topic, or similar situation. StreamSense
-          searches only durable session summaries and significant events.
+          Ask for an event, entity, topic, or similar situation. Include context
+          such as “football,” “wildlife,” or “esports” directly in the query when
+          it matters. StreamSense searches only durable session summaries and
+          significant events.
         </p>
       </header>
 
@@ -70,21 +70,11 @@ export function SearchPage() {
             required
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="For example, similar attacking opportunities"
+            placeholder="For example, football counterattacks or owls feeding in snow"
           />
-          <p className="field-hint">Use at least two characters.</p>
-        </div>
-        <div className="field">
-          <Label htmlFor="history-domain">Domain (optional)</Label>
-          <Input
-            id="history-domain"
-            name="domain"
-            type="text"
-            maxLength={80}
-            value={domain}
-            onChange={(event) => setDomain(event.target.value)}
-            placeholder="Football or esports"
-          />
+          <p className="field-hint">
+            Describe the moment naturally; no separate domain field is required.
+          </p>
         </div>
         <Button
           className="search-button"
@@ -126,7 +116,6 @@ export function SearchPage() {
               if (submittedQuery) {
                 searchMutation.mutate({
                   query: submittedQuery,
-                  domain: domain.trim() || undefined,
                   limit: 20,
                 });
               }
@@ -138,8 +127,18 @@ export function SearchPage() {
             transcript content is searched.
           </p>
         ) : response.results.length === 0 ? (
-          <EmptyState title="No matching moments">
-            <p>Try a broader description, a person or team name, or remove the domain filter.</p>
+          <EmptyState
+            title={
+              response.meta.dataOrigin === "empty"
+                ? "No saved moments yet"
+                : "No matching moments"
+            }
+          >
+            <p>
+              {response.meta.dataOrigin === "empty"
+                ? "Start StreamSense Live from the Chrome extension and let it save a significant moment. It will become searchable here after the backend archives and indexes it."
+                : "Try a broader description, a visible subject, a person, or a team name."}
+            </p>
           </EmptyState>
         ) : (
           <>

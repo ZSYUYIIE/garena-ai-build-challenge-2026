@@ -1,19 +1,27 @@
+import { setServers as setDnsServers } from "node:dns";
+import { isIP } from "node:net";
+
 import { Collection, MongoClient } from "mongodb";
+
+import { upsertMongoEventFields } from "../events/mongoEventUpsert.js";
 
 /** @type {MongoClient | undefined} */
 let mongoClient;
+/** @type {Promise<MongoClient> | undefined} */
+let mongoClientInitPromise;
 /** @type {Promise<void> | undefined} */
 let vectorIndexInitPromise;
 
-const SIMILARITY_SCORE_THRESHOLD = 0.0;
+const SIMILARITY_SCORE_THRESHOLD = 0.8;
 
 export async function getMongoClient() {
   if (!mongoClient) {
-    const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017";
-    mongoClient = new MongoClient(mongoUri);
-
-    await mongoClient.connect();
-    console.log("Connected to MongoDB context storage.");
+    mongoClientInitPromise ??= connectMongoClient();
+    try {
+      mongoClient = await mongoClientInitPromise;
+    } finally {
+      mongoClientInitPromise = undefined;
+    }
   }
 
   if (!vectorIndexInitPromise) {
@@ -34,8 +42,53 @@ export async function getMongodb() {
 export async function closeMongoClient() {
   const client = mongoClient;
   mongoClient = undefined;
+  mongoClientInitPromise = undefined;
   vectorIndexInitPromise = undefined;
   await client?.close();
+}
+
+async function connectMongoClient() {
+  const dnsServers = parseMongoDnsServers(process.env.MONGODB_DNS_SERVERS);
+  if (dnsServers.length > 0) {
+    setDnsServers(dnsServers);
+  }
+
+  const mongoUri = process.env.MONGODB_URI || "mongodb://localhost:27017";
+  const connectionOptions = /(?:\?|&)serverSelectionTimeoutMS=/iu.test(mongoUri)
+    ? {}
+    : { serverSelectionTimeoutMS: 5_000 };
+  const candidate = new MongoClient(mongoUri, connectionOptions);
+
+  try {
+    await candidate.connect();
+    console.log("Connected to MongoDB context storage.");
+    return candidate;
+  } catch (error) {
+    await candidate.close().catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * Parse an optional backend-only resolver list used for MongoDB Atlas SRV
+ * lookups when the host's default Node.js DNS resolver is unavailable.
+ *
+ * @param {string | undefined} value
+ * @returns {string[]}
+ */
+export function parseMongoDnsServers(value) {
+  const servers = String(value ?? "")
+    .split(",")
+    .map((server) => server.trim())
+    .filter(Boolean);
+
+  if (servers.length > 3 || servers.some((server) => isIP(server) === 0)) {
+    throw new TypeError(
+      "MONGODB_DNS_SERVERS must contain at most three comma-separated IP addresses.",
+    );
+  }
+
+  return [...new Set(servers)];
 }
 
 async function initVectorIndex(db) {
@@ -79,22 +132,31 @@ async function initVectorIndex(db) {
 }
 
 /**
- * Save context data to MongoDB
+ * Save or enrich one durable event document in MongoDB.
+ * History fields written by MongoHistoryRepository are deliberately preserved.
  *
- * @param {ContextSchema} ctxData
+ * @param {ContextSchema & {id: string}} ctxData
  */
 export async function saveContextDataToMongo(ctxData) {
+  if (!ctxData?.id) {
+    throw new TypeError("Semantic context storage requires an event id");
+  }
   const collection = (await getMongodb()).collection("events");
-  await collection.insertOne(ctxData);
+  await upsertMongoEventFields(collection, ctxData.id, {
+    ...ctxData,
+    semanticIndexed: true,
+    semanticUpdatedAt: new Date().toISOString(),
+  });
 }
 
 /**
- * Retrieve context data from MongoDB based on embedding similarity
+ * Retrieve durable, history-archived events based on embedding similarity.
+ * A null sessionId searches across sessions for the Memory dashboard.
  *
- * @param {string} sessionId
+ * @param {string | null} sessionId
  * @param {number[]} queryEmbedding
  * @param {number} limitK
- * @returns {Promise<ContextSchema[]>}
+ * @returns {Promise<Array>}
  */
 export async function getContextDataFromMongo(
   sessionId,
@@ -102,28 +164,36 @@ export async function getContextDataFromMongo(
   limitK = 10,
 ) {
   const collection = (await getMongodb()).collection("events");
+  const safeLimit = Math.max(1, Math.min(Number(limitK) || 10, 50));
+  const vectorSearch = {
+    index: "context_embedding_index",
+    path: "embedding",
+    queryVector: queryEmbedding,
+    numCandidates: Math.max(100, 10 * safeLimit),
+    limit: safeLimit,
+  };
+  if (sessionId) {
+    vectorSearch.filter = { sessionId: { $eq: sessionId } };
+  }
 
   const pipeline = [
+    { $vectorSearch: vectorSearch },
+    { $addFields: { score: { $meta: "vectorSearchScore" } } },
     {
-      $vectorSearch: {
-        index: "context_embedding_index",
-        path: "embedding",
-        queryVector: queryEmbedding,
-        filter: { sessionId: { $eq: sessionId } },
-        numCandidates: 10 * limitK,
-        limit: limitK,
+      $match: {
+        historyArchived: true,
+        score: { $gte: SIMILARITY_SCORE_THRESHOLD },
       },
     },
     {
-      $addFields: { score: { $meta: "vectorSearchScore" } },
-    },
-    { $match: { score: { $gte: SIMILARITY_SCORE_THRESHOLD } } },
-    {
       $project: {
+        id: 1,
         sessionId: 1,
         timestampSeconds: 1,
+        timestamp: 1,
         eventType: 1,
         entities: 1,
+        topicLabels: 1,
         description: 1,
         importance: 1,
         confidence: 1,
@@ -132,6 +202,5 @@ export async function getContextDataFromMongo(
     },
   ];
 
-  const result = await collection.aggregate(pipeline).toArray();
-  return result;
+  return collection.aggregate(pipeline).toArray();
 }

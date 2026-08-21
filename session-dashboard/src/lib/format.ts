@@ -3,6 +3,8 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   timeStyle: "short",
 });
 
+const OMITTED_DOMAIN_VALUES = new Set(["unknown", "unclassified"]);
+
 export function formatDateTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? value : dateFormatter.format(date);
@@ -37,6 +39,20 @@ export function formatElapsedTime(totalSeconds: number): string {
 export function humanizeEventType(eventType: string): string {
   return eventType
     .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+export function isDisplayableDomain(value: string): boolean {
+  const normalized = value.trim().toLocaleLowerCase();
+  return Boolean(normalized) && !OMITTED_DOMAIN_VALUES.has(normalized);
+}
+
+export function formatDomain(value: string): string {
+  return value
+    .trim()
+    .split(/[\s_-]+/)
+    .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 }
