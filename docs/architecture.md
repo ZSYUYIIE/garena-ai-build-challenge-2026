@@ -37,6 +37,13 @@ target `/dashboard/sessions/{sessionId}`; without one it opens Memory overview.
 The extension captures admitted frames, user microphone PCM, and captured-tab
 PCM. The backend keeps the audio sources separate: the microphone represents the
 user's question, while tab audio is transcribed into bounded commentary context.
+The extension also feeds captured-tab PCM, never microphone PCM, to a packaged
+Silero V5 model in a single-threaded ONNX WebAssembly worker. Its probability
+stream becomes the local tab-speech boolean used by Smart Chrome TTS. Model
+startup, ordering, backpressure, or inference failure switches that capture
+session to the existing conservative energy gate without interrupting capture.
+Cloud Speech-to-Text voice activity remains an independent backend policy input;
+it is not a dependency of Chrome timeline TTS.
 
 Automatic narration follows a fail-closed sequence:
 

@@ -237,14 +237,14 @@ test("Chrome timeline narration rejects empty text without reserving the ID", ()
 
 test("Smart narration requires 750 ms of continuous local silence", () => {
   const f = fixture({ mode: "smart" });
-  f.narrator.setTabActivity(true);
+  f.narrator.setTabSpeechActive(true);
   f.narrator.offer(event("event-1"));
-  f.narrator.setTabActivity(false);
+  f.narrator.setTabSpeechActive(false);
   f.clock.advance(749);
   assert.deepEqual(f.tts.spokenText, []);
 
-  f.narrator.setTabActivity(true);
-  f.narrator.setTabActivity(false);
+  f.narrator.setTabSpeechActive(true);
+  f.narrator.setTabSpeechActive(false);
   f.clock.advance(749);
   assert.deepEqual(f.tts.spokenText, []);
   f.clock.advance(1);
@@ -254,7 +254,7 @@ test("Smart narration requires 750 ms of continuous local silence", () => {
 test("always-narrate modes start immediately during tab activity", () => {
   for (const mode of ["over_audio", "narration_only"] as const) {
     const f = fixture({ mode });
-    f.narrator.setTabActivity(true);
+    f.narrator.setTabSpeechActive(true);
     f.narrator.offer(event(mode));
     assert.deepEqual(f.tts.spokenText, [`Description ${mode}.`]);
   }
@@ -351,7 +351,7 @@ test("Question only and stop clear unsafe work without replay", () => {
 
 test("mode changes re-evaluate pending work and Smart interrupts during tab activity", () => {
   const f = fixture({ mode: "smart" });
-  f.narrator.setTabActivity(true);
+  f.narrator.setTabSpeechActive(true);
   f.narrator.offer(event("pending"));
   f.narrator.setVoiceNarrationMode("over_audio");
   assert.deepEqual(f.tts.spokenText, ["Description pending."]);

@@ -65,3 +65,16 @@ test("allows the loopback Vite loader only in the unpacked development manifest"
   assert.match(developmentPolicy, /script-src[^;]*http:\/\/localhost:5173/);
   assert.match(developmentPolicy, /connect-src[^;]*ws:\/\/localhost:5173/);
 });
+
+test("allows packaged WebAssembly without allowing arbitrary eval or remote scripts", () => {
+  for (const development of [false, true]) {
+    const manifest = createExtensionManifest(
+      { name: "StreamSense test", version: "1.2.3" },
+      { development },
+    );
+    const policy = manifest.content_security_policy?.extension_pages ?? "";
+    assert.match(policy, /script-src[^;]*'self'[^;]*'wasm-unsafe-eval'/);
+    assert.doesNotMatch(policy, /(?:^|\s)'unsafe-eval'(?:\s|;|$)/);
+    if (!development) assert.doesNotMatch(policy, /script-src[^;]*https?:/);
+  }
+});

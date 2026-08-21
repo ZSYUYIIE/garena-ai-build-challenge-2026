@@ -2,9 +2,9 @@ import { PcmChunker, StreamingPcm16Resampler } from "./audioPcm.ts";
 import { encodeAudioPacket } from "./audioPacket.ts";
 import {
   EchoAwareUserVadGate,
-  TabActivityGate,
   type PlaybackReference,
 } from "./voiceActivity.ts";
+import { TabSpeechGate, type TabSpeechGateOptions } from "./tabSpeechGate.ts";
 
 export type TabAudioState = "absent" | "captured" | "degraded";
 export type MicrophoneState = "pending" | "ready" | "denied" | "degraded";
@@ -27,7 +27,7 @@ export function createContextTimeToExtensionSessionMs(origin: {
 type TabOptions = {
   tabStream: MediaStream;
   onTabPacket: (packet: Int16Array, firstSampleTimestampMs: number) => void;
-  onTabActivity: (active: boolean) => void;
+  onTabSpeechChange: (active: boolean) => void;
   onTabDiscontinuity: (timestampMs: number) => void;
   onVideoEnded?: () => void;
 };
@@ -52,6 +52,7 @@ type Dependencies = {
   getWorkletUrl?: () => string;
   now?: () => number;
   onStateChange?: (state: RealtimeMediaState) => void;
+  createTabSpeechGate?: (options: TabSpeechGateOptions) => Pick<TabSpeechGate, "push" | "stop">;
 };
 
 type Branch = {
@@ -104,7 +105,7 @@ export function createMediaSocketProtocol(
       sendJson({ type: "media_state", ...state });
       return true;
     },
-    sendTabActivity(active: boolean) {
+    sendTabSpeech(active: boolean) {
       if (!opened) return false;
       sendJson({ type: "tab_audio_activity", active });
       return true;
@@ -180,7 +181,7 @@ export class RealtimeMediaAudio {
   private tabVideoTrack: MediaStreamTrack | null = null;
   private tabVideoEndedHandler: (() => void) | null = null;
   private tabGain: 0 | 0.3 | 0.4 | 1 = 1;
-  private readonly tabActivity = new TabActivityGate();
+  private tabSpeechGate: Pick<TabSpeechGate, "push" | "stop"> | null = null;
   private readonly userVad = new EchoAwareUserVadGate();
 
   constructor(dependencies: Dependencies = {}) {
@@ -191,6 +192,7 @@ export class RealtimeMediaAudio {
       getWorkletUrl: dependencies.getWorkletUrl ?? (() => chrome.runtime.getURL("audio/pcm-capture-worklet.js")),
       now: dependencies.now ?? (() => performance.now()),
       onStateChange: dependencies.onStateChange ?? (() => undefined),
+      createTabSpeechGate: dependencies.createTabSpeechGate ?? ((options) => new TabSpeechGate(options)),
     };
     this.publishState();
   }
@@ -268,6 +270,9 @@ export class RealtimeMediaAudio {
       monitor.connect(context.destination);
       this.tabResampler = new StreamingPcm16Resampler(context.sampleRate);
       this.tabChunker = new PcmChunker(1_600);
+      this.tabSpeechGate = this.dependencies.createTabSpeechGate({
+        onSpeechChange: options.onTabSpeechChange,
+      });
       worklet.port.onmessage = (event) => this.handleTabSamples(event.data);
       audioTrack.addEventListener("ended", () => this.degradeTab(), { once: true });
       this.setState({ tabAudioState: "captured" });
@@ -383,6 +388,8 @@ export class RealtimeMediaAudio {
     this.stopTracks(this.tabStream);
     this.stopTracks(this.micStream);
     this.removeVideoEndedListener();
+    this.tabSpeechGate?.stop();
+    this.tabSpeechGate = null;
     this.tabBranch = null;
     this.micBranch = null;
     this.tabStream = null;
@@ -453,8 +460,7 @@ export class RealtimeMediaAudio {
     }
     for (const packet of chunker.push(resampler.push(samples))) {
       const timestampMs = this.takeTabPacketTimestamp(packet.length);
-      const activity = this.tabActivity.push(packet, timestampMs);
-      if (activity.changed) options.onTabActivity(activity.active);
+      this.tabSpeechGate?.push(packet, timestampMs);
       this.userVad.pushReference({ source: "tab", pcm: packet, sampleRate: 16_000, firstSampleExtensionSessionMs: timestampMs });
       options.onTabPacket(packet, timestampMs);
     }
@@ -501,6 +507,8 @@ export class RealtimeMediaAudio {
     if (this.stopped || this.state.tabAudioState !== "captured") return;
     this.closeBranch(this.tabBranch);
     this.tabBranch = null;
+    this.tabSpeechGate?.stop();
+    this.tabSpeechGate = null;
     this.setState({ tabAudioState: "degraded" });
     this.tabOptions?.onTabDiscontinuity(Math.max(0, Math.round(this.dependencies.now())));
   }

@@ -206,6 +206,13 @@ by StreamSense, not invented records.
   Question only under Narration level disables automatic timeline speech while
   retaining events and questions.
 
+Smart narration uses a packaged local speech detector over captured-tab PCM.
+Spoken dialogue, singing, and voice-like audio block or interrupt automatic
+Chrome TTS; instrumental music, ambience, and effects can continue underneath.
+The detector runs in a bounded worker and falls back to the former conservative
+energy gate for the remainder of the capture session if it cannot start or keep
+up. Cloud Speech-to-Text remains a separate backend commentary signal.
+
 Automatic event speech is owned by Chrome/OS TTS. Every automatic utterance is
 based on the exact event already recorded into the timeline; Gemini Live is not
 used to invent or synthesize automatic timeline events.

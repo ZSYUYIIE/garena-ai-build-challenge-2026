@@ -42,8 +42,8 @@ export function createExtensionManifest(
   { development = false }: ExtensionManifestOptions = {},
 ): StaticManifest {
   const scriptSources = development
-    ? ["'self'", ...devServerScriptSources]
-    : ["'self'"];
+    ? ["'self'", "'wasm-unsafe-eval'", ...devServerScriptSources]
+    : ["'self'", "'wasm-unsafe-eval'"];
   const connectSources = development
     ? [...backendConnectSources, ...devServerConnectSources]
     : backendConnectSources;

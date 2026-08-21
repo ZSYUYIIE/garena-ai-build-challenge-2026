@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && npm run verify:vad-assets",
+    "verify:vad-assets": "node scripts/verify-vad-assets.mjs",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "devDependencies": {
@@ -23,10 +24,12 @@
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
+    "@ricky0123/vad-web": "0.0.30",
     "@tailwindcss/vite": "^4.3.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.28.0",
+    "onnxruntime-web": "1.27.0",
     "react": "^19.2.8",
     "react-aria-components": "^1.20.0",
     "react-dom": "^19.2.8",

@@ -321,6 +321,10 @@ export class EchoAwareUserVadGate {
   }
 }
 
+/**
+ * Conservative energy-only fallback used while neural tab-speech detection is
+ * unavailable. Loud music and effects intentionally remain active here.
+ */
 export class TabActivityGate {
   private active = false;
   private lastActiveEndMs: number | null = null;

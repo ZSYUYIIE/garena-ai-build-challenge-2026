@@ -633,11 +633,11 @@ export function useRealtimeSession(
           }
           safelySend(() => protocol.sendTab(pcm, timestampMs));
         },
-        onTabActivity: (active) => {
+        onTabSpeechChange: (active) => {
           callbackGate.run(() => {
-            coordinator.tabActivity(active);
-            timelineNarrator.setTabActivity(active);
-            safelySend(() => protocol.sendTabActivity(active));
+            coordinator.setTabSpeechActive(active);
+            timelineNarrator.setTabSpeechActive(active);
+            safelySend(() => protocol.sendTabSpeech(active));
           });
         },
         onTabDiscontinuity: (timestampMs) => {

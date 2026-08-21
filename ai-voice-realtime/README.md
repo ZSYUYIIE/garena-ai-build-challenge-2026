@@ -122,6 +122,10 @@ those sessions into MongoDB.
 - Missing microphone permission leaves typed questions and tab capture usable.
 - Missing tab audio leaves visual analysis and questions usable.
 - Cloud STT failure degrades commentary context.
+- Protocol-v2 `tab_audio_activity.active` retains its historical wire name but
+  now carries the extension's fast local tab-speech decision. Backend Smart
+  policy continues to combine it with independent Cloud STT speech activity;
+  Chrome timeline TTS uses the local decision only.
 - Gemini Live failure degrades questions/answers, not Chrome timeline TTS.
 - Mongo history failure leaves SQLite-backed current Live events usable but
   Memory archival/search degraded.

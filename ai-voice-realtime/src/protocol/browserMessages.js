@@ -163,6 +163,8 @@ const browserMessageSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("media_state"), tabAudioState, microphoneState }).strict(),
+  // Protocol-v2 retains the historical command name; active is now the
+  // extension's fast local tab-speech decision.
   z.object({ type: z.literal("tab_audio_activity"), active: z.boolean() }).strict(),
   z
     .object({

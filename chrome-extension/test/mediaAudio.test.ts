@@ -166,11 +166,21 @@ class FakeAudioContext {
   finishModuleLoad() { this.releaseModule?.(); }
 }
 
+class FakeTabSpeechGate {
+  stopCalls = 0;
+  private onSpeechChange: (active: boolean) => void = () => undefined;
+  setCallback(callback: (active: boolean) => void) { this.onSpeechChange = callback; }
+  push(_pcm: Int16Array, _timestampMs: number) {}
+  emit(active: boolean) { this.onSpeechChange(active); }
+  stop() { this.stopCalls += 1; }
+}
+
 function fixture(options: {
   tabAudio?: boolean;
   mic?: "allowed" | "denied" | "denied-once" | "pending" | "no-echo";
   pendingModule?: boolean;
   now?: () => number;
+  tabSpeechGate?: FakeTabSpeechGate;
 } = {}) {
   const context = new FakeAudioContext();
   context.pendingModule = options.pendingModule ?? false;
@@ -209,6 +219,12 @@ function fixture(options: {
     getWorkletUrl: () => "chrome-extension://id/audio/pcm-capture-worklet.js",
     now: options.now ?? (() => 1_000),
     onStateChange: (state) => states.push(`${state.tabAudioState}/${state.microphoneState}`),
+    ...(options.tabSpeechGate ? {
+      createTabSpeechGate: ({ onSpeechChange }: { onSpeechChange: (active: boolean) => void }) => {
+        options.tabSpeechGate!.setCallback(onSpeechChange);
+        return options.tabSpeechGate!;
+      },
+    } : {}),
   });
   return {
     audio,
@@ -233,7 +249,7 @@ function fixture(options: {
         tabPackets.push(packet);
         tabPacketTimestamps.push(timestampMs);
       },
-      onTabActivity: (active: boolean) => activity.push(active),
+      onTabSpeechChange: (active: boolean) => activity.push(active),
       onTabDiscontinuity: (timestampMs: number) => {
         discontinuities.push(timestampMs);
         states.push("tab-discontinuity");
@@ -266,6 +282,28 @@ test("routes tab audio to full-volume playback and a separate STT callback", asy
   assert.equal(media.context.gains[0].gain.value, 1);
   assert.equal(media.context.sources[0].destinations.includes(media.context.gains[0]), true);
   assert.equal(media.context.sources[0].destinations.includes(media.context.worklets[0]), true);
+});
+
+test("routes detected tab speech independently from captured PCM", async () => {
+  const gate = new FakeTabSpeechGate();
+  const media = fixture({ tabSpeechGate: gate });
+  media.audio.prepareForUserGesture();
+  await media.audio.startTab(media.tabOptions);
+  gate.emit(true);
+  gate.emit(false);
+  media.context.worklets[0].emit(new Float32Array(4_800).fill(0.2));
+  assert.deepEqual(media.activity, [true, false]);
+  assert.ok(media.tabPackets.length > 0);
+});
+
+test("stops the tab speech gate exactly once with capture teardown", async () => {
+  const gate = new FakeTabSpeechGate();
+  const media = fixture({ tabSpeechGate: gate });
+  media.audio.prepareForUserGesture();
+  await media.audio.startTab(media.tabOptions);
+  await media.audio.stop();
+  await media.audio.stop();
+  assert.equal(gate.stopCalls, 1);
 });
 
 test("applies a tab-gain target selected before the capture graph starts", async () => {
@@ -665,7 +703,7 @@ test("sends a complete protocol-v2 hello before all session media commands", () 
   const protocol = createMediaSocketProtocol((value) => sent.push(value), () => "123e4567-e89b-42d3-a456-426614174000");
   protocol.open({ tabAudioState: "captured", microphoneState: "pending" });
   protocol.sendMediaState({ tabAudioState: "captured", microphoneState: "ready" });
-  protocol.sendTabActivity(true);
+  protocol.sendTabSpeech(true);
   assert.deepEqual(
     sent.map((value) => typeof value === "string" ? JSON.parse(value) : value),
     [
@@ -743,7 +781,7 @@ test("sends tab activity and track-ended discontinuity as distinct commands", ()
   const sent: string[] = [];
   const protocol = createMediaSocketProtocol((value) => sent.push(value as string), crypto.randomUUID);
   protocol.open({ tabAudioState: "captured", microphoneState: "ready" });
-  protocol.sendTabActivity(false);
+  protocol.sendTabSpeech(false);
   protocol.sendTabDiscontinuity(1_234);
   assert.deepEqual(sent.slice(1).map(JSON.parse), [
     { type: "tab_audio_activity", active: false },

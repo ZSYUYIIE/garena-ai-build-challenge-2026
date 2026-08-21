@@ -47,7 +47,7 @@ export class SpeechCoordinator {
   private readonly setTimeoutFn: (callback: () => void, delayMs: number) => unknown;
   private readonly clearTimeoutFn: (timer: unknown) => void;
   private active: ActiveTurn | null = null;
-  private tabActive = false;
+  private tabSpeechActive = false;
   private voiceNarrationMode: VoiceNarrationMode;
   private timelineNarrationActive = false;
   private tabGain: TabGain = 1;
@@ -98,8 +98,8 @@ export class SpeechCoordinator {
     this.resetResponseTimer(active);
   }
 
-  tabActivity(active: boolean): void {
-    this.tabActive = active;
+  setTabSpeechActive(active: boolean): void {
+    this.tabSpeechActive = active;
     if (
       active
       && this.voiceNarrationMode === "smart"
@@ -114,7 +114,7 @@ export class SpeechCoordinator {
     this.voiceNarrationMode = mode;
     if (
       mode === "smart"
-      && this.tabActive
+      && this.tabSpeechActive
       && this.active?.mode === "narration"
     ) {
       this.clearActive();
@@ -138,7 +138,7 @@ export class SpeechCoordinator {
     if (chunk.mode === "answer") {
       if (!this.isActiveAnswer(chunk.turnId)) return false;
     } else if (chunk.mode === "narration") {
-      if (this.voiceNarrationMode === "smart" && this.tabActive) return false;
+      if (this.voiceNarrationMode === "smart" && this.tabSpeechActive) return false;
       if (this.active && (this.active.turnId !== chunk.turnId || this.active.mode !== "narration")) return false;
       if (!this.active) {
         this.active = {

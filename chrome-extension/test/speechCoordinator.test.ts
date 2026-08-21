@@ -108,14 +108,14 @@ test("tab activity clears narration without changing tab gain", () => {
   const f = fixture();
   f.coordinator.modelAudio(modelChunk("narration-1", "narration"));
   const gainsBefore = f.gainCalls.length;
-  f.coordinator.tabActivity(true);
+  f.coordinator.setTabSpeechActive(true);
   assert.equal(f.clears.includes("narration-1"), true);
   assert.equal(f.gainCalls.length, gainsBefore);
 });
 
 test("Narrate over audio accepts narration during tab speech and mixes the tab at 40 percent", () => {
   const f = fixture("over_audio");
-  f.coordinator.tabActivity(true);
+  f.coordinator.setTabSpeechActive(true);
 
   assert.equal(
     f.coordinator.modelAudio(modelChunk("narration-1", "narration")),
@@ -132,7 +132,7 @@ test("Narration only keeps local tab playback muted through narration and answer
   const f = fixture("narration_only");
   assert.deepEqual(f.gainCalls, [{ gain: 0, fadeMs: 50 }]);
 
-  f.coordinator.tabActivity(true);
+  f.coordinator.setTabSpeechActive(true);
   assert.equal(
     f.coordinator.modelAudio(modelChunk("narration-1", "narration")),
     true,
@@ -147,7 +147,7 @@ test("Narration only keeps local tab playback muted through narration and answer
 
 test("live mode changes immediately recompute tab gain and Smart cancels narration during tab speech", () => {
   const f = fixture("over_audio");
-  f.coordinator.tabActivity(true);
+  f.coordinator.setTabSpeechActive(true);
   assert.equal(
     f.coordinator.modelAudio(modelChunk("narration-1", "narration")),
     true,

@@ -73,7 +73,7 @@ export class TimelineNarrator {
   private readonly clearTimeoutFn: (timer: unknown) => void;
   private mode: VoiceNarrationMode;
   private enabled: boolean;
-  private tabActive = false;
+  private tabSpeechActive = false;
   private stopped = false;
   private pending: PendingEvent | null = null;
   private active: ActiveUtterance | null = null;
@@ -114,7 +114,7 @@ export class TimelineNarrator {
     if (this.stopped || !isVoiceNarrationMode(mode) || mode === this.mode) return;
     this.mode = mode;
     this.clearSilenceTimer();
-    if (mode === "smart" && this.tabActive && this.active) {
+    if (mode === "smart" && this.tabSpeechActive && this.active) {
       this.interruptActive(false);
     }
     this.evaluatePending();
@@ -130,9 +130,9 @@ export class TimelineNarrator {
     }
   }
 
-  setTabActivity(active: boolean): void {
+  setTabSpeechActive(active: boolean): void {
     if (this.stopped) return;
-    this.tabActive = active;
+    this.tabSpeechActive = active;
     this.clearSilenceTimer();
     if (active && this.mode === "smart" && this.active) {
       this.interruptActive(false);
@@ -168,10 +168,10 @@ export class TimelineNarrator {
       this.startPending();
       return;
     }
-    if (this.tabActive || this.silenceTimer !== null) return;
+    if (this.tabSpeechActive || this.silenceTimer !== null) return;
     this.silenceTimer = this.setTimeoutFn(() => {
       this.silenceTimer = null;
-      if (!this.tabActive) this.startPending();
+      if (!this.tabSpeechActive) this.startPending();
     }, SMART_SILENCE_MS);
   }
 

@@ -136,8 +136,11 @@ single accessible theme, and readable relationship alternatives are documented i
 Voice narration is a side-panel-only preference and is separate from the
 Narration level selector:
 
-- **Smart narration** waits for 750 milliseconds of continuous silence from the
-  extension's existing local tab-activity detector.
+- **Smart narration** classifies captured-tab audio as speech or non-speech with
+  a packaged local Silero V5/ONNX worker. It waits for 500 milliseconds of
+  stable local non-speech plus the existing 750-millisecond Chrome TTS quiet
+  window. Instrumental music, ambience, and effects may continue; dialogue,
+  singing, chanting, and voice-like audio block or interrupt narration.
 - **Narrate over audio** speaks the newest recorded timeline event even during
   tab speech. Local tab playback fades to 40 percent only from the Chrome TTS
   `start` event through `end`, `interrupted`, `cancelled`, or `error`.
@@ -160,6 +163,13 @@ and clear its one pending event before admission. Events received while a user
 answer owns speech remain visible but are not spoken later. Gemini Live and
 Cloud Speech-to-Text health do not gate timeline TTS; Cloud transcription and
 captured-tab PCM continue independently.
+
+The model receives only ephemeral 16 kHz captured-tab PCM and emits only speech
+probabilities. Runtime, WebAssembly, and model files are packaged with the
+extension; no CDN is used. Startup timeout, malformed/out-of-order results, an
+inference error, or more than eight outstanding frames terminates the worker and
+uses the former energy-only gate for the rest of the capture session. Smart does
+not change tab gain; the other narration modes retain their existing gain rules.
 
 ## Answer modes
 
