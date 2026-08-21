@@ -152,3 +152,47 @@ test("treats wrong-generation events as lifecycle failures", () => {
     assert.equal(f.worker.terminateCalls, 1);
   }
 });
+
+test("falls back once for every remaining worker and transport failure", () => {
+  const cases: Array<[string, (fixtureValue: ReturnType<typeof fixture>) => number]> = [
+    ["worker error", (f) => {
+      f.gate.push(packet(512, 0.2), 0);
+      f.worker.onerror?.({} as ErrorEvent);
+      return 32;
+    }],
+    ["malformed event", (f) => {
+      f.gate.push(packet(512, 0.2), 0);
+      f.worker.emit({ type: "probability" });
+      return 32;
+    }],
+    ["reported inference failure", (f) => {
+      f.gate.push(packet(512, 0.2), 0);
+      f.worker.emit({ type: "failed", generation: 1, stage: "inference" });
+      return 32;
+    }],
+    ["packet clock discontinuity", (f) => {
+      f.ready();
+      f.gate.push(packet(512, 0.2), 0);
+      f.gate.push(packet(512, 0.2), 34);
+      return 66;
+    }],
+    ["more than eight in-flight frames", (f) => {
+      f.ready();
+      for (let index = 0; index <= 8; index += 1) {
+        f.gate.push(packet(512, 0.2), index * 32);
+      }
+      return 288;
+    }],
+  ];
+
+  for (const [name, trigger] of cases) {
+    const f = fixture();
+    const nextTimestampMs = trigger(f);
+    assert.equal(f.worker.terminateCalls, 1, name);
+    assert.equal(f.speech.at(-1), true, name);
+    const sentBeforeFallbackPush = f.worker.sent.length;
+    f.gate.push(packet(512, 0.2), nextTimestampMs);
+    assert.equal(f.worker.sent.length, sentBeforeFallbackPush, `${name} retried the worker`);
+    assert.equal(f.worker.terminateCalls, 1, `${name} terminated more than once`);
+  }
+});

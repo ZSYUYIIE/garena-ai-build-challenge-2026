@@ -2,7 +2,7 @@
 
 ## Automated evidence
 
-- Extension unit/integration tests: 227 passed, 0 failed.
+- Extension unit/integration tests: 228 passed, 0 failed.
 - Extension production build and local VAD asset verifier: passed; emitted one
   2,327,524-byte model, one 13,479,978-byte WASM binary, and one 24,180-byte
   runtime module with no remote model/runtime URL.
