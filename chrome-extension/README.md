@@ -140,7 +140,9 @@ Narration level selector:
   a packaged local Silero V5/ONNX worker. It waits for 500 milliseconds of
   stable local non-speech plus the existing 750-millisecond Chrome TTS quiet
   window. Instrumental music, ambience, and effects may continue; dialogue,
-  singing, chanting, and voice-like audio block or interrupt narration.
+  singing, chanting, and voice-like audio block or interrupt narration. If the
+  model fails during confirmed speech, Smart remains blocked until tab capture
+  restarts; failures outside confirmed speech use the conservative RMS fallback.
 - **Narrate over audio** speaks the newest recorded timeline event even during
   tab speech. Local tab playback fades to 40 percent only from the Chrome TTS
   `start` event through `end`, `interrupted`, `cancelled`, or `error`.

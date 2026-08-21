@@ -71,6 +71,21 @@ test("opens on model speech and closes only after end hysteresis", () => {
   assert.equal(f.speech.at(-1), false);
 });
 
+test("keeps confirmed speech latched when the model fails over quiet PCM", () => {
+  const f = fixture();
+  f.ready();
+  for (let index = 0; index < 17; index += 1) f.push(0.08);
+  f.push(0.78);
+  f.push(0.82);
+  assert.deepEqual(f.speech, [true]);
+
+  f.worker.emit({ type: "failed", generation: 1, stage: "inference" });
+  for (let index = 0; index < 20; index += 1) f.push(0.08);
+
+  assert.deepEqual(f.speech, [true]);
+  assert.equal(f.worker.terminateCalls, 1);
+});
+
 test("falls back conservatively on timeout and out-of-order results", () => {
   const timedOut = fixture();
   timedOut.gate.push(packet(512, 0.2), 0);

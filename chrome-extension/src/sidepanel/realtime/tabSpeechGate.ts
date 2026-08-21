@@ -48,6 +48,8 @@ export class TabSpeechGate {
   private expectedPacketTimestampMs: number | null = null;
   private nextFrameEndMs: number | null = null;
   private energyActive = false;
+  private modelSpeechActive = false;
+  private fallbackSpeechLatched = false;
   private published = false;
 
   constructor(options: TabSpeechGateOptions) {
@@ -84,7 +86,11 @@ export class TabSpeechGate {
     }
     const energy = this.energy.push(pcm, firstSampleTimestampMs);
     this.energyActive = energy.active;
-    if (this.mode === "fallback" || (this.mode === "warming" && !this.ready)) {
+    if (this.mode === "fallback") {
+      this.publish(this.fallbackSpeechLatched || energy.active);
+      return;
+    }
+    if (this.mode === "warming" && !this.ready) {
       if (energy.changed) this.publish(energy.active);
       return;
     }
@@ -107,6 +113,8 @@ export class TabSpeechGate {
     this.expectedFrameEnds.clear();
     this.chunker.flush();
     this.decision.reset();
+    this.modelSpeechActive = false;
+    this.fallbackSpeechLatched = false;
   }
 
   private validatePacketClock(pcm: Int16Array, timestampMs: number): boolean {
@@ -196,6 +204,7 @@ export class TabSpeechGate {
       this.enterFallback();
       return;
     }
+    this.modelSpeechActive = result.active;
     if (this.mode === "warming") {
       if (result.active || result.stableNonSpeechMs >= MODEL_WARMUP_MS) {
         this.mode = "model";
@@ -208,13 +217,14 @@ export class TabSpeechGate {
 
   private enterFallback(): void {
     if (this.mode === "fallback" || this.mode === "stopped") return;
+    this.fallbackSpeechLatched = this.modelSpeechActive;
     this.mode = "fallback";
     this.clearStartupTimer();
     this.terminateWorker();
     this.expectedFrameEnds.clear();
     this.chunker.flush();
     this.decision.reset();
-    this.publish(this.energyActive);
+    this.publish(this.fallbackSpeechLatched || this.energyActive);
   }
 
   private publish(active: boolean): void {

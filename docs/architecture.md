@@ -42,6 +42,9 @@ Silero V5 model in a single-threaded ONNX WebAssembly worker. Its probability
 stream becomes the local tab-speech boolean used by Smart Chrome TTS. Model
 startup, ordering, backpressure, or inference failure switches that capture
 session to the existing conservative energy gate without interrupting capture.
+If the model had already confirmed speech when it failed, Smart narration keeps
+that speech state latched until capture stops instead of allowing quieter speech
+to become permissive through the less-sensitive energy fallback.
 Cloud Speech-to-Text voice activity remains an independent backend policy input;
 it is not a dependency of Chrome timeline TTS.
 

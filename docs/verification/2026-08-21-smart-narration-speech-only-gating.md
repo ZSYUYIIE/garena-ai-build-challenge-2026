@@ -2,7 +2,7 @@
 
 ## Automated evidence
 
-- Extension unit/integration tests: 228 passed, 0 failed.
+- Extension unit/integration tests: 229 passed, 0 failed.
 - Extension production build and local VAD asset verifier: passed; emitted one
   2,327,524-byte model, one 13,479,978-byte WASM binary, and one 24,180-byte
   runtime module with no remote model/runtime URL.
@@ -29,7 +29,7 @@ fallback occurred. Do not attach or retain captured PCM.
 | Voice question during tab audio | The user turn interrupts Chrome TTS and uses the microphone/Gemini path. | Not run |
 | Narrate over audio | Existing 40% temporary tab gain remains unchanged. | Not run |
 | Narration only | Tab playback remains muted and narration continues. | Not run |
-| Worker initialization/inference failure | RMS fallback activates and never becomes permissive. | Automated |
+| Worker initialization/inference failure | Confirmed speech stays latched; otherwise RMS fallback activates. | Automated |
 | Cloud STT degraded | Chrome TTS continues on the local gate; backend commentary remains degraded. | Not run |
 
 Performance release thresholds are p95 inference at most 16 ms per 32 ms
