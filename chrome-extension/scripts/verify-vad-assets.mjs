@@ -51,6 +51,9 @@ export async function verifyVadAssets(distDirectory) {
     await assertSize(wasm, 10 * 1024 ** 2, 20 * 1024 ** 2, "ONNX WASM binary"),
     await assertSize(module, 1, 100 * 1024, "ONNX WASM module"),
   ];
+  if (sizes.reduce((total, size) => total + size, 0) > 20 * 1024 ** 2) {
+    throw new Error("Packaged VAD assets exceed the 20 MiB aggregate limit.");
+  }
   return [model, wasm, module].map((file, index) => ({
     file: path.basename(file),
     bytes: sizes[index],

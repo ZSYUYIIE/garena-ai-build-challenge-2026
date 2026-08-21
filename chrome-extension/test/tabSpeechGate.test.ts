@@ -9,7 +9,11 @@ class FakeWorker {
   onerror: ((event: ErrorEvent) => void) | null = null;
   readonly sent: unknown[] = [];
   terminateCalls = 0;
-  postMessage(message: unknown) { this.sent.push(message); }
+  throwOnPost = false;
+  postMessage(message: unknown) {
+    if (this.throwOnPost) throw new Error("worker startup failed");
+    this.sent.push(message);
+  }
   terminate() { this.terminateCalls += 1; }
   emit(data: unknown) { this.onmessage?.({ data } as MessageEvent<unknown>); }
 }
@@ -110,4 +114,41 @@ test("stops idempotently and ignores late worker events", () => {
   f.worker.emit({ type: "ready", generation: 1 });
   assert.equal(f.worker.terminateCalls, 1);
   assert.deepEqual(f.speech, []);
+});
+
+test("falls back when the initial worker post throws", () => {
+  const worker = new FakeWorker();
+  worker.throwOnPost = true;
+  const speech: boolean[] = [];
+  let gate: TabSpeechGate | null = null;
+  assert.doesNotThrow(() => {
+    gate = new TabSpeechGate({
+      onSpeechChange: (active) => speech.push(active),
+      createWorker: () => worker,
+    });
+  });
+  gate!.push(packet(512, 0.2), 0);
+  assert.equal(worker.terminateCalls, 1);
+  assert.deepEqual(speech, [true]);
+});
+
+test("fails over instead of throwing on invalid packet clocks", () => {
+  const f = fixture();
+  f.ready();
+  f.gate.push(packet(512, 0.2), 0);
+  assert.doesNotThrow(() => f.gate.push(packet(), Number.NaN));
+  assert.equal(f.worker.terminateCalls, 1);
+  assert.equal(f.speech.at(-1), true);
+});
+
+test("treats wrong-generation events as lifecycle failures", () => {
+  for (const event of [
+    { type: "ready", generation: 2 },
+    { type: "failed", generation: 2, stage: "inference" },
+    { type: "probability", generation: 2, sequence: 1, frameEndMs: 32, probability: 0.1, inferenceMs: 1 },
+  ]) {
+    const f = fixture();
+    f.worker.emit(event);
+    assert.equal(f.worker.terminateCalls, 1);
+  }
 });

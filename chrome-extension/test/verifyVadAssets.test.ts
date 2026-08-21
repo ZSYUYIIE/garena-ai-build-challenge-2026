@@ -58,3 +58,11 @@ test("rejects missing WASM CSP and unsafe asset sizes", async () => {
   await truncate(path.join(small, "assets", "silero_vad_v5-test.onnx"), 10);
   await assert.rejects(verifyVadAssets(small), /unexpected size/i);
 });
+
+test("enforces the 20 MiB aggregate VAD asset budget", async () => {
+  const root = await validFixture();
+  await truncate(path.join(root, "assets", "silero_vad_v5-test.onnx"), 3 * 1024 ** 2);
+  await truncate(path.join(root, "assets", "ort-wasm-simd-threaded-test.wasm"), 18 * 1024 ** 2);
+  await truncate(path.join(root, "assets", "ort-wasm-simd-threaded-test.mjs"), 100 * 1024);
+  await assert.rejects(verifyVadAssets(root), /20 MiB/i);
+});

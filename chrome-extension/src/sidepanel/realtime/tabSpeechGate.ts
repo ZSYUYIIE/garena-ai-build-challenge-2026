@@ -36,7 +36,7 @@ export class TabSpeechGate {
   private readonly energy = new TabActivityGate();
   private readonly decision = new TabSpeechDecision();
   private readonly chunker = new PcmChunker(FRAME_SAMPLES);
-  private worker: WorkerPort | null;
+  private worker: WorkerPort | null = null;
   private mode: GateMode = "warming";
   private startupTimer: TimerHandle | null = null;
   private ready = false;
@@ -59,21 +59,26 @@ export class TabSpeechGate {
       { type: "module", name: "streamsense-tab-speech" },
     ));
     try {
-      this.worker = createWorker();
+      const worker = createWorker();
+      this.worker = worker;
+      worker.onmessage = (event) => this.handleWorkerEvent(event.data);
+      worker.onerror = () => this.enterFallback();
+      worker.postMessage({ type: "initialize", generation: this.generation } satisfies TabSpeechWorkerCommand);
+      this.startupTimer = this.setTimeoutFn(() => this.enterFallback(), STARTUP_TIMEOUT_MS);
     } catch {
-      this.worker = null;
+      this.terminateWorker();
       this.mode = "fallback";
-      return;
+      this.clearStartupTimer();
     }
-    this.worker.onmessage = (event) => this.handleWorkerEvent(event.data);
-    this.worker.onerror = () => this.enterFallback();
-    this.worker.postMessage({ type: "initialize", generation: this.generation } satisfies TabSpeechWorkerCommand);
-    this.startupTimer = this.setTimeoutFn(() => this.enterFallback(), STARTUP_TIMEOUT_MS);
   }
 
   push(pcm: Int16Array, firstSampleTimestampMs: number): void {
     if (this.mode === "stopped") return;
     if (!(pcm instanceof Int16Array) || pcm.length === 0) {
+      this.enterFallback();
+      return;
+    }
+    if (!Number.isFinite(firstSampleTimestampMs) || firstSampleTimestampMs < 0) {
       this.enterFallback();
       return;
     }
@@ -98,8 +103,7 @@ export class TabSpeechGate {
     this.mode = "stopped";
     this.generation += 1;
     this.clearStartupTimer();
-    this.worker?.terminate();
-    this.worker = null;
+    this.terminateWorker();
     this.expectedFrameEnds.clear();
     this.chunker.flush();
     this.decision.reset();
@@ -152,7 +156,10 @@ export class TabSpeechGate {
       this.enterFallback();
       return;
     }
-    if (event.generation !== this.generation) return;
+    if (event.generation !== this.generation) {
+      this.enterFallback();
+      return;
+    }
     if (event.type === "failed") {
       this.enterFallback();
       return;
@@ -203,8 +210,7 @@ export class TabSpeechGate {
     if (this.mode === "fallback" || this.mode === "stopped") return;
     this.mode = "fallback";
     this.clearStartupTimer();
-    this.worker?.terminate();
-    this.worker = null;
+    this.terminateWorker();
     this.expectedFrameEnds.clear();
     this.chunker.flush();
     this.decision.reset();
@@ -221,5 +227,15 @@ export class TabSpeechGate {
     if (this.startupTimer === null) return;
     this.clearTimeoutFn(this.startupTimer);
     this.startupTimer = null;
+  }
+
+  private terminateWorker(): void {
+    const worker = this.worker;
+    this.worker = null;
+    try {
+      worker?.terminate();
+    } catch {
+      // A broken worker must never break captured-tab audio delivery.
+    }
   }
 }
