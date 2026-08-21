@@ -24,7 +24,7 @@ extension after rebuilding. The manifest requires Chrome's `tts` permission so
 the side panel can consume installed Chrome/OS voices; it does not request
 `ttsEngine` because StreamSense does not provide a speech engine. Automatic
 timeline narration prefers Alex, then Samantha, then another compatible English
-voice, and supplies `en-US`, rate `0.9`, and pitch `0.9`.
+voice, and supplies `en-US`, rate `1.1`, and pitch `0.9`.
 
 The complete runtime permission set is `activeTab`, `sidePanel`, `storage`,
 `tabCapture`, and `tts`. Host permissions and extension-page connections are
@@ -157,7 +157,7 @@ locally and applied immediately to an active session.
 
 The fixed calm voice profile applies only to automatic Chrome timeline TTS.
 Voice discovery is cached for the realtime session; failure falls back to
-Chrome voice selection while retaining `en-US`, rate `0.9`, and pitch `0.9`.
+Chrome voice selection while retaining `en-US`, rate `1.1`, and pitch `0.9`.
 Gemini Live question and Deep Research answer voices are unchanged.
 
 Typed and microphone questions interrupt an active Chrome timeline utterance

@@ -293,7 +293,7 @@ export function createChromeTimelineTtsPort(
       await ttsApi.speak(text, {
         enqueue: false,
         lang: "en-US",
-        rate: 0.9,
+        rate: 1.1,
         pitch: 0.9,
         ...(voiceName ? { voiceName } : {}),
         requiredEventTypes: ["start", "end"],

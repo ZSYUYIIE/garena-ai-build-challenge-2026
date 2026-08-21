@@ -168,7 +168,7 @@ test("applies the calm profile to the selected installed voice", async () => {
   for (const call of calls) {
     assert.equal(call.options.enqueue, false);
     assert.equal(call.options.lang, "en-US");
-    assert.equal(call.options.rate, 0.9);
+    assert.equal(call.options.rate, 1.1);
     assert.equal(call.options.pitch, 0.9);
     assert.equal(call.options.voiceName, "Alex");
     assert.deepEqual(call.options.requiredEventTypes, ["start", "end"]);
@@ -188,7 +188,7 @@ test("falls back to the calm profile when Chrome voice discovery fails", async (
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.lang, "en-US");
-  assert.equal(calls[0]?.rate, 0.9);
+  assert.equal(calls[0]?.rate, 1.1);
   assert.equal(calls[0]?.pitch, 0.9);
   assert.equal(calls[0]?.voiceName, undefined);
 });

@@ -14,6 +14,22 @@ test("requires two positive frames in a rolling three-frame window", () => {
   });
 });
 
+test("opens for two 0.50 probability frames but not lower probabilities", () => {
+  const belowThreshold = new TabSpeechDecision();
+  assert.equal(belowThreshold.push(0.49, 32).active, false);
+  assert.equal(belowThreshold.push(0.49, 64).active, false);
+  assert.equal(belowThreshold.push(0.49, 96).active, false);
+
+  const atThreshold = new TabSpeechDecision();
+  assert.equal(atThreshold.push(0.50, 32).active, false);
+  assert.equal(atThreshold.push(0.10, 64).active, false);
+  assert.deepEqual(atThreshold.push(0.50, 96), {
+    active: true,
+    changed: true,
+    stableNonSpeechMs: 0,
+  });
+});
+
 test("keeps sustained low-probability non-speech inactive", () => {
   const decision = new TabSpeechDecision();
   for (let frame = 1; frame <= 40; frame += 1) {
