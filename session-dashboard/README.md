@@ -83,6 +83,13 @@ projection. The client never fabricates semantic similarity. Every canvas node
 and edge has a readable selector/details/list alternative. Reduced motion
 removes camera easing; WebGL failure leaves the DOM representation usable.
 
+The unfiltered overview reserves exactly five canonical lanes and omits
+unknown-only supplied subgraphs rather than creating a sixth category. The
+unknown session remains reachable from its session card; its exact session page
+retains the supplied nodes, edges, selector, and readable relationships in 2D
+under **Domain unavailable**. See the current
+[`scene-description-and-domain-policy.md`](../docs/scene-description-and-domain-policy.md).
+
 ## Accessibility
 
 - semantic headings, landmarks, status, loading, empty, and error states;
@@ -131,4 +138,8 @@ npm run check
 ```
 
 Physical acceptance additionally verifies that a real event appears in the
-exact session opened from Live and remains after backend restart.
+exact session opened from Live and remains after backend restart. Run the demo
+with `STREAMSENSE_HISTORY_MODE=mongodb`, require the durable-provider startup
+line, and verify the same session, event, search result, graph, and readable
+relationships after restart. Automated checks do not prove physical Chrome or
+deployed Atlas behavior.

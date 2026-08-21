@@ -38,12 +38,91 @@ export function shouldSuppressVisualDescription(description) {
     /\b(?:the\s+)?(?:user|someone|they)\s+(?:has\s+)?(?:opened|clicked|selected|scrolled|typed|navigated|switched|pressed)\b/i.test(
       text
     );
-  const describesOnlyMediaWrapper =
-    /\b(?:youtube|twitch|vimeo)\s+(?:video\s+)?page\b/i.test(text) ||
-    /\b(?:browser|web\s?page|video\s?page|media\s?player)\b.{0,100}\b(?:displayed|shown|open|title|titled|called)\b/i.test(text) ||
-    /\b(?:video|livestream|stream)\s+(?:page\s+)?(?:is\s+)?(?:displayed|shown|titled|called)\b/i.test(text);
+  const describesOnlyMediaWrapper = isWrapperOnlyVisualDescription(text);
 
   return describesOwnInterface || infersUserInteraction || describesOnlyMediaWrapper;
+}
+
+const SIMPLE_WRAPPER_PATTERN =
+  /^(?:(?:a|the)\s+)?(?:video|livestream|stream)(?:\s+page)?\s+(?:is\s+)?(?:displayed|shown|open)(?:\s+full-?screen)?[.!]?$/iu;
+
+const PAGE_WITH_TITLE_PATTERNS = [
+  /^(?:(?:a|the)\s+)?(?:youtube|twitch|vimeo)\s+(?:video\s+)?page\s+(?:is\s+)?(?:displayed|shown|open)(?:(?:,\s*|\s+)(?:featuring|with)\s+(?:a\s+)?(?:video|livestream|stream)(?:\s+of\s+(?<subject>.+?))?\s+(?:titled|called)\s+(?<title>.+?))?[.!]?$/iu,
+  /^(?:(?:a|the)\s+)?(?:youtube|twitch|vimeo)\s+(?:video\s+)?page\s+(?:is\s+)?(?:displayed|shown|open)(?:,\s*|\s+)(?:featuring|with)\s+(?:a\s+)?(?<subject>.+?)\s+video\s+(?:titled|called)\s+(?<title>.+?)[.!]?$/iu,
+  /^(?:(?:a|the)\s+)?(?:browser(?:\s+page)?|web\s?page|video\s?page|media\s?player)\s+(?:is\s+)?(?:displayed|shown|open)(?:(?:,\s*|\s+)(?:featuring|with)\s+(?:a\s+)?(?:video|livestream|stream)(?:\s+of\s+(?<subject>.+?))?\s+(?:titled|called)\s+(?<title>.+?))?[.!]?$/iu,
+];
+
+const TITLED_WRAPPER_PATTERN =
+  /^(?:the\s+)?(?:video|livestream|stream)(?:\s+page)?\s+(?:is\s+)?(?:titled|called)\s+(?<title>.+?)\s+and\s+(?:is\s+)?(?:displayed|shown|open)(?:\s+(?:in|on)\s+(?:a|the)?\s*(?:media\s?player|video\s?page|browser\s?page))?[.!]?$/iu;
+
+const INTERNAL_PROSE_PUNCTUATION = /[.!?;,:]|[\r\n]/u;
+const TITLE_CONNECTORS = new Set([
+  "a",
+  "an",
+  "and",
+  "at",
+  "for",
+  "from",
+  "in",
+  "of",
+  "on",
+  "the",
+  "to",
+  "vs",
+  "with",
+]);
+
+function isWrapperOnlyVisualDescription(text) {
+  if (SIMPLE_WRAPPER_PATTERN.test(text)) return true;
+
+  for (const pattern of PAGE_WITH_TITLE_PATTERNS) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const subject = match.groups?.subject;
+    const title = match.groups?.title;
+    if (
+      (!subject || isMetadataNounPhrase(subject)) &&
+      (!title || isBoundedMetadataValue(title))
+    ) {
+      return true;
+    }
+  }
+
+  const titled = text.match(TITLED_WRAPPER_PATTERN);
+  return Boolean(
+    titled?.groups?.title && isBoundedMetadataValue(titled.groups.title),
+  );
+}
+
+function isBoundedMetadataValue(value) {
+  const text = value.trim();
+  const quoted = /^(?:"[^"]{1,160}"|'[^']{1,160}'|“[^”]{1,160}”)$/u.test(
+    text,
+  );
+  if (quoted) return true;
+  if (INTERNAL_PROSE_PUNCTUATION.test(text)) return false;
+  const words = text.split(/\s+/u);
+  return (
+    words.length <= 12 &&
+    words.every((word) => {
+      const normalized = word.toLocaleLowerCase("en-US");
+      return (
+        TITLE_CONNECTORS.has(normalized) ||
+        /^[\p{Lu}\p{N}][\p{L}\p{N}'’&+\-]*$/u.test(word)
+      );
+    })
+  );
+}
+
+function isMetadataNounPhrase(value) {
+  const text = value.trim();
+  const words = text.split(/\s+/u);
+  return (
+    words.length <= 6 &&
+    !INTERNAL_PROSE_PUNCTUATION.test(text) &&
+    !/\b(?:as|while|where|who|which|that|because|showing)\b/iu.test(text) &&
+    words.every((word) => !/(?:ing|ed)$/iu.test(word))
+  );
 }
 
 export function isDescriptionCoveredByTranscript(description, transcript) {

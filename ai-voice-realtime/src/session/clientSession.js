@@ -1098,7 +1098,7 @@ export class ClientSession {
     ) {
       this.sendBrowser({
         type: "telemetry",
-        text: "visual analysis suppressed: captured StreamSense or inferred user interaction",
+        text: "visual analysis suppressed: interface, inferred interaction, or wrapper-only output",
       });
       return;
     }
@@ -1139,6 +1139,7 @@ export class ClientSession {
         );
       }
       this.lastGroundedDescription =
+        persistenceResult.event?.description ||
         analysis.description ||
         analysis.event?.description ||
         analysis.semanticKey ||

@@ -108,18 +108,34 @@ type SessionPlacement = {
   position: GraphVector;
 };
 
-const DOMAIN_STYLES: DomainStyle[] = [
+type ClassifiedGraph = {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  nodeById: Map<string, GraphNode>;
+  adjacency: Map<string, string[]>;
+  sessionNodes: GraphNode[];
+  eventNodes: GraphNode[];
+  contextNodes: GraphNode[];
+  sessionNodeIdByNodeId: Map<string, string>;
+  domainStyleBySessionNodeId: Map<string, DomainStyle>;
+  domainKeysByNodeId: Map<string, string[]>;
+};
+
+const UNCLASSIFIED_DOMAIN_STYLE: DomainStyle = {
+  key: "unclassified",
+  label: "Domain unavailable",
+  color: 0xcbd5e1,
+};
+
+const CANONICAL_DOMAIN_STYLES: DomainStyle[] = [
   { key: "sports", label: "Sports", color: 0x2dd4bf },
   { key: "esports", label: "Esports and games", color: 0xa78bfa },
   { key: "concerts", label: "Concerts", color: 0xf472b6 },
   { key: "product-launches", label: "Product launches", color: 0xfbbf24 },
   { key: "creator-streams", label: "Creator livestreams", color: 0x60a5fa },
-  { key: "unclassified", label: "Other entertainment", color: 0xcbd5e1 },
 ];
 
-const CANONICAL_DOMAIN_STYLES = DOMAIN_STYLES.filter(
-  (style) => style.key !== "unclassified",
-);
+const DOMAIN_STYLES = [...CANONICAL_DOMAIN_STYLES, UNCLASSIFIED_DOMAIN_STYLE];
 
 const DOMAIN_STYLE_BY_KEY = new Map(
   DOMAIN_STYLES.map((style) => [style.key, style]),
@@ -161,75 +177,37 @@ export function buildGraphSceneModel(
   options: GraphModelOptions = {},
 ): GraphSceneModel {
   const scope = options.scope ?? "filtered";
-  const nodes = uniqueNodes(inputNodes).sort(compareNodes);
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const validatedNodes = uniqueNodes(inputNodes).sort(compareNodes);
+  const validatedNodeById = new Map(
+    validatedNodes.map((node) => [node.id, node]),
+  );
   const droppedDanglingEdgeIds: string[] = [];
-  const edges = uniqueEdges(inputEdges)
+  const validatedEdges = uniqueEdges(inputEdges)
     .filter((edge) => {
-      const valid = nodeById.has(edge.source) && nodeById.has(edge.target);
+      const valid =
+        validatedNodeById.has(edge.source) &&
+        validatedNodeById.has(edge.target);
       if (!valid) droppedDanglingEdgeIds.push(edge.id);
       return valid;
     })
     .sort((left, right) => left.id.localeCompare(right.id));
-  const adjacency = createAdjacency(nodes, edges);
-
-  const sessionNodes = nodes.filter((node) => node.type === "session");
-  const eventNodes = nodes.filter((node) => node.type === "event");
-  const contextNodes = nodes.filter(
-    (node) => node.type === "entity" || node.type === "topic",
-  );
-  const sessionNodeBySessionId = new Map(
-    sessionNodes.flatMap((node) =>
-      node.sessionId ? ([[node.sessionId, node]] as const) : [],
-    ),
-  );
-  const sessionNodeIdByNodeId = new Map<string, string>(
-    sessionNodes.map((node) => [node.id, node.id]),
-  );
-  const domainStyleBySessionNodeId = new Map(
-    sessionNodes.map((node) => [node.id, domainStyleForNode(node)]),
-  );
-
-  for (const event of eventNodes) {
-    const session = event.sessionId
-      ? sessionNodeBySessionId.get(event.sessionId)
-      : undefined;
-    const linked = session ?? findLinkedSession(event.id, edges, nodeById);
-    if (linked) sessionNodeIdByNodeId.set(event.id, linked.id);
-  }
-
-  const domainKeysByNodeId = new Map<string, string[]>();
-  for (const session of sessionNodes) {
-    domainKeysByNodeId.set(session.id, [
-      domainStyleBySessionNodeId.get(session.id)!.key,
-    ]);
-  }
-  for (const event of eventNodes) {
-    const sessionNodeId = sessionNodeIdByNodeId.get(event.id);
-    const style = sessionNodeId
-      ? domainStyleBySessionNodeId.get(sessionNodeId)
-      : DOMAIN_STYLE_BY_KEY.get("unclassified");
-    domainKeysByNodeId.set(event.id, [style?.key ?? "unclassified"]);
-  }
-  for (const context of contextNodes) {
-    const connectedDomains = uniqueStrings(
-      (adjacency.get(context.id) ?? []).flatMap(
-        (nodeId) => domainKeysByNodeId.get(nodeId) ?? [],
-      ),
-    ).sort(compareDomainKeys);
-    domainKeysByNodeId.set(
-      context.id,
-      connectedDomains.length > 0 ? connectedDomains : ["unclassified"],
-    );
-    const connectedSessions = findConnectedSessionNodeIds(
-      context.id,
-      edges,
-      sessionNodeIdByNodeId,
-    );
-    if (connectedSessions.size === 1) {
-      sessionNodeIdByNodeId.set(context.id, [...connectedSessions][0]!);
-    }
-  }
+  const classified = classifyGraph(validatedNodes, validatedEdges);
+  const projected =
+    scope === "all-domains-overview"
+      ? omitUnclassifiedOverviewSubgraphs(classified)
+      : classified;
+  const {
+    nodes,
+    edges,
+    nodeById,
+    adjacency,
+    sessionNodes,
+    eventNodes,
+    contextNodes,
+    sessionNodeIdByNodeId,
+    domainStyleBySessionNodeId,
+    domainKeysByNodeId,
+  } = projected;
 
   const suppliedDomainStyles = uniqueDomainStyles([
     ...sessionNodes.map((node) => domainStyleBySessionNodeId.get(node.id)!),
@@ -239,7 +217,7 @@ export function buildGraphSceneModel(
   ]);
   const domainStyles =
     scope === "all-domains-overview"
-      ? uniqueDomainStyles([...CANONICAL_DOMAIN_STYLES, ...suppliedDomainStyles])
+      ? CANONICAL_DOMAIN_STYLES
       : suppliedDomainStyles;
   const laneByDomainKey = createDomainLanes(domainStyles);
   const sessionsByDomain = groupSessionsByDomain(
@@ -423,6 +401,108 @@ export function buildGraphSceneModel(
       scope === "all-domains-overview" ? CANONICAL_DOMAIN_STYLES.length : 0,
     droppedDanglingEdgeIds: droppedDanglingEdgeIds.sort(),
   };
+}
+
+function classifyGraph(nodes: GraphNode[], edges: GraphEdge[]): ClassifiedGraph {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const adjacency = createAdjacency(nodes, edges);
+  const sessionNodes = nodes.filter((node) => node.type === "session");
+  const eventNodes = nodes.filter((node) => node.type === "event");
+  const contextNodes = nodes.filter(
+    (node) => node.type === "entity" || node.type === "topic",
+  );
+  const sessionNodeBySessionId = new Map(
+    sessionNodes.flatMap((node) =>
+      node.sessionId ? ([[node.sessionId, node]] as const) : [],
+    ),
+  );
+  const sessionNodeIdByNodeId = new Map<string, string>(
+    sessionNodes.map((node) => [node.id, node.id]),
+  );
+  const domainStyleBySessionNodeId = new Map(
+    sessionNodes.map((node) => [node.id, domainStyleForNode(node)]),
+  );
+
+  for (const event of eventNodes) {
+    const session = event.sessionId
+      ? sessionNodeBySessionId.get(event.sessionId)
+      : undefined;
+    const linked = session ?? findLinkedSession(event.id, edges, nodeById);
+    if (linked) sessionNodeIdByNodeId.set(event.id, linked.id);
+  }
+
+  const domainKeysByNodeId = new Map<string, string[]>();
+  for (const session of sessionNodes) {
+    domainKeysByNodeId.set(session.id, [
+      domainStyleBySessionNodeId.get(session.id)?.key ?? "unclassified",
+    ]);
+  }
+  for (const event of eventNodes) {
+    const sessionNodeId = sessionNodeIdByNodeId.get(event.id);
+    const style = sessionNodeId
+      ? domainStyleBySessionNodeId.get(sessionNodeId)
+      : UNCLASSIFIED_DOMAIN_STYLE;
+    domainKeysByNodeId.set(event.id, [style?.key ?? "unclassified"]);
+  }
+  for (const context of contextNodes) {
+    const connectedDomains = uniqueStrings(
+      (adjacency.get(context.id) ?? []).flatMap(
+        (nodeId) => domainKeysByNodeId.get(nodeId) ?? [],
+      ),
+    ).sort(compareDomainKeys);
+    const canonicalDomains = connectedDomains.filter(
+      (domainKey) => domainKey !== "unclassified",
+    );
+    domainKeysByNodeId.set(
+      context.id,
+      canonicalDomains.length > 0
+        ? canonicalDomains
+        : connectedDomains.length > 0
+          ? connectedDomains
+          : ["unclassified"],
+    );
+    const connectedSessions = findConnectedSessionNodeIds(
+      context.id,
+      edges,
+      sessionNodeIdByNodeId,
+    );
+    if (connectedSessions.size === 1) {
+      sessionNodeIdByNodeId.set(context.id, [...connectedSessions][0]!);
+    }
+  }
+
+  return {
+    nodes,
+    edges,
+    nodeById,
+    adjacency,
+    sessionNodes,
+    eventNodes,
+    contextNodes,
+    sessionNodeIdByNodeId,
+    domainStyleBySessionNodeId,
+    domainKeysByNodeId,
+  };
+}
+
+function omitUnclassifiedOverviewSubgraphs(
+  graph: ClassifiedGraph,
+): ClassifiedGraph {
+  const retainedNodeIds = new Set(
+    graph.nodes
+      .filter((node) =>
+        (graph.domainKeysByNodeId.get(node.id) ?? ["unclassified"]).some(
+          (domainKey) => domainKey !== "unclassified",
+        ),
+      )
+      .map((node) => node.id),
+  );
+  const nodes = graph.nodes.filter((node) => retainedNodeIds.has(node.id));
+  const edges = graph.edges.filter(
+    (edge) =>
+      retainedNodeIds.has(edge.source) && retainedNodeIds.has(edge.target),
+  );
+  return classifyGraph(nodes, edges);
 }
 
 function createAxes(domains: GraphDomainCluster[]): GraphSceneModel["axes"] {

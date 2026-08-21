@@ -14,6 +14,20 @@ let vectorIndexInitPromise;
 
 const SIMILARITY_SCORE_THRESHOLD = 0.8;
 
+export const CONTEXT_VECTOR_INDEX_NAME = "context_embedding_index";
+export const CONTEXT_VECTOR_INDEX_DEFINITION = Object.freeze({
+  fields: [
+    {
+      type: "vector",
+      path: "embedding",
+      numDimensions: 768,
+      similarity: "cosine",
+    },
+    { type: "filter", path: "sessionId" },
+    { type: "filter", path: "historyArchived" },
+  ],
+});
+
 export async function getMongoClient() {
   if (!mongoClient) {
     mongoClientInitPromise ??= connectMongoClient();
@@ -100,35 +114,75 @@ async function initVectorIndex(db) {
   /** @type {Collection} */
   const collection = db.collection("events");
 
-  const INDEX_NAME = "context_embedding_index";
-  const INDEX_TYPE = "vectorSearch";
-  const INDEX_DEFINITION = {
-    fields: [
-      {
-        type: "vector",
-        path: "embedding",
-        numDimensions: 768,
-        similarity: "cosine",
-      },
-      { type: "filter", path: "sessionId" },
-    ],
-  };
+  await ensureContextVectorIndex(collection);
+}
 
+/**
+ * Create or upgrade the Atlas Vector Search definition without making Search
+ * DDL availability a prerequisite for chronological MongoDB history.
+ *
+ * @param {Collection | object} collection
+ * @param {{error: (...parts: unknown[]) => void}} logger
+ */
+export async function ensureContextVectorIndex(
+  collection,
+  logger = console,
+) {
   try {
-    await collection.createSearchIndex({
-      name: INDEX_NAME,
-      type: INDEX_TYPE,
-      definition: INDEX_DEFINITION,
-    });
-  } catch (error) {
-    if (error.codeName === "IndexAlreadyExists") {
-      console.log(
-        "MongoDB vector index for context embeddings already exists.",
-      );
-    } else {
-      console.error("Failed to create MongoDB vector index:", error);
+    const [existing] = await collection
+      .listSearchIndexes(CONTEXT_VECTOR_INDEX_NAME)
+      .toArray();
+
+    if (!existing) {
+      await collection.createSearchIndex({
+        name: CONTEXT_VECTOR_INDEX_NAME,
+        type: "vectorSearch",
+        definition: CONTEXT_VECTOR_INDEX_DEFINITION,
+      });
+      return;
     }
+
+    const definition = existing.latestDefinition ?? existing.definition;
+    if (
+      existing.type !== "vectorSearch" ||
+      !hasRequiredContextVectorDefinition(definition)
+    ) {
+      await collection.updateSearchIndex(
+        CONTEXT_VECTOR_INDEX_NAME,
+        CONTEXT_VECTOR_INDEX_DEFINITION,
+      );
+    }
+  } catch (error) {
+    const errorName = boundedDiagnostic(error?.name, "Error");
+    const errorCode = boundedDiagnostic(error?.code, "unknown");
+    const errorCodeName = boundedDiagnostic(error?.codeName, "unknown");
+    logger.error(
+      `MongoDB Search index ${CONTEXT_VECTOR_INDEX_NAME} is unavailable (${errorName}; code=${errorCode}; codeName=${errorCodeName}). Chronological history remains available.`,
+    );
   }
+}
+
+function hasRequiredContextVectorDefinition(definition) {
+  if (!definition || !Array.isArray(definition.fields)) return false;
+  const vector = definition.fields.find((field) => field?.type === "vector");
+  if (
+    vector?.path !== "embedding" ||
+    vector?.numDimensions !== 768 ||
+    vector?.similarity !== "cosine"
+  ) {
+    return false;
+  }
+  const filterPaths = new Set(
+    definition.fields
+      .filter((field) => field?.type === "filter")
+      .map((field) => field.path),
+  );
+  return filterPaths.has("sessionId") && filterPaths.has("historyArchived");
+}
+
+function boundedDiagnostic(value, fallback) {
+  const text = String(value ?? fallback).replace(/[^a-z0-9_.-]/giu, "");
+  return text.slice(0, 80) || fallback;
 }
 
 /**
@@ -164,24 +218,42 @@ export async function getContextDataFromMongo(
   limitK = 10,
 ) {
   const collection = (await getMongodb()).collection("events");
+  return collection
+    .aggregate(
+      buildContextVectorSearchPipeline({
+        sessionId,
+        queryEmbedding,
+        limitK,
+      }),
+    )
+    .toArray();
+}
+
+export function buildContextVectorSearchPipeline({
+  sessionId,
+  queryEmbedding,
+  limitK,
+}) {
   const safeLimit = Math.max(1, Math.min(Number(limitK) || 10, 50));
-  const vectorSearch = {
-    index: "context_embedding_index",
-    path: "embedding",
-    queryVector: queryEmbedding,
-    numCandidates: Math.max(100, 10 * safeLimit),
-    limit: safeLimit,
-  };
+  const filter = { historyArchived: { $eq: true } };
   if (sessionId) {
-    vectorSearch.filter = { sessionId: { $eq: sessionId } };
+    filter.sessionId = { $eq: sessionId };
   }
 
-  const pipeline = [
-    { $vectorSearch: vectorSearch },
+  return [
+    {
+      $vectorSearch: {
+        index: CONTEXT_VECTOR_INDEX_NAME,
+        path: "embedding",
+        queryVector: queryEmbedding,
+        numCandidates: Math.max(100, 10 * safeLimit),
+        limit: safeLimit,
+        filter,
+      },
+    },
     { $addFields: { score: { $meta: "vectorSearchScore" } } },
     {
       $match: {
-        historyArchived: true,
         score: { $gte: SIMILARITY_SCORE_THRESHOLD },
       },
     },
@@ -201,6 +273,4 @@ export async function getContextDataFromMongo(
       },
     },
   ];
-
-  return collection.aggregate(pipeline).toArray();
 }

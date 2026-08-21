@@ -27,8 +27,27 @@ test("wrapper-only page and title descriptions are rejected deterministically", 
     "A YouTube video page is displayed, featuring a video of a bear titled Rare Wildlife of China's Mountains.",
     "A browser page is shown with a video titled Hidden Kingdoms.",
     "The video is titled Rare Wildlife and is displayed in a media player.",
+    "A VIDEO IS DISPLAYED FULL-SCREEN!",
+    "the browser page is shown with a livestream called Hidden Kingdoms.",
   ]) {
     assert.equal(shouldSuppressVisualDescription(description), true, description);
+  }
+});
+
+test("incidental wrapper wording does not suppress a visible scene", () => {
+  for (const description of [
+    "Two owls feed their chicks while the livestream is shown full-screen.",
+    "Three players sprint into the box as the video page is shown on a stadium monitor.",
+    "A livestream shows a bear climbing a snowy slope beneath pine trees.",
+    "A YouTube video page is shown; two owls feed their chicks on snow.",
+    "The video is titled Rare Wildlife as a bear climbs a steep slope.",
+    "The livestream is shown full-screen while a bear climbs a snowy slope.",
+    "A YouTube video page is displayed as two owls feed their chicks in the snow.",
+    "A YouTube video page is shown with a video called Hidden Kingdoms. A bear climbs a snowy slope.",
+    "A YouTube video page is shown with a video called Hidden Kingdoms because a bear climbs a snowy slope.",
+    "A YouTube video page is shown with a video called Hidden Kingdoms showing a bear climbing a snowy slope.",
+  ]) {
+    assert.equal(shouldSuppressVisualDescription(description), false, description);
   }
 });
 

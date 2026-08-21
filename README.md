@@ -179,6 +179,15 @@ npm run demo
 `http://127.0.0.1:8000/dashboard/` and load `chrome-extension/dist`. It uses real
 persisted history and has no synthetic history runtime path.
 
+For finals and persistence acceptance, require durable history explicitly:
+
+```bash
+STREAMSENSE_HISTORY_MODE=mongodb npm run demo
+```
+
+Do not open Chrome unless startup prints `Memory history provider: MongoDB
+(durable)`.
+
 ## Live-to-Memory flow
 
 1. Open an ordinary HTTP/HTTPS page with a video.
@@ -209,6 +218,9 @@ by StreamSense, not invented records.
 Automatic event speech is owned by Chrome/OS TTS. Every automatic utterance is
 based on the exact event already recorded into the timeline; Gemini Live is not
 used to invent or synthesize automatic timeline events.
+Complete page/title metadata wrappers are suppressed, but substantive scenes
+remain eligible when page, player, video, or livestream wording is incidental.
+See [`docs/scene-description-and-domain-policy.md`](docs/scene-description-and-domain-policy.md).
 
 ## StreamSense Memory
 
@@ -225,6 +237,9 @@ entity/topic. In the multi-domain view, X represents stream progress, Y event
 importance, and Z entertainment domain. Session-scoped views use an honest 2D
 progress × importance projection when only one lane is meaningful. Every WebGL
 relationship also has a keyboard- and screen-reader-readable DOM alternative.
+The unfiltered overview reserves only the five canonical lanes and omits
+unknown-only graph content. Its session card remains available, and the exact
+session page retains supplied relationships in 2D under **Domain unavailable**.
 
 ## Data guarantees and limits
 
@@ -249,11 +264,20 @@ Run the repository gate:
 npm run check
 ```
 
+The normal gate covers the pure vector pipeline/index lifecycle and local
+persistence boundary, but not a deployed Atlas Vector Search index. With the
+ignored Atlas and Gemini environment configured, run:
+
+```bash
+STREAMSENSE_RUN_ATLAS_SEARCH_TEST=true node --env-file=ai-voice-realtime/.env --env-file=ai-voice-realtime/.env.local --test ai-voice-realtime/test/mongoSemanticSearch.integration.test.js
+```
+
 Then perform the physical integration acceptance with configured providers and
 MongoDB:
 
 ```text
 start with real MongoDB history
+-> require STREAMSENSE_HISTORY_MODE=mongodb and the durable-provider startup line
 -> start Live
 -> record a real event
 -> open the exact Memory session

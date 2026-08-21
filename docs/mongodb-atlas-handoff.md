@@ -67,6 +67,15 @@ node --env-file=ai-voice-realtime/.env --env-file=ai-voice-realtime/.env.local -
 Remove-Item Env:STREAMSENSE_RUN_ATLAS_SEARCH_TEST
 ```
 
+The Atlas Search index `context_embedding_index` must use type `vectorSearch`
+with a 768-dimensional cosine vector field at `embedding` and filter fields for
+both `sessionId` and `historyArchived`. Backend startup creates a missing index
+or requests an in-place update of an older definition. An update is asynchronous:
+wait until Atlas reports the complete latest definition as queryable before
+running the acceptance command. That test deliberately places five unarchived
+exact-vector matches ahead of one archived 0.95-cosine event and requires the
+archived event to win with `limit: 1`.
+
 If the Node driver times out even though Atlas marks the exact current IP as
 active, check whether the current school, office, VPN, or firewall blocks
 outbound Atlas database traffic. Use a permitted network or ask its

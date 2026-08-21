@@ -139,8 +139,8 @@ Event coordinates are deterministic and inspectable:
 - Y is the supplied event `importance`. A missing value occupies a labeled
   **Not scored** band rather than a fabricated midpoint.
 - Z is the categorical entertainment lane: Sports, Esports and games,
-  Concerts, Product launches, Creator livestreams, or Other entertainment.
-  Multiple sessions use narrow stable sub-lanes inside that band.
+  Concerts, Product launches, or Creator livestreams. Multiple sessions use
+  narrow stable sub-lanes inside that band.
 
 Entity and topic coordinates are weighted centroids of their connected events,
 with small deterministic offsets solely to keep coincident spheres separable.
@@ -151,10 +151,13 @@ relationship.
 The unfiltered dashboard overview reserves five canonical domain lanes and
 defaults to the oblique 3D overview. Reserved empty lanes are renderer-only
 scaffolding: they create no API node, edge, session, event, coordinate, or
-relationship. Unclassified supplied history adds a sixth Other entertainment
-lane. A domain filter or session-scoped response remains data-driven and, with
-one lane, defaults to the honest progress × importance 2D projection and
-disables orbit. Fixed buttons restore **3D
+relationship. The client omits an unknown-only supplied subgraph from this
+overview; an unknown session remains present in the normal session-card list.
+On that exact session route, its supplied session, event, and context nodes and
+edges remain data-driven and readable under the honest **Domain unavailable**
+label. That single-session view defaults to the progress × importance 2D
+projection and disables orbit. Edges intentionally omitted by overview
+projection are not reported as malformed dangling edges. Fixed buttons restore **3D
 overview**, **Progress × importance**, **Progress × entertainment**, or
 **Importance × entertainment** as applicable.
 
@@ -237,11 +240,11 @@ unavailable.
 
 ## Integration boundary
 
-The context graph consumes `HistoryService` repository results only. Durable
-MongoDB history, vector retrieval, Redis current context, retrieval ranking,
-and optional semantic edges are not supplied by the current in-memory
-composition. The handoff for
-those pieces is documented in
+The context graph consumes `HistoryService` repository results only. With
+MongoDB configured, those bounded session/event records come from the durable
+history repository; the browser never accesses MongoDB directly. Vector
+retrieval and optional semantic edges are separate concerns and are not
+invented by this structural graph composition. Their handoff is documented in
 [`semantic-history-integration.md`](semantic-history-integration.md).
 
 This endpoint is independent of the realtime Cloud Speech-to-Text path; the

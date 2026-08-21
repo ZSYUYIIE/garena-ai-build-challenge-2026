@@ -149,10 +149,12 @@ export function graphNodeDisplayLabel(node: PositionedGraphNode): string {
   if (node.type !== "session" || !/^streamsense session$/i.test(node.label)) {
     return node.label;
   }
+  const domainPrefix =
+    node.domainLabel === "Domain unavailable" ? "Saved session" : node.domainLabel;
   const startedAt = node.metadata?.startedAt;
   return typeof startedAt === "string" && startedAt.trim()
-    ? `${node.domainLabel} · ${formatDateTime(startedAt)}`
-    : `${node.domainLabel} session`;
+    ? `${domainPrefix} · ${formatDateTime(startedAt)}`
+    : `${domainPrefix} session`;
 }
 
 export function graphHierarchyGuides(

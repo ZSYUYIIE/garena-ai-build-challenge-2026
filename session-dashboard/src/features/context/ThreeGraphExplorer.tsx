@@ -353,7 +353,7 @@ export function ThreeGraphExplorer({
                 <h4>{selectedNodeLabel}</h4>
                 <dl>
                   <div>
-                    <dt>Entertainment lane</dt>
+                    <dt>Entertainment domain</dt>
                     <dd>{selectedNode.domainLabel}</dd>
                   </div>
                   {selectedNode.progress !== null ? (

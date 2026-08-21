@@ -162,6 +162,49 @@ describe("ThreeGraphExplorer", () => {
     ).toHaveClass("visually-hidden");
   });
 
+  it("keeps an unavailable-domain session readable in a two-dimensional view", () => {
+    const harness = createRendererHarness();
+    const sessionId = "77777777-7777-4777-8777-777777777777";
+    renderExplorer(
+      harness.factory,
+      [
+        {
+          id: "session:unknown",
+          type: "session",
+          label: "StreamSense session",
+          sessionId,
+          metadata: { domain: "unknown", durationSeconds: 30 },
+        },
+        {
+          id: "event:unknown",
+          type: "event",
+          label: "A bear climbs a snowy slope",
+          sessionId,
+          eventId: "unknown-event",
+          metadata: { timestampSeconds: 10 },
+        },
+      ],
+      [
+        {
+          id: "edge:unknown",
+          source: "session:unknown",
+          target: "event:unknown",
+          type: "same_session",
+          weight: 1,
+        },
+      ],
+    );
+
+    expect(harness.getOptions()?.model.projectionMode).toBe("two-dimensional");
+    expect(harness.getOptions()?.model.nodes).toHaveLength(2);
+    expect(harness.getOptions()?.model.edges).toHaveLength(1);
+    expect(screen.getByText(/Domain unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText(/other entertainment/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^unknown$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^unclassified$/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Labeled graph node")).toBeEnabled();
+  });
+
   it("provides semantic camera projections for a multi-domain graph", async () => {
     const user = userEvent.setup();
     const harness = createRendererHarness();

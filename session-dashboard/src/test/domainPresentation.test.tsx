@@ -10,6 +10,35 @@ const unknownSession = {
   domain: "unknown",
 };
 
+const unknownGraph = {
+  nodes: [
+    {
+      id: `session:${unknownSession.sessionId}`,
+      type: "session" as const,
+      label: "StreamSense session",
+      sessionId: unknownSession.sessionId,
+      metadata: { domain: "unknown", durationSeconds: 60 },
+    },
+    {
+      id: "event:unknown-domain",
+      type: "event" as const,
+      label: "A bear climbs a snowy slope",
+      sessionId: unknownSession.sessionId,
+      eventId: "88888888-8888-4888-8888-888888888888",
+      metadata: { timestampSeconds: 12 },
+    },
+  ],
+  edges: [
+    {
+      id: "edge:unknown-domain",
+      source: `session:${unknownSession.sessionId}`,
+      target: "event:unknown-domain",
+      type: "same_session" as const,
+      weight: 1,
+    },
+  ],
+};
+
 function createDomainFetch(session = unknownSession) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -36,8 +65,7 @@ function createDomainFetch(session = unknownSession) {
     if (url.startsWith("/api/context-graph?")) {
       return jsonResponse({
         meta: { dataOrigin: "realtime" },
-        nodes: [],
-        edges: [],
+        ...unknownGraph,
       });
     }
     throw new Error(`Unexpected request: ${url}`);
@@ -54,8 +82,11 @@ describe("optional domain presentation", () => {
       await screen.findByRole("link", { name: unknownSession.title }),
     ).toBeInTheDocument();
     expect(screen.queryByText(/^unknown$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/other entertainment/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^unclassified$/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Entertainment domain")).not.toBeInTheDocument();
     expect(screen.getByText("Significant moments")).toBeInTheDocument();
+    expect(screen.getByText("0 sessions · 0 moments · 0 populated lanes of 5")).toBeInTheDocument();
   });
 
   it("does not expose unknown on an individual session page", async () => {
@@ -69,7 +100,13 @@ describe("optional domain presentation", () => {
         name: unknownSession.title,
       }),
     ).toBeInTheDocument();
+    expect(await screen.findByLabelText("Labeled graph node")).toBeEnabled();
+    expect(screen.getAllByText("A bear climbs a snowy slope").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/belongs to/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Domain unavailable/)).toBeInTheDocument();
     expect(screen.queryByText(/^unknown$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/other entertainment/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^unclassified$/i)).not.toBeInTheDocument();
   });
 
   it("keeps a trustworthy known domain visible and filterable", async () => {

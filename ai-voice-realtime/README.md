@@ -102,6 +102,18 @@ Mongo vector index remains session-filterable for Live prompt context and can
 also search across sessions for Memory. Dashboard search joins vector results
 to durable session metadata and omits orphan/context-only records.
 
+Vector retrieval prefilters `historyArchived: true` and optional `sessionId`
+inside `$vectorSearch` before applying its candidate limit, then retains scores
+of at least `0.8`. The `context_embedding_index` declares both prefilter fields;
+startup creates it when missing or requests an update for a drifted definition.
+Search-index DDL failure is sanitized and does not disable chronological
+history.
+
+Scene descriptions follow the current
+[`scene-description-and-domain-policy.md`](../docs/scene-description-and-domain-policy.md):
+complete metadata wrappers are rejected, while substantive visible scenes with
+incidental page/player wording remain eligible.
+
 If embedding or vector search is unavailable, `/api/search` degrades while
 session lists, details, timelines, and the structural relationship graph remain
 usable.
@@ -143,10 +155,18 @@ Backend-only:
 npm run check --workspace ai-voice-realtime
 ```
 
+The normal gate covers pure vector pipeline/index behavior and local
+persistence, not deployed Atlas Vector Search. The opt-in Atlas acceptance is:
+
+```bash
+STREAMSENSE_RUN_ATLAS_SEARCH_TEST=true node --env-file=ai-voice-realtime/.env --env-file=ai-voice-realtime/.env.local --test ai-voice-realtime/test/mongoSemanticSearch.integration.test.js
+```
+
 Physical Mongo acceptance must use a configured development Atlas/local store:
 
 ```text
 start backend
+-> require STREAMSENSE_HISTORY_MODE=mongodb and durable-provider startup
 -> create Live session
 -> record event
 -> fetch /api/sessions/{id}

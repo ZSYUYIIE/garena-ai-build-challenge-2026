@@ -12,6 +12,7 @@ const sessionIds = {
   concert: "44444444-4444-4444-8444-444444444444",
   launch: "55555555-5555-4555-8555-555555555555",
   creator: "66666666-6666-4666-8666-666666666666",
+  unknown: "77777777-7777-4777-8777-777777777777",
 };
 
 function sessionNode({
@@ -174,22 +175,144 @@ describe("semantic graph model", () => {
     expect(model.edges).toEqual([]);
   });
 
-  it("keeps unclassified history in a sixth truthful overview lane", () => {
-    const unclassifiedSession = sessionNode({ domain: "unknown" });
-    const model = buildGraphSceneModel([unclassifiedSession], [], {
+  it("omits an unclassified subgraph from the five-lane overview", () => {
+    const unknownSession = sessionNode({
+      id: "session:unknown",
+      sessionId: sessionIds.unknown,
+      domain: "unknown",
+    });
+    const unknownEvent = eventNode({
+      id: "event:unknown",
+      sessionId: sessionIds.unknown,
+      timestampSeconds: 10,
+    });
+    const unknownTopic: GraphNode = {
+      id: "topic:unknown",
+      type: "topic",
+      label: "Unclassified topic",
+    };
+    const model = buildGraphSceneModel(
+      [unknownSession, unknownEvent, unknownTopic],
+      [
+        edge("edge:unknown-session", unknownSession.id, unknownEvent.id),
+        edge("edge:unknown-topic", unknownEvent.id, unknownTopic.id, "shared_topic"),
+      ],
+      {
       scope: "all-domains-overview",
-    });
+      },
+    );
 
-    expect(model.domains).toHaveLength(6);
-    expect(model.domains.at(-1)).toMatchObject({
-      key: "unclassified",
-      label: "Other entertainment",
-      isEmpty: false,
-      sessionCount: 1,
+    expect(model.domains.map((domain) => domain.key)).toEqual([
+      "sports",
+      "esports",
+      "concerts",
+      "product-launches",
+      "creator-streams",
+    ]);
+    expect(model.nodes).toEqual([]);
+    expect(model.edges).toEqual([]);
+    expect(model.droppedDanglingEdgeIds).toEqual([]);
+  });
+
+  it("keeps known overview relationships while omitting an unknown session subgraph", () => {
+    const knownSession = sessionNode();
+    const unknownSession = sessionNode({
+      id: "session:unknown",
+      sessionId: sessionIds.unknown,
+      domain: "unknown",
     });
-    expect(model.domains.slice(0, 5).every((domain) => domain.isEmpty)).toBe(true);
-    expect(model.nodes).toHaveLength(1);
-    expect(model.edges).toHaveLength(0);
+    const knownEvent = eventNode({ id: "event:known", timestampSeconds: 10 });
+    const unknownEvent = eventNode({
+      id: "event:unknown",
+      sessionId: sessionIds.unknown,
+      timestampSeconds: 10,
+    });
+    const unknownContext: GraphNode = {
+      id: "entity:unknown",
+      type: "entity",
+      label: "Unknown participant",
+    };
+    const model = buildGraphSceneModel(
+      [knownSession, unknownSession, knownEvent, unknownEvent, unknownContext],
+      [
+        edge("edge:known", knownSession.id, knownEvent.id),
+        edge("edge:unknown", unknownSession.id, unknownEvent.id),
+        edge("edge:unknown-context", unknownEvent.id, unknownContext.id, "shared_entity"),
+      ],
+      { scope: "all-domains-overview" },
+    );
+
+    expect(model.nodes.map((node) => node.id)).toEqual([
+      knownSession.id,
+      knownEvent.id,
+    ]);
+    expect(model.edges.map((item) => item.id)).toEqual(["edge:known"]);
+    expect(model.domains).toHaveLength(5);
+    expect(model.droppedDanglingEdgeIds).toEqual([]);
+  });
+
+  it("recomputes shared context from only the retained canonical subgraph", () => {
+    const knownSession = sessionNode();
+    const unknownSession = sessionNode({
+      id: "session:unknown",
+      sessionId: sessionIds.unknown,
+      domain: "unknown",
+    });
+    const knownEvent = eventNode({ id: "event:known", timestampSeconds: 10 });
+    const unknownEvent = eventNode({
+      id: "event:unknown",
+      sessionId: sessionIds.unknown,
+      timestampSeconds: 10,
+    });
+    const topic: GraphNode = { id: "topic:shared", type: "topic", label: "Shared" };
+    const model = buildGraphSceneModel(
+      [knownSession, unknownSession, knownEvent, unknownEvent, topic],
+      [
+        edge("edge:known-session", knownSession.id, knownEvent.id),
+        edge("edge:unknown-session", unknownSession.id, unknownEvent.id),
+        edge("edge:known-topic", knownEvent.id, topic.id, "shared_topic"),
+        edge("edge:unknown-topic", unknownEvent.id, topic.id, "shared_topic"),
+      ],
+      { scope: "all-domains-overview" },
+    );
+    const positionedTopic = model.nodes.find((node) => node.id === topic.id)!;
+
+    expect(positionedTopic.domainKeys).toEqual(["sports"]);
+    expect(positionedTopic.connectionCount).toBe(1);
+    expect(model.edges.map((item) => item.id)).toEqual([
+      "edge:known-session",
+      "edge:known-topic",
+    ]);
+  });
+
+  it("distinguishes malformed edges from intentionally projected edges", () => {
+    const knownSession = sessionNode();
+    const unknownSession = sessionNode({
+      id: "session:unknown",
+      sessionId: sessionIds.unknown,
+      domain: "unknown",
+    });
+    const knownEvent = eventNode({ id: "event:known", timestampSeconds: 10 });
+    const unknownEvent = eventNode({
+      id: "event:unknown",
+      sessionId: sessionIds.unknown,
+      timestampSeconds: 10,
+    });
+    const topic: GraphNode = { id: "topic:shared", type: "topic", label: "Shared" };
+    const model = buildGraphSceneModel(
+      [knownSession, unknownSession, knownEvent, unknownEvent, topic],
+      [
+        edge("edge:known-session", knownSession.id, knownEvent.id),
+        edge("edge:unknown-session", unknownSession.id, unknownEvent.id),
+        edge("edge:known-topic", knownEvent.id, topic.id, "shared_topic"),
+        edge("edge:unknown-topic", unknownEvent.id, topic.id, "shared_topic"),
+        edge("edge:missing-endpoint", knownEvent.id, "topic:missing", "shared_topic"),
+      ],
+      { scope: "all-domains-overview" },
+    );
+
+    expect(model.droppedDanglingEdgeIds).toEqual(["edge:missing-endpoint"]);
+    expect(model.droppedDanglingEdgeIds).not.toContain("edge:unknown-topic");
   });
 
   it("uses deterministic session sub-lanes within one entertainment band", () => {

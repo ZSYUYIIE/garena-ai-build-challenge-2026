@@ -77,10 +77,23 @@ Memory REST
 
 Memory semantic search
     -> query embedding
-    -> MongoDB vector search over events
+    -> vector prefilter: historyArchived=true and optional sessionId
+    -> bounded candidate limit
+    -> vector score metadata
+    -> score >= 0.8
     -> durable session join
     -> validated public result
 ```
+
+Durability filtering occurs inside `$vectorSearch`, before its candidate limit.
+An embedding-only partial document therefore cannot displace an archived event
+from the bounded candidate set. The `context_embedding_index` definition has a
+768-dimensional cosine vector field at `embedding` and filter fields for both
+`sessionId` and `historyArchived`. Startup creates the index when absent,
+leaves an equivalent definition unchanged, and requests an in-place update for
+an older or drifted definition. Unsupported Atlas Search DDL is sanitized and
+non-fatal so chronological MongoDB history remains usable; index readiness is
+proved separately by the opt-in Atlas acceptance test.
 
 The context graph reads durable sessions and chronological events through the
 same `HistoryService`; it does not query MongoDB directly from the browser.
@@ -94,6 +107,11 @@ same `HistoryService`; it does not query MongoDB directly from the browser.
 
 `npm run dev`, `npm run dev:dashboard`, and `npm run demo` all use the real
 backend and never inject fixture sessions.
+
+Normal automated checks cover the pure vector pipeline, index lifecycle, and
+local persistence boundary. They do not prove a deployed Atlas Vector Search
+index or real Chrome/provider behavior. Run the credential-gated Atlas test and
+the physical Live-to-Memory restart flow before a finals claim.
 
 ## Required acceptance
 

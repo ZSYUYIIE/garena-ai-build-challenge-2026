@@ -32,7 +32,11 @@ Rejected:
 
 The prompt applies this rule to both automatic narration and persisted event
 descriptions. A deterministic backend guard also rejects wrapper-only page/title
-descriptions before they can enter the timeline.
+descriptions before they can enter the timeline. The guard recognizes only
+complete, bounded metadata wrappers. Incidental phrases such as “the livestream
+is shown full-screen” do not suppress a description that also contains visible
+subjects or action. Ambiguous prose fails open so unfamiliar sports, wildlife,
+concert, or creator scenes are not silently discarded.
 
 ## Domain metadata
 
@@ -43,6 +47,10 @@ not present that value as meaningful information.
 The dashboard therefore:
 
 - hides `unknown` and `unclassified` domain labels;
+- reserves exactly five canonical lanes on the unfiltered overview and omits
+  unknown-only graph subgraphs rather than inventing a sixth category;
+- keeps the unknown session card and the exact session's supplied nodes, edges,
+  selector, and readable relationships in a 2D map labeled **Domain unavailable**;
 - hides the domain graph filter when no reliable domain is available;
 - does not require a separate domain field for semantic search;
 - asks users to include useful context directly in a natural-language query,

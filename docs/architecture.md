@@ -42,7 +42,9 @@ Automatic narration follows a fail-closed sequence:
 
 1. Analyze the admitted frame without treating prior generated prose as visual
    evidence.
-2. Reject stale, unsupported, repeated, or self-referential output.
+2. Reject stale, unsupported, repeated, self-referential, or complete
+   metadata-wrapper-only output. Incidental page/player wording inside a real
+   visible scene remains eligible.
 3. Compare the grounded visual fact with commentary only to suppress redundancy.
 4. Persist the accepted event into SQLite.
 5. Publish the exact recorded event to Live.
@@ -122,8 +124,13 @@ After backend restart, the same session remains because the API reconstructs it
 from MongoDB.
 
 Semantic search uses the same durable event documents. Query embeddings are
-compared against event embeddings; results are joined to durable session
-metadata and validated through the existing public schema.
+compared against event embeddings after `$vectorSearch` prefilters
+`historyArchived: true` and, when present, `sessionId`. The candidate limit is
+applied before the retained score is thresholded at `0.8`; results are then
+joined to durable session metadata and validated through the existing public
+schema. The Atlas index declares both prefilter fields. Missing or unsupported
+Search DDL degrades semantic retrieval without disabling chronological MongoDB
+history.
 
 ## Relationship map
 
@@ -142,6 +149,12 @@ context spheres become progressively smaller. In the multi-domain view, event X
 is normalized stream progress, Y is supplied importance, and Z is the labeled
 entertainment lane. Session-scoped single-lane views use the truthful progress ×
 importance 2D projection.
+
+The unfiltered overview always reserves exactly five canonical lanes. An
+unknown-only supplied subgraph is omitted from that overview, while its session
+card remains reachable. The exact session page retains its supplied nodes,
+edges, selector, and readable relationship list in 2D under **Domain
+unavailable** rather than fabricating a sixth entertainment category.
 
 The client renders only backend-supplied nodes and edges. It does not fabricate
 semantic-similarity links. Canvas interaction always has a readable DOM node

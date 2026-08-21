@@ -29,6 +29,7 @@ surface.
 | [`context-graph-api.md`](context-graph-api.md) | Renderer-neutral graph API, bounds, weights, and client presentation semantics. |
 | [`semantic-history-integration.md`](semantic-history-integration.md) | Durable history and semantic-search adapter boundary; clearly separates the current realtime MongoDB prototype. |
 | [`mongodb-atlas-handoff.md`](mongodb-atlas-handoff.md) | Least-privilege Atlas access, local configuration, and MongoDB data boundaries. |
+| [`scene-description-and-domain-policy.md`](scene-description-and-domain-policy.md) | Scene-first narration guard and honest presentation of unavailable domain metadata. |
 
 ## Historical records
 
